@@ -1,0 +1,12 @@
+{
+  "editor.codeActionsOnSave": {
+    "source.fixAll": "explicit",
+    "source.organizeImports": "explicit",
+    "source.sortMembers": "explicit"
+  },
+  "search.exclude": {
+    "appointment popup": true,
+    "const [selectMode, setSelectMode] = useState(false": true,
+    "Tap to manage": true
+  }
+}

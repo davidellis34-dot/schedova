@@ -1,0 +1,42 @@
+{
+  "expo": {
+    "name": "Schedova",
+    "slug": "schedova",
+    "scheme": "schedova",
+    "version": "1.0.0",
+    "orientation": "default",
+    "icon": "./assets/images/schedova-icon.png",
+    "userInterfaceStyle": "light",
+    "splash": {
+      "image": "./assets/images/splash-icon.png",
+      "resizeMode": "contain",
+      "backgroundColor": "#0F172A"
+    },
+    "assetBundlePatterns": [
+      "**/*"
+    ],
+    "ios": {
+      "supportsTablet": true
+    },
+    "android": {
+      "adaptiveIcon": {
+        "foregroundImage": "./assets/images/schedova-icon.png",
+        "backgroundColor": "#0F172A"
+      }
+    },
+    "web": {
+      "favicon": "./assets/images/schedova-icon.png"
+    },
+    "plugins": [
+      "expo-router",
+      "expo-notifications",
+      "@react-native-community/datetimepicker"
+    ],
+    "extra": {
+      "router": {},
+      "eas": {
+        "projectId": "536a4221-4d72-4d63-9df3-c80d327931cd"
+      }
+    }
+  }
+}

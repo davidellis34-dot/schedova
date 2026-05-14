@@ -1,0 +1,382 @@
+import AsyncStorage from "@react-native-async-storage/async-storage";
+import { Picker } from "@react-native-picker/picker";
+import { useRouter } from "expo-router";
+import { useEffect, useState } from "react";
+import { Alert, Pressable, ScrollView, Text, View } from "react-native";
+import { useAppTheme } from "../lib/useAppTheme";
+export default function SettingsScreen() {
+  const router = useRouter();
+
+  const [startHour, setStartHour] = useState("7");
+  const [endHour, setEndHour] = useState("19");
+  const [interval, setInterval] = useState("30");
+  const { colors } = useAppTheme();
+
+  const [timeFormat, setTimeFormat] = useState("12");
+  const [fontScale, setFontScale] = useState("normal");
+  const [theme, setTheme] = useState("white");
+
+  useEffect(() => {
+    loadSettings();
+  }, []);
+
+  async function loadSettings() {
+    const savedStart = await AsyncStorage.getItem("calendar_start_hour");
+
+    const savedEnd = await AsyncStorage.getItem("calendar_end_hour");
+
+    const savedInterval = await AsyncStorage.getItem("calendar_interval");
+
+    const savedTheme = await AsyncStorage.getItem("schedova_theme");
+
+    const savedFont = await AsyncStorage.getItem("font_scale");
+
+    const savedTimeFormat = await AsyncStorage.getItem("time_format");
+
+    if (savedStart) setStartHour(savedStart);
+
+    if (savedEnd) setEndHour(savedEnd);
+
+    if (savedInterval) setInterval(savedInterval);
+
+    if (savedTheme) setTheme(savedTheme);
+
+    if (savedFont) setFontScale(savedFont);
+
+    if (savedTimeFormat) setTimeFormat(savedTimeFormat);
+  }
+
+  async function saveSettings() {
+    await AsyncStorage.setItem("calendar_start_hour", startHour);
+
+    await AsyncStorage.setItem("calendar_end_hour", endHour);
+
+    await AsyncStorage.setItem("calendar_interval", interval);
+
+    await AsyncStorage.setItem("schedova_theme", theme);
+    await AsyncStorage.setItem("schedova_theme", theme);
+    await AsyncStorage.setItem("font_scale", fontScale);
+
+    await AsyncStorage.setItem("time_format", timeFormat);
+
+    Alert.alert("Saved", "Settings updated.");
+  }
+
+  const hourOptions = [
+    ["12 AM", "0"],
+    ["1 AM", "1"],
+    ["2 AM", "2"],
+    ["3 AM", "3"],
+    ["4 AM", "4"],
+    ["5 AM", "5"],
+    ["6 AM", "6"],
+    ["7 AM", "7"],
+    ["8 AM", "8"],
+    ["9 AM", "9"],
+    ["10 AM", "10"],
+    ["11 AM", "11"],
+    ["12 PM", "12"],
+    ["1 PM", "13"],
+    ["2 PM", "14"],
+    ["3 PM", "15"],
+    ["4 PM", "16"],
+    ["5 PM", "17"],
+    ["6 PM", "18"],
+    ["7 PM", "19"],
+    ["8 PM", "20"],
+    ["9 PM", "21"],
+    ["10 PM", "22"],
+    ["11 PM", "23"],
+    ["12 AM Next Day", "24"],
+    ["1 AM Next Day", "25"],
+    ["2 AM Next Day", "26"],
+    ["3 AM Next Day", "27"],
+    ["4 AM Next Day", "28"],
+    ["5 AM Next Day", "29"],
+    ["6 AM Next Day", "30"],
+  ];
+
+  function PickerBox({
+    label,
+    value,
+    onChange,
+    children,
+  }: {
+    label: string;
+    value: string;
+    onChange: (value: string) => void;
+    children: any;
+  }) {
+    return (
+      <View
+        style={{
+          marginBottom: 18,
+        }}
+      >
+        <Text
+          style={{
+            color: colors.text,
+            fontWeight: "bold",
+            marginBottom: 8,
+          }}
+        >
+          {label}
+        </Text>
+
+        <View
+          style={{
+            borderWidth: 1,
+            borderColor: "#D1D5DB",
+
+            borderRadius: 12,
+
+            backgroundColor: "#ffffff",
+
+            overflow: "hidden",
+          }}
+        >
+          <Picker
+            selectedValue={value}
+            onValueChange={onChange}
+            style={{
+              color: colors.text,
+              backgroundColor: colors.card,
+            }}
+          >
+            {children}
+          </Picker>
+        </View>
+      </View>
+    );
+  }
+
+  return (
+    <ScrollView
+      style={{
+        flex: 1,
+        backgroundColor: colors.background,
+        padding: 20,
+      }}
+    >
+      <Text
+        style={{
+          fontSize: 30,
+          fontWeight: "bold",
+          marginBottom: 24,
+          color: colors.text,
+        }}
+      >
+        Settings
+      </Text>
+
+      <View
+        style={{
+          backgroundColor: colors.background,
+
+          padding: 18,
+
+          borderRadius: 16,
+
+          marginBottom: 20,
+        }}
+      >
+        <Text
+          style={{
+            fontSize: 20,
+            fontWeight: "bold",
+            marginBottom: 16,
+            color: colors.text,
+          }}
+        >
+          Calendar Settings
+        </Text>
+        <PickerBox label="Start Time" value={startHour} onChange={setStartHour}>
+          {hourOptions.map(([label, value]) => (
+            <Picker.Item key={value} label={label} value={value} />
+          ))}
+        </PickerBox>
+        <PickerBox label="End Time" value={endHour} onChange={setEndHour}>
+          {hourOptions.map(([label, value]) => (
+            <Picker.Item key={value} label={label} value={value} />
+          ))}
+        </PickerBox>
+        <PickerBox
+          label="Time Interval"
+          value={interval}
+          onChange={setInterval}
+        >
+          <Picker.Item label="15 minutes" value="15" />
+
+          <Picker.Item label="30 minutes" value="30" />
+
+          <Picker.Item label="60 minutes" value="60" />
+        </PickerBox>
+        <PickerBox
+          label="Time Format"
+          value={timeFormat}
+          onChange={setTimeFormat}
+        >
+          <Picker.Item label="12-hour time, like 5:30 PM" value="12" />
+
+          <Picker.Item label="24-hour time, like 17:30" value="24" />
+        </PickerBox>
+        <Pressable
+          onPress={() => router.push("/login")}
+          style={{
+            backgroundColor: colors.background,
+            padding: 16,
+            borderRadius: 14,
+            alignItems: "center",
+            marginBottom: 16,
+            borderWidth: 1,
+            borderColor: colors.border,
+          }}
+        >
+          <Text
+            style={{
+              color: colors.text,
+              fontWeight: "bold",
+              fontSize: 16,
+            }}
+          >
+            Sign In / Switch Account
+          </Text>
+        </Pressable>
+
+        <Pressable
+          onPress={saveSettings}
+          style={{
+            backgroundColor: "#0F766E",
+
+            padding: 16,
+
+            borderRadius: 12,
+
+            alignItems: "center",
+
+            marginTop: 6,
+          }}
+        >
+          <Text
+            style={{
+              color: "#ffffff",
+
+              fontWeight: "bold",
+            }}
+          >
+            Save Settings
+          </Text>
+        </Pressable>
+      </View>
+
+      <View
+        style={{
+          backgroundColor: colors.card,
+
+          padding: 18,
+
+          borderRadius: 16,
+
+          marginBottom: 20,
+        }}
+      >
+        <Text
+          style={{
+            fontSize: 20,
+            fontWeight: "bold",
+            marginBottom: 8,
+            color: colors.text,
+          }}
+        >
+          Scheduling
+        </Text>
+
+        <Text
+          style={{
+            color: colors.text,
+            marginBottom: 16,
+          }}
+        >
+          Configure business hours and appointment availability.
+        </Text>
+
+        <Pressable
+          onPress={() => router.push("/availability-settings" as any)}
+          style={{
+            backgroundColor: "#0F766E",
+
+            padding: 16,
+
+            borderRadius: 12,
+
+            alignItems: "center",
+          }}
+        >
+          <Text
+            style={{
+              color: "#ffffff",
+
+              fontWeight: "bold",
+            }}
+          >
+            Availability Settings
+          </Text>
+        </Pressable>
+      </View>
+
+      <View
+        style={{
+          backgroundColor: colors.card,
+
+          padding: 18,
+
+          borderRadius: 16,
+
+          marginBottom: 20,
+        }}
+      >
+        <Text
+          style={{
+            fontSize: 20,
+            fontWeight: "bold",
+            marginBottom: 16,
+            color: colors.text,
+          }}
+        >
+          Appearance
+        </Text>
+
+        <PickerBox label="Theme" value={theme} onChange={setTheme}>
+          <Picker.Item label="Light" value="light" />
+
+          <Picker.Item label="Dark" value="dark" />
+
+          <Picker.Item label="Brand" value="brand" />
+        </PickerBox>
+
+        <PickerBox label="Font Size" value={fontScale} onChange={setFontScale}>
+          <Picker.Item label="Small" value="small" />
+
+          <Picker.Item label="Normal" value="normal" />
+
+          <Picker.Item label="Large" value="large" />
+        </PickerBox>
+        <Pressable
+          onPress={saveSettings}
+          style={{
+            backgroundColor: "#0F766E",
+            padding: 16,
+            borderRadius: 12,
+            alignItems: "center",
+            marginTop: 24,
+            marginBottom: 40,
+          }}
+        >
+          <Text style={{ color: "#ffffff", fontWeight: "bold" }}>
+            Save Settings
+          </Text>
+        </Pressable>
+      </View>
+    </ScrollView>
+  );
+}
