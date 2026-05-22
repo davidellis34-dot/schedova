@@ -29,6 +29,7 @@ export default function EditClientScreen() {
   const [rebookingWeeks, setRebookingWeeks] = useState("6");
   const [smsOptIn, setSmsOptIn] = useState(false);
   const [clientTag, setClientTag] = useState<ClientTag>("New");
+  const [deleting, setDeleting] = useState(false);
   const { colors } = useAppTheme();
 
   const fetchClient = useCallback(async () => {
@@ -121,6 +122,54 @@ export default function EditClientScreen() {
     }
 
     router.replace("/clients" as any);
+  }
+
+  async function archiveClient() {
+    if (!clientIdValue || deleting) return;
+
+    setDeleting(true);
+
+    const {
+      data: { user },
+      error: userError,
+    } = await supabase.auth.getUser();
+
+    if (userError || !user) {
+      setDeleting(false);
+      Alert.alert("Not signed in", "Please sign in again.");
+      return;
+    }
+
+    const { error } = await supabase
+      .from("clients")
+      .update({ archived_at: new Date().toISOString() })
+      .eq("id", clientIdValue)
+      .eq("user_id", user.id);
+
+    setDeleting(false);
+
+    if (error) {
+      Alert.alert("Error", error.message);
+      return;
+    }
+
+    Alert.alert("Client deleted", "Client removed from your active list.");
+    router.replace("/clients" as any);
+  }
+
+  function confirmDeleteClient() {
+    Alert.alert(
+      "Delete client?",
+      "This will remove the client from your active client list. Existing appointments will stay in your history.",
+      [
+        { text: "Cancel", style: "cancel" },
+        {
+          text: "Delete Client",
+          style: "destructive",
+          onPress: archiveClient,
+        },
+      ],
+    );
   }
 
   return (
@@ -355,7 +404,7 @@ export default function EditClientScreen() {
             padding: 16,
             borderRadius: 14,
             alignItems: "center",
-            marginBottom: 40,
+            marginBottom: 14,
           }}
         >
           <Text
@@ -366,6 +415,29 @@ export default function EditClientScreen() {
             }}
           >
             Save Client
+          </Text>
+        </Pressable>
+
+        <Pressable
+          onPress={confirmDeleteClient}
+          disabled={deleting}
+          style={{
+            backgroundColor: "#B91C1C",
+            padding: 16,
+            borderRadius: 14,
+            alignItems: "center",
+            marginBottom: 40,
+            opacity: deleting ? 0.7 : 1,
+          }}
+        >
+          <Text
+            style={{
+              color: "#ffffff",
+              fontWeight: "bold",
+              fontSize: 16,
+            }}
+          >
+            Delete Client
           </Text>
         </Pressable>
       </ScrollView>

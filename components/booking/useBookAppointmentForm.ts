@@ -169,6 +169,10 @@ export function useBookAppointmentForm() {
   );
 
   const [selectedClient, setSelectedClient] = useState("");
+  const [existingAppointmentClientId, setExistingAppointmentClientId] =
+    useState("");
+  const [existingAppointmentClientName, setExistingAppointmentClientName] =
+    useState("");
   const [selectedServices, setSelectedServices] = useState<Service[]>([]);
   const [appointmentNotes, setAppointmentNotes] = useState("");
   const [finalPrice, setFinalPrice] = useState("");
@@ -255,6 +259,7 @@ export function useBookAppointmentForm() {
           .from("clients")
           .select("*")
           .eq("user_id", currentUserId)
+          .is("archived_at", null)
           .order("name"),
         supabase
           .from("services")
@@ -309,6 +314,8 @@ export function useBookAppointmentForm() {
     setEndTime(addMinutesToTime(defaultStartTime, calendarIntervalMinutes));
     setEndTimeManuallyChanged(false);
     setSelectedClient("");
+    setExistingAppointmentClientId("");
+    setExistingAppointmentClientName("");
     setSelectedServices([]);
     setAppointmentNotes("");
     setFinalPrice("");
@@ -375,6 +382,8 @@ export function useBookAppointmentForm() {
 
     setEntryType(normalizeEntryType(data.block_type));
     setSelectedClient("");
+    setExistingAppointmentClientId("");
+    setExistingAppointmentClientName("");
     setSelectedServices([]);
     setAppointmentNotes("");
     setFinalPrice("");
@@ -406,6 +415,8 @@ export function useBookAppointmentForm() {
 
     setEntryType("appointment");
     setSelectedClient(matchedClient ? normalizeId(matchedClient.id) : "");
+    setExistingAppointmentClientId(clientId);
+    setExistingAppointmentClientName(data.client_name || "");
     setSelectedServices(matchedServices);
     setTitle("");
     setAppointmentDate(cleanDateOnly(data.appointment_date));
@@ -680,6 +691,10 @@ export function useBookAppointmentForm() {
     const selectedClientRecord = clients.find(
       (client) => normalizeId(client.id) === normalizeId(selectedClient),
     );
+    const preservedClientName = String(existingAppointmentClientName).trim();
+    const preservedClientId = normalizeId(existingAppointmentClientId);
+    const shouldPreserveArchivedClient =
+      isEditMode && !selectedClientRecord && !!preservedClientName;
 
     const finalEndTime = endTimeManuallyChanged
       ? endTime
@@ -778,8 +793,13 @@ export function useBookAppointmentForm() {
 
     const baseAppointmentData = {
       user_id: currentUserId,
-      client_id: selectedClient || null,
-      client_name: getClientDisplayName(selectedClientRecord),
+      client_id:
+        selectedClient || (shouldPreserveArchivedClient ? preservedClientId : null),
+      client_name: selectedClientRecord
+        ? getClientDisplayName(selectedClientRecord)
+        : shouldPreserveArchivedClient
+          ? preservedClientName
+          : "New Client",
       service_id: selectedServices[0]?.id
         ? normalizeId(selectedServices[0].id)
         : null,

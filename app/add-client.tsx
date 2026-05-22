@@ -43,7 +43,8 @@ export default function AddClientScreen() {
       const { data: existingClients, error: clientsError } = await supabase
         .from("clients")
         .select("id")
-        .eq("user_id", user.id);
+        .eq("user_id", user.id)
+        .is("archived_at", null);
 
       if (clientsError) {
         Alert.alert("Error", clientsError.message);

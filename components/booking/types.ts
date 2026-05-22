@@ -13,6 +13,7 @@ export type Client = {
   sms_opt_in?: boolean | null;
   sms_opt_in_at?: string | null;
   sms_opt_in_source?: string | null;
+  archived_at?: string | null;
 };
 
 export type Service = {

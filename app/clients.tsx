@@ -26,6 +26,7 @@ export default function ClientsScreen() {
       .from("clients")
       .select("*")
       .eq("user_id", userId)
+      .is("archived_at", null)
       .order("name");
 
     setClients(data || []);
