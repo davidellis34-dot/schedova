@@ -1,7 +1,8 @@
-import { useFocusEffect, useRouter } from "expo-router";
-import { useCallback, useState } from "react";
+import { useRouter } from "expo-router";
+import { useEffect, useMemo, useState } from "react";
 import { Alert, Pressable, ScrollView, Switch, Text, View } from "react-native";
 import { Dropdown } from "react-native-element-dropdown";
+import { canUseFeature } from "../lib/featureAccess";
 import { supabase } from "../lib/supabase";
 import { useAppTheme } from "../lib/useAppTheme";
 
@@ -15,32 +16,10 @@ const DAYS = [
   "Saturday",
 ];
 
-const TIME_OPTIONS = [
-  "00:00",
-  "01:00",
-  "02:00",
-  "03:00",
-  "04:00",
-  "05:00",
-  "06:00",
-  "07:00",
-  "08:00",
-  "09:00",
-  "10:00",
-  "11:00",
-  "12:00",
-  "13:00",
-  "14:00",
-  "15:00",
-  "16:00",
-  "17:00",
-  "18:00",
-  "19:00",
-  "20:00",
-  "21:00",
-  "22:00",
-  "23:00",
-];
+const TIME_OPTIONS = Array.from({ length: 24 }, (_, hour) => {
+  const value = `${String(hour).padStart(2, "0")}:00`;
+  return { label: value, value };
+});
 
 type AvailabilityRule = {
   id?: string;
@@ -62,39 +41,44 @@ function toPickerTime(value: string | null | undefined, fallback: string) {
   return String(value).slice(0, 5);
 }
 
+function defaultRules(): AvailabilityRule[] {
+  return DAYS.map((_, index) => ({
+    day_of_week: index,
+    is_available: true,
+    start_time: "09:00",
+    end_time: "17:00",
+  }));
+}
+
 export default function AvailabilitySettingsScreen() {
   const router = useRouter();
   const { colors } = useAppTheme();
+  const customHoursAvailable = canUseFeature("customBusinessHours");
 
-  const [rules, setRules] = useState<AvailabilityRule[]>([]);
+  const [rules, setRules] = useState<AvailabilityRule[]>(defaultRules());
+  const [loading, setLoading] = useState(true);
   const [saving, setSaving] = useState(false);
 
-  const timeOptions = TIME_OPTIONS.map((time) => ({
-    label: time,
-    value: time,
-  }));
+  const timeOptions = useMemo(() => TIME_OPTIONS, []);
 
-  useFocusEffect(
-    useCallback(() => {
-      loadAvailability();
-    }, []),
-  );
+  useEffect(() => {
+    if (!customHoursAvailable) {
+      setLoading(false);
+      return;
+    }
 
-  function defaultRules(): AvailabilityRule[] {
-    return DAYS.map((_, index) => ({
-      day_of_week: index,
-      is_available: true,
-      start_time: "09:00",
-      end_time: "17:00",
-    }));
-  }
+    loadAvailability();
+  }, [customHoursAvailable]);
 
   async function loadAvailability() {
+    setLoading(true);
+
     const { data: userData } = await supabase.auth.getUser();
     const userId = userData.user?.id;
 
     if (!userId) {
       setRules(defaultRules());
+      setLoading(false);
       return;
     }
 
@@ -105,12 +89,14 @@ export default function AvailabilitySettingsScreen() {
       .order("day_of_week");
 
     if (error) {
-      console.log("🔥 LOAD AVAILABILITY ERROR:", error.message);
+      console.log("LOAD AVAILABILITY ERROR:", error.message);
       setRules(defaultRules());
+      setLoading(false);
       return;
     }
 
     const savedRules = data || [];
+
     const mergedRules = defaultRules().map((defaultRule) => {
       const saved = savedRules.find(
         (item: any) => Number(item.day_of_week) === defaultRule.day_of_week,
@@ -132,6 +118,7 @@ export default function AvailabilitySettingsScreen() {
     });
 
     setRules(mergedRules);
+    setLoading(false);
   }
 
   function updateRule(
@@ -149,6 +136,14 @@ export default function AvailabilitySettingsScreen() {
   async function saveAvailability() {
     if (saving) return;
 
+    if (!customHoursAvailable) {
+      Alert.alert(
+        "Schedova Pro",
+        "Custom business hours are a Pro feature.",
+      );
+      return;
+    }
+
     setSaving(true);
 
     try {
@@ -161,6 +156,17 @@ export default function AvailabilitySettingsScreen() {
       }
 
       for (const rule of rules) {
+        if (
+          rule.is_available &&
+          toSqlTime(rule.start_time) >= toSqlTime(rule.end_time)
+        ) {
+          Alert.alert(
+            "Invalid Time",
+            `${DAYS[rule.day_of_week]} has an end time before the start time.`,
+          );
+          return;
+        }
+
         const ruleData = {
           user_id: userId,
           day_of_week: rule.day_of_week,
@@ -173,7 +179,8 @@ export default function AvailabilitySettingsScreen() {
           const { error } = await supabase
             .from("availability_rules")
             .update(ruleData)
-            .eq("id", rule.id);
+            .eq("id", rule.id)
+            .eq("user_id", userId);
 
           if (error) throw error;
         } else {
@@ -188,11 +195,61 @@ export default function AvailabilitySettingsScreen() {
       Alert.alert("Saved", "Availability updated.");
       router.push("/settings");
     } catch (error: any) {
-      console.log("🔥 SAVE AVAILABILITY ERROR:", error?.message || error);
+      console.log("SAVE AVAILABILITY ERROR:", error?.message || error);
       Alert.alert("Error", error?.message || "Could not save availability.");
     } finally {
       setSaving(false);
     }
+  }
+
+  if (!customHoursAvailable) {
+    return (
+      <ScrollView
+        style={{ flex: 1, backgroundColor: colors.background }}
+        contentContainerStyle={{ padding: 20, paddingBottom: 40 }}
+      >
+        <Text
+          style={{
+            fontSize: 30,
+            fontWeight: "bold",
+            marginBottom: 16,
+            color: colors.text,
+          }}
+        >
+          Availability Settings
+        </Text>
+
+        <View
+          style={{
+            backgroundColor: colors.card,
+            borderWidth: 1,
+            borderColor: colors.border,
+            borderRadius: 16,
+            padding: 18,
+            marginBottom: 16,
+          }}
+        >
+          <Text style={{ color: colors.text, fontSize: 20, fontWeight: "900" }}>
+            Schedova Pro
+          </Text>
+          <Text style={{ color: colors.mutedText, marginTop: 8 }}>
+            Custom business hours and blocked time are locked on Free.
+          </Text>
+        </View>
+
+        <Pressable
+          onPress={() => router.push("/settings")}
+          style={{
+            backgroundColor: colors.primary,
+            padding: 14,
+            borderRadius: 999,
+            alignItems: "center",
+          }}
+        >
+          <Text style={{ color: "#FFFFFF", fontWeight: "900" }}>Back</Text>
+        </Pressable>
+      </ScrollView>
+    );
   }
 
   function TimeDropdown({
@@ -204,193 +261,148 @@ export default function AvailabilitySettingsScreen() {
   }) {
     return (
       <Dropdown
-        style={{
-          borderWidth: 1,
-          borderColor: colors.border,
-          borderRadius: 12,
-          padding: 14,
-          backgroundColor: colors.card,
-          minHeight: 56,
-        }}
-        containerStyle={{
-          backgroundColor: colors.card,
-          borderColor: colors.border,
-        }}
-        itemTextStyle={{
-          color: colors.text,
-        }}
-        selectedTextStyle={{
-          color: colors.text,
-          fontSize: 16,
-          fontWeight: "bold",
-        }}
-        placeholderStyle={{
-          color: colors.mutedText,
-        }}
-        activeColor={colors.background}
+        maxHeight={300}
+        showsVerticalScrollIndicator={false}
         data={timeOptions}
         labelField="label"
         valueField="value"
         value={value}
         onChange={(item) => onChange(item.value)}
+        style={{
+          borderWidth: 1,
+          borderColor: colors.border,
+          borderRadius: 12,
+          paddingHorizontal: 12,
+          backgroundColor: colors.card,
+          minHeight: 52,
+          flex: 1,
+          width: "100%",
+        }}
+        containerStyle={{
+          backgroundColor: colors.card,
+          borderColor: colors.border,
+          borderRadius: 12,
+          overflow: "hidden",
+          zIndex: 999,
+          elevation: 10,
+        }}
+        itemTextStyle={{ color: colors.text }}
+        selectedTextStyle={{
+          color: colors.text,
+          fontSize: 15,
+          fontWeight: "700",
+        }}
+        placeholderStyle={{ color: colors.mutedText }}
+        activeColor={colors.background}
       />
     );
   }
 
   return (
     <ScrollView
-      style={{
-        flex: 1,
-        backgroundColor: colors.background,
-        padding: 20,
-      }}
+      style={{ flex: 1, backgroundColor: colors.background }}
+      contentContainerStyle={{ padding: 20, paddingBottom: 40 }}
+      keyboardShouldPersistTaps="handled"
+      nestedScrollEnabled
     >
       <Text
         style={{
-          fontSize: 34,
+          fontSize: 30,
           fontWeight: "bold",
+          marginBottom: 8,
           color: colors.text,
-          marginBottom: 24,
         }}
       >
-        Availability
+        Availability Settings
       </Text>
 
-      {rules.map((rule) => (
-        <View
-          key={rule.day_of_week}
-          style={{
-            backgroundColor: colors.card,
-            padding: 18,
-            borderRadius: 18,
-            marginBottom: 18,
-            borderWidth: 1,
-            borderColor: colors.border,
-          }}
-        >
+      <Text
+        style={{
+          fontSize: 15,
+          color: colors.mutedText,
+          marginBottom: 20,
+          lineHeight: 22,
+        }}
+      >
+        Choose which days your business accepts appointments.
+      </Text>
+
+      {loading ? (
+        <Text style={{ color: colors.mutedText }}>Loading availability...</Text>
+      ) : (
+        rules.map((rule) => (
           <View
+            key={rule.day_of_week}
             style={{
-              flexDirection: "row",
-              justifyContent: "space-between",
-              alignItems: "center",
-              marginBottom: 18,
+              backgroundColor: colors.card,
+              borderRadius: 16,
+              padding: 16,
+              marginBottom: 14,
+              borderWidth: 1,
+              borderColor: colors.border,
             }}
           >
-            <Text
+            <View
               style={{
-                color: colors.text,
-                fontSize: 24,
-                fontWeight: "bold",
+                flexDirection: "row",
+                justifyContent: "space-between",
+                alignItems: "center",
+                marginBottom: rule.is_available ? 14 : 0,
               }}
             >
-              {DAYS[rule.day_of_week]}
-            </Text>
-
-            <Switch
-              value={rule.is_available}
-              onValueChange={(value) =>
-                updateRule(rule.day_of_week, "is_available", value)
-              }
-            />
-          </View>
-
-          {rule.is_available ? (
-            <>
               <Text
                 style={{
+                  fontSize: 18,
+                  fontWeight: "700",
                   color: colors.text,
-                  fontWeight: "bold",
-                  marginBottom: 8,
-                  fontSize: 16,
                 }}
               >
-                Start Time
+                {DAYS[rule.day_of_week]}
               </Text>
 
-              <View style={{ marginBottom: 16 }}>
+              <Switch
+                value={rule.is_available}
+                onValueChange={(value) =>
+                  updateRule(rule.day_of_week, "is_available", value)
+                }
+              />
+            </View>
+
+            {rule.is_available && (
+              <View style={{ flexDirection: "row", gap: 10 }}>
                 <TimeDropdown
                   value={rule.start_time}
                   onChange={(value) =>
                     updateRule(rule.day_of_week, "start_time", value)
                   }
                 />
+
+                <TimeDropdown
+                  value={rule.end_time}
+                  onChange={(value) =>
+                    updateRule(rule.day_of_week, "end_time", value)
+                  }
+                />
               </View>
-
-              <Text
-                style={{
-                  color: colors.text,
-                  fontWeight: "bold",
-                  marginBottom: 8,
-                  fontSize: 16,
-                }}
-              >
-                End Time
-              </Text>
-
-              <TimeDropdown
-                value={rule.end_time}
-                onChange={(value) =>
-                  updateRule(rule.day_of_week, "end_time", value)
-                }
-              />
-            </>
-          ) : (
-            <Text
-              style={{
-                color: colors.mutedText,
-                fontSize: 16,
-                marginTop: 4,
-              }}
-            >
-              Not available this day
-            </Text>
-          )}
-        </View>
-      ))}
+            )}
+          </View>
+        ))
+      )}
 
       <Pressable
-        disabled={saving}
         onPress={saveAvailability}
+        disabled={saving}
         style={{
-          backgroundColor: saving ? "#94A3B8" : colors.primary,
+          backgroundColor: colors.primary,
           padding: 16,
           borderRadius: 14,
           alignItems: "center",
-          marginTop: 8,
-          marginBottom: 14,
+          marginTop: 10,
+          opacity: saving ? 0.6 : 1,
         }}
       >
-        <Text
-          style={{
-            color: "#FFFFFF",
-            fontWeight: "bold",
-            fontSize: 16,
-          }}
-        >
+        <Text style={{ color: "#FFFFFF", fontWeight: "bold", fontSize: 16 }}>
           {saving ? "Saving..." : "Save Availability"}
-        </Text>
-      </Pressable>
-
-      <Pressable
-        onPress={() => router.push("/settings")}
-        style={{
-          backgroundColor: colors.card,
-          padding: 16,
-          borderRadius: 14,
-          alignItems: "center",
-          marginBottom: 40,
-          borderWidth: 1,
-          borderColor: colors.border,
-        }}
-      >
-        <Text
-          style={{
-            color: colors.text,
-            fontWeight: "bold",
-            fontSize: 16,
-          }}
-        >
-          Back to Settings
         </Text>
       </Pressable>
     </ScrollView>

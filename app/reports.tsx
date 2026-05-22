@@ -1,9 +1,14 @@
+import * as Print from "expo-print";
 import { useFocusEffect, useRouter } from "expo-router";
+import * as Sharing from "expo-sharing";
 import { useCallback, useMemo, useState } from "react";
 import { Pressable, ScrollView, Text, View } from "react-native";
-
-import * as Print from "expo-print";
-import * as Sharing from "expo-sharing";
+import {
+  getAppointmentServices,
+  getAppointmentServiceTotal,
+} from "../lib/appointmentServices";
+import { canUseFeature } from "../lib/featureAccess";
+import { useAppTheme } from "../lib/useAppTheme";
 
 import { supabase } from "../lib/supabase";
 
@@ -24,7 +29,8 @@ const RANGES: {
 
 export default function ReportsScreen() {
   const router = useRouter();
-
+  const { colors } = useAppTheme();
+  const reportsAvailable = canUseFeature("reports");
   const [range, setRange] = useState<RangeKey>("today");
 
   const [appointments, setAppointments] = useState<any[]>([]);
@@ -33,8 +39,9 @@ export default function ReportsScreen() {
 
   useFocusEffect(
     useCallback(() => {
+      if (!reportsAvailable) return;
       fetchData();
-    }, []),
+    }, [reportsAvailable]),
   );
 
   async function fetchData() {
@@ -57,10 +64,6 @@ export default function ReportsScreen() {
     setAppointments(appointmentsResult.data || []);
 
     setServices(servicesResult.data || []);
-  }
-
-  function getService(serviceId: string) {
-    return services.find((service) => service.id === serviceId);
   }
 
   const report = useMemo(() => {
@@ -87,9 +90,9 @@ export default function ReportsScreen() {
 
     const cancelled = filtered.filter(
       (a) =>
-        a.status === "cancelled" ||
-        a.status === "customer_cancelled" ||
-        a.status === "business_cancelled",
+        a.status === "canceled" ||
+        a.status === "customer_canceled" ||
+        a.status === "business_canceled",
     );
 
     const noShows = filtered.filter((a) => a.status === "no_show");
@@ -106,12 +109,18 @@ export default function ReportsScreen() {
     const serviceCounts: Record<string, number> = {};
 
     completed.forEach((appointment) => {
-      const service = getService(appointment.service_id);
+      const appointmentServices = getAppointmentServices(
+        appointment,
+        services,
+      );
 
-      const price = Number(service?.price || 0);
+      const price =
+        appointment.final_price !== null &&
+        appointment.final_price !== undefined
+          ? Number(appointment.final_price || 0)
+          : getAppointmentServiceTotal(appointment, services);
 
       const tip = Number(appointment.tip_amount || 0);
-
       const paymentType = appointment.payment_type || "other";
 
       serviceRevenue += price;
@@ -125,9 +134,10 @@ export default function ReportsScreen() {
         other += price + tip;
       }
 
-      const serviceName = service?.name || "Unknown Service";
-
-      serviceCounts[serviceName] = (serviceCounts[serviceName] || 0) + 1;
+      appointmentServices.forEach((service: any) => {
+        const serviceName = service?.name || "Unknown Service";
+        serviceCounts[serviceName] = (serviceCounts[serviceName] || 0) + 1;
+      });
     });
 
     const topServices = Object.entries(serviceCounts)
@@ -205,7 +215,7 @@ export default function ReportsScreen() {
       <View
         style={{
           flex: 1,
-          backgroundColor: "#F3F4F6",
+          backgroundColor: colors.background,
           padding: 16,
           borderRadius: 16,
           marginBottom: 10,
@@ -213,7 +223,7 @@ export default function ReportsScreen() {
       >
         <Text
           style={{
-            color: "#555555",
+            color: colors.text,
             fontWeight: "bold",
           }}
         >
@@ -222,7 +232,7 @@ export default function ReportsScreen() {
 
         <Text
           style={{
-            color: "#111111",
+            color: colors.text,
             fontSize: 24,
             fontWeight: "bold",
             marginTop: 6,
@@ -239,7 +249,7 @@ export default function ReportsScreen() {
       <View
         style={{
           flex: 1,
-          backgroundColor: "#F3F4F6",
+          backgroundColor: colors.background,
           padding: 16,
           borderRadius: 16,
           marginBottom: 10,
@@ -247,7 +257,7 @@ export default function ReportsScreen() {
       >
         <Text
           style={{
-            color: "#555555",
+            color: colors.text,
             fontWeight: "bold",
           }}
         >
@@ -256,7 +266,7 @@ export default function ReportsScreen() {
 
         <Text
           style={{
-            color: "#111111",
+            color: colors.text,
             fontSize: 24,
             fontWeight: "bold",
             marginTop: 6,
@@ -268,11 +278,64 @@ export default function ReportsScreen() {
     );
   }
 
+  if (!reportsAvailable) {
+    return (
+      <ScrollView
+        style={{
+          flex: 1,
+          backgroundColor: colors.background,
+          padding: 20,
+        }}
+      >
+        <Text
+          style={{
+            fontSize: 30,
+            fontWeight: "bold",
+            color: colors.text,
+            marginBottom: 20,
+          }}
+        >
+          Reports
+        </Text>
+
+        <View
+          style={{
+            backgroundColor: colors.card,
+            borderWidth: 1,
+            borderColor: colors.border,
+            borderRadius: 16,
+            padding: 18,
+            marginBottom: 16,
+          }}
+        >
+          <Text style={{ color: colors.text, fontSize: 20, fontWeight: "900" }}>
+            Schedova Pro
+          </Text>
+          <Text style={{ color: colors.mutedText, marginTop: 8 }}>
+            Reports, revenue dashboards, and business insights are Pro features.
+          </Text>
+        </View>
+
+        <Pressable
+          onPress={() => router.back()}
+          style={{
+            backgroundColor: colors.primary,
+            padding: 14,
+            borderRadius: 999,
+            alignItems: "center",
+          }}
+        >
+          <Text style={{ color: "#FFFFFF", fontWeight: "900" }}>Back</Text>
+        </Pressable>
+      </ScrollView>
+    );
+  }
+
   return (
     <ScrollView
       style={{
         flex: 1,
-        backgroundColor: "#ffffff",
+        backgroundColor: colors.background,
         padding: 20,
       }}
     >
@@ -280,7 +343,7 @@ export default function ReportsScreen() {
         style={{
           fontSize: 30,
           fontWeight: "bold",
-          color: "#111111",
+          color: colors.text,
           marginBottom: 20,
         }}
       >
@@ -300,8 +363,9 @@ export default function ReportsScreen() {
               key={item.key}
               onPress={() => setRange(item.key)}
               style={{
-                backgroundColor: active ? "#0F766E" : "#E5E7EB",
-
+                backgroundColor: active ? colors.primary : colors.card,
+                borderWidth: active ? 0 : 1,
+                borderColor: colors.border,
                 paddingVertical: 10,
                 paddingHorizontal: 16,
                 borderRadius: 999,
@@ -310,7 +374,7 @@ export default function ReportsScreen() {
             >
               <Text
                 style={{
-                  color: active ? "#ffffff" : "#111111",
+                  color: colors.text,
 
                   fontWeight: "bold",
                 }}
@@ -325,7 +389,7 @@ export default function ReportsScreen() {
       <Pressable
         onPress={shareReportPdf}
         style={{
-          backgroundColor: "#0F766E",
+          backgroundColor: colors.primary,
           padding: 16,
           borderRadius: 999,
           alignItems: "center",
@@ -334,7 +398,7 @@ export default function ReportsScreen() {
       >
         <Text
           style={{
-            color: "#ffffff",
+            color: colors.text,
             fontWeight: "bold",
           }}
         >
@@ -348,13 +412,6 @@ export default function ReportsScreen() {
           gap: 10,
         }}
       >
-        <Pressable
-          onPress={() => router.push("/reports" as any)}
-          style={{ flex: 1 }}
-        >
-          <MoneyCard title="Total Revenue" amount={report.totalRevenue} />
-        </Pressable>
-
         <MoneyCard title="Service Revenue" amount={report.serviceRevenue} />
       </View>
 
@@ -413,7 +470,7 @@ export default function ReportsScreen() {
 
       <View
         style={{
-          backgroundColor: "#F3F4F6",
+          backgroundColor: colors.background,
           padding: 15,
           paddingBottom: 20,
           borderRadius: 16,
@@ -425,7 +482,7 @@ export default function ReportsScreen() {
           style={{
             fontSize: 20,
             fontWeight: "bold",
-            color: "#111111",
+            color: colors.text,
             marginBottom: 14,
           }}
         >
@@ -435,7 +492,7 @@ export default function ReportsScreen() {
         {report.topServices.length === 0 && (
           <Text
             style={{
-              color: "#666666",
+              color: colors.text,
             }}
           >
             No completed services in this range.
@@ -451,12 +508,12 @@ export default function ReportsScreen() {
 
               paddingVertical: 10,
               borderBottomWidth: 1,
-              borderBottomColor: "#E5E7EB",
+              backgroundColor: colors.card,
             }}
           >
             <Text
               style={{
-                color: "#111111",
+                color: colors.text,
                 fontWeight: "bold",
               }}
             >
@@ -465,7 +522,7 @@ export default function ReportsScreen() {
 
             <Text
               style={{
-                color: "#0F766E",
+                color: colors.text,
                 fontWeight: "bold",
               }}
             >
@@ -475,9 +532,9 @@ export default function ReportsScreen() {
         ))}
       </View>
       <Pressable
-        onPress={() => router.push("/(tabs)/service-reports" as any)}
+        onPress={() => router.push("/service-reports" as any)}
         style={{
-          backgroundColor: "#0F766E",
+          backgroundColor: colors.primary,
           padding: 14,
           borderRadius: 999,
           alignItems: "center",
@@ -486,7 +543,7 @@ export default function ReportsScreen() {
       >
         <Text
           style={{
-            color: "#ffffff",
+            color: colors.text,
             fontWeight: "bold",
           }}
         >

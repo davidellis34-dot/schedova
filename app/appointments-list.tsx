@@ -9,10 +9,16 @@ import {
   TextInput,
   View,
 } from "react-native";
+import { getAppointmentServices as getSavedAppointmentServices } from "../lib/appointmentServices";
+import { sendAppointmentSmsNonBlocking } from "../lib/appointmentSms";
+import { formatClockTime, getCalendarPreferences } from "../lib/calendarPreferences";
+import { confirmDestructiveAction } from "../lib/confirmDestructiveAction";
+import { canUseFeature } from "../lib/featureAccess";
+import { cancelAppointmentReminder } from "../lib/localNotifications";
 import { supabase } from "../lib/supabase";
 import { useAppTheme } from "../lib/useAppTheme";
 
-type AppointmentTab = "upcoming" | "completed" | "cancelled";
+type AppointmentTab = "upcoming" | "completed" | "canceled";
 
 type Appointment = {
   id: string;
@@ -28,7 +34,6 @@ type Appointment = {
 export default function AppointmentsList() {
   const router = useRouter();
   const { colors } = useAppTheme();
-
   const [activeTab, setActiveTab] = useState<AppointmentTab>("upcoming");
   const [appointments, setAppointments] = useState<Appointment[]>([]);
   const [services, setServices] = useState<any[]>([]);
@@ -42,10 +47,35 @@ export default function AppointmentsList() {
 
   const [tipAmount, setTipAmount] = useState("");
   const [appointmentNotes, setAppointmentNotes] = useState("");
+  const [use24Hour, setUse24Hour] = useState(false);
 
   useEffect(() => {
     fetchData();
+    void loadCalendarPreferences();
   }, []);
+
+  async function loadCalendarPreferences() {
+    const preferences = await getCalendarPreferences();
+    setUse24Hour(preferences.timeFormat === "24h");
+  }
+
+  async function getCurrentUserIdOrAlert() {
+    const {
+      data: { user },
+      error,
+    } = await supabase.auth.getUser();
+
+    if (error || !user) {
+      Alert.alert("Not signed in", "Please sign in again.");
+      return "";
+    }
+
+    return user.id;
+  }
+
+  function formatTime(timeString?: string | null) {
+    return formatClockTime(timeString, use24Hour);
+  }
 
   async function fetchData() {
     const { data: userData } = await supabase.auth.getUser();
@@ -60,7 +90,10 @@ export default function AppointmentsList() {
       .order("appointment_date", { ascending: true })
       .order("appointment_time", { ascending: true });
 
-    const servicesResult = await supabase.from("services").select("*");
+    const servicesResult = await supabase
+      .from("services")
+      .select("*")
+      .eq("user_id", userId);
 
     const clientsResult = await supabase
       .from("clients")
@@ -75,10 +108,6 @@ export default function AppointmentsList() {
     setAppointments(appointmentsResult.data || []);
     setServices(servicesResult.data || []);
     setClients(clientsResult.data || []);
-  }
-
-  function getService(serviceId: string) {
-    return services.find((service) => String(service.id) === String(serviceId));
   }
 
   function getClientByName(name: string) {
@@ -123,9 +152,9 @@ export default function AppointmentsList() {
     return appointments.filter(
       (a) =>
         !a.archived &&
-        (a.status === "cancelled" ||
-          a.status === "customer_cancelled" ||
-          a.status === "business_cancelled" ||
+        (a.status === "canceled" ||
+          a.status === "customer_canceled" ||
+          a.status === "business_canceled" ||
           a.status === "no_show"),
     );
   }
@@ -149,10 +178,14 @@ export default function AppointmentsList() {
       return;
     }
 
+    const userId = await getCurrentUserIdOrAlert();
+    if (!userId) return;
+
     const { data, error } = await supabase
       .from("appointments")
       .update({ tip_amount: tipValue })
       .eq("id", selectedAppointment.id)
+      .eq("user_id", userId)
       .select("*")
       .maybeSingle();
 
@@ -179,10 +212,14 @@ export default function AppointmentsList() {
   async function saveNotes() {
     if (!selectedAppointment?.id) return;
 
+    const userId = await getCurrentUserIdOrAlert();
+    if (!userId) return;
+
     const { data, error } = await supabase
       .from("appointments")
       .update({ appointment_notes: appointmentNotes })
       .eq("id", selectedAppointment.id)
+      .eq("user_id", userId)
       .select("*")
       .maybeSingle();
 
@@ -202,10 +239,14 @@ export default function AppointmentsList() {
   }
 
   async function updateAppointmentStatus(id: string, status: string) {
+    const userId = await getCurrentUserIdOrAlert();
+    if (!userId) return;
+
     const { data, error } = await supabase
       .from("appointments")
       .update({ status })
       .eq("id", id)
+      .eq("user_id", userId)
       .select("*")
       .maybeSingle();
 
@@ -215,6 +256,13 @@ export default function AppointmentsList() {
     }
 
     if (data) {
+      if (status === "canceled") {
+        if (canUseFeature("smsAutomation")) {
+          void sendAppointmentSmsNonBlocking(id, "cancellation");
+        }
+        await cancelAppointmentReminder(id);
+      }
+
       setAppointments((current) =>
         current.map((appointment) =>
           appointment.id === data.id ? data : appointment,
@@ -228,36 +276,47 @@ export default function AppointmentsList() {
   }
 
   async function deleteAppointment(id: string) {
-    Alert.alert("Delete Appointment", "Are you sure?", [
-      { text: "Cancel", style: "cancel" },
-      {
-        text: "Delete",
-        style: "destructive",
-        onPress: async () => {
-          const { error } = await supabase
-            .from("appointments")
-            .delete()
-            .eq("id", id);
+    await confirmDestructiveAction({
+      title: "Delete Appointment",
+      message: "Are you sure you want to delete this appointment?",
+      confirmText: "Delete",
+      onConfirm: async () => {
+        const userId = await getCurrentUserIdOrAlert();
+        if (!userId) return;
 
-          if (error) {
-            Alert.alert("Error", error.message);
-            return;
-          }
+        if (canUseFeature("smsAutomation")) {
+          void sendAppointmentSmsNonBlocking(id, "cancellation");
+        }
 
-          setAppointments((current) =>
-            current.filter((appointment) => appointment.id !== id),
-          );
-          setSelectedAppointment(null);
-        },
+        const { error } = await supabase
+          .from("appointments")
+          .delete()
+          .eq("id", id)
+          .eq("user_id", userId);
+
+        if (error) {
+          Alert.alert("Error", error.message);
+          return;
+        }
+
+        await cancelAppointmentReminder(id);
+        setAppointments((current) =>
+          current.filter((appointment) => appointment.id !== id),
+        );
+        setSelectedAppointment(null);
       },
-    ]);
+    });
   }
 
   async function archiveSelectedAppointments() {
+    const userId = await getCurrentUserIdOrAlert();
+    if (!userId) return;
+
     const { error } = await supabase
       .from("appointments")
       .update({ archived: true })
-      .in("id", selectedIds);
+      .in("id", selectedIds)
+      .eq("user_id", userId);
 
     if (error) {
       Alert.alert("Error", error.message);
@@ -277,26 +336,58 @@ export default function AppointmentsList() {
   }
 
   async function deleteSelectedAppointments() {
-    const { error } = await supabase
-      .from("appointments")
-      .delete()
-      .in("id", selectedIds);
+    if (selectedIds.length === 0) return;
 
-    if (error) {
-      Alert.alert("Error", error.message);
-      return;
-    }
+    await confirmDestructiveAction({
+      title: "Delete Selected Appointments?",
+      message: `Delete ${selectedIds.length} selected appointment${
+        selectedIds.length === 1 ? "" : "s"
+      }?`,
+      confirmText: "Delete",
+      onConfirm: async () => {
+        const userId = await getCurrentUserIdOrAlert();
+        if (!userId) return;
 
-    setAppointments((current) =>
-      current.filter((appointment) => !selectedIds.includes(appointment.id)),
-    );
+        if (canUseFeature("smsAutomation")) {
+          await Promise.all(
+            selectedIds.map((appointmentId) =>
+              sendAppointmentSmsNonBlocking(appointmentId, "cancellation"),
+            ),
+          );
+        }
 
-    setSelectedIds([]);
-    setSelectMode(false);
+        const { error } = await supabase
+          .from("appointments")
+          .delete()
+          .in("id", selectedIds)
+          .eq("user_id", userId);
+
+        if (error) {
+          Alert.alert("Error", error.message);
+          return;
+        }
+
+        await Promise.all(
+          selectedIds.map((appointmentId) =>
+            cancelAppointmentReminder(appointmentId),
+          ),
+        );
+
+        setAppointments((current) =>
+          current.filter((appointment) => !selectedIds.includes(appointment.id)),
+        );
+
+        setSelectedIds([]);
+        setSelectMode(false);
+      },
+    });
   }
 
   function bulkReschedule() {
-    Alert.alert("Bulk Reschedule", "We will add this next.");
+    Alert.alert(
+      "Schedova Pro",
+      "Smart rescheduling and follow-up tools are Pro features.",
+    );
   }
 
   function StatusBadge({ appointment }: { appointment: any }) {
@@ -336,12 +427,16 @@ export default function AppointmentsList() {
       </Pressable>
     );
   }
-
+  function getAppointmentServices(appointment: any) {
+    return getSavedAppointmentServices(appointment, services);
+  }
   const shownAppointments = filteredAppointments().slice(0, 50);
 
-  const selectedService = selectedAppointment
-    ? getService(selectedAppointment.service_id)
-    : null;
+  const selectedAppointmentServices = selectedAppointment
+    ? getAppointmentServices(selectedAppointment)
+    : [];
+
+  const selectedService = selectedAppointmentServices[0] || null;
 
   const selectedClient = selectedAppointment
     ? getClientByName(selectedAppointment.client_name)
@@ -372,7 +467,7 @@ export default function AppointmentsList() {
         <View style={{ width: 10 }} />
         <TabButton label="Completed" tab="completed" />
         <View style={{ width: 10 }} />
-        <TabButton label="Cancelled" tab="cancelled" />
+        <TabButton label="Canceled" tab="canceled" />
       </View>
 
       {activeTab !== "upcoming" && (
@@ -400,12 +495,9 @@ export default function AppointmentsList() {
       )}
 
       {shownAppointments.map((appointment) => {
-        const service = getService(appointment.service_id);
-        function getService(serviceId?: string) {
-          return services.find(
-            (service) => String(service.id) === String(serviceId),
-          );
-        }
+        const appointmentServices = getAppointmentServices(appointment);
+        const service = appointmentServices[0];
+
         return (
           <View
             key={appointment.id}
@@ -429,11 +521,16 @@ export default function AppointmentsList() {
             <Text
               style={{ marginTop: 5, fontWeight: "bold", color: colors.text }}
             >
-              {service?.name || "No service selected"}
+              {appointmentServices.length > 0
+                ? appointmentServices
+                    .map((service: any) => service?.name)
+                    .filter(Boolean)
+                    .join(", ")
+                : "No service selected"}
             </Text>
 
             <Text style={{ marginTop: 6, color: colors.text }}>
-              {appointment.appointment_date} at {appointment.appointment_time}
+              {appointment.appointment_date} at {formatTime(appointment.appointment_time)}
             </Text>
 
             {Number(appointment.tip_amount || 0) > 0 && (
@@ -500,7 +597,8 @@ export default function AppointmentsList() {
             >
               <StatusBadge appointment={appointment} />
 
-              {appointment.status === "completed" && (
+              {appointment.status === "completed" &&
+                canUseFeature("smartReminders") && (
                 <Text
                   style={{
                     marginLeft: 14,
@@ -588,7 +686,7 @@ export default function AppointmentsList() {
                     pathname: "/book-appointment",
                     params: {
                       appointmentId: idToEdit,
-                      editMode: "true",
+                      mode: "edit",
                     },
                   });
                 }}
@@ -637,7 +735,13 @@ export default function AppointmentsList() {
                 </Text>
 
                 <Text style={{ marginTop: 6, color: colors.text }}>
-                  Service: {selectedService?.name || "No service selected"}
+                  Service:{" "}
+                  {selectedAppointmentServices.length > 0
+                    ? selectedAppointmentServices
+                        .map((service: any) => service?.name)
+                        .filter(Boolean)
+                        .join(", ")
+                    : "No service selected"}
                 </Text>
 
                 <Text style={{ color: colors.text }}>
@@ -645,7 +749,7 @@ export default function AppointmentsList() {
                 </Text>
 
                 <Text style={{ color: colors.text }}>
-                  Time: {selectedAppointment?.appointment_time}
+                  Time: {formatTime(selectedAppointment?.appointment_time)}
                 </Text>
 
                 <Text style={{ color: colors.text }}>
@@ -657,7 +761,7 @@ export default function AppointmentsList() {
                   {Number(selectedAppointment?.tip_amount || 0).toFixed(2)}
                 </Text>
 
-                {["scheduled", "completed", "cancelled", "no_show"].map(
+                {["scheduled", "completed", "canceled", "no_show"].map(
                   (status) => (
                     <Pressable
                       key={status}
@@ -682,7 +786,8 @@ export default function AppointmentsList() {
                   ),
                 )}
 
-                {selectedAppointment?.status === "completed" && (
+                {selectedAppointment?.status === "completed" &&
+                  canUseFeature("smartReminders") && (
                   <View
                     style={{
                       backgroundColor: colors.card,

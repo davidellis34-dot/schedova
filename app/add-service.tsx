@@ -1,5 +1,5 @@
-import { useRouter } from "expo-router";
-import { useEffect, useRef, useState } from "react";
+import { useFocusEffect, useRouter } from "expo-router";
+import { useCallback, useRef, useState } from "react";
 import {
   Alert,
   Pressable,
@@ -8,6 +8,8 @@ import {
   TextInput,
   View,
 } from "react-native";
+import { confirmDestructiveAction } from "../lib/confirmDestructiveAction";
+import { canUseFeature, FREE_TIER_LIMITS } from "../lib/featureAccess";
 import { supabase } from "../lib/supabase";
 import { useAppTheme } from "../lib/useAppTheme";
 export default function AddServiceScreen() {
@@ -17,6 +19,7 @@ export default function AddServiceScreen() {
   const [duration, setDuration] = useState("");
   const [colorHex, setColorHex] = useState("#0F766E");
   const router = useRouter();
+  const [userId, setUserId] = useState("");
   const { colors } = useAppTheme();
   const serviceColors = [
     "#0F766E",
@@ -35,6 +38,13 @@ export default function AddServiceScreen() {
   const nameInputRef = useRef<TextInput>(null);
   const [services, setServices] = useState<any[]>([]);
   const [editingServiceId, setEditingServiceId] = useState<string | null>(null);
+
+  useFocusEffect(
+    useCallback(() => {
+      fetchServices();
+    }, []),
+  );
+
   async function handleSave() {
     const { data: userData } = await supabase.auth.getUser();
     const userId = userData.user?.id;
@@ -49,6 +59,18 @@ export default function AddServiceScreen() {
       return;
     }
 
+    if (
+      !editingServiceId &&
+      !canUseFeature("moreServices") &&
+      services.length >= FREE_TIER_LIMITS.services
+    ) {
+      Alert.alert(
+        "Schedova Pro",
+        `Free includes up to ${FREE_TIER_LIMITS.services} services. Upgrade to add more.`,
+      );
+      return;
+    }
+
     let error;
 
     if (editingServiceId) {
@@ -56,19 +78,24 @@ export default function AddServiceScreen() {
         .from("services")
         .update({
           name: name,
-          price: Number(price),
-          duration_minutes: Number(duration),
+          price: Number.isFinite(Number(price)) ? Number(price) : 0,
+          duration_minutes: Number.isFinite(Number(duration))
+            ? Number(duration)
+            : 30,
           color_hex: colorHex,
         })
-        .eq("id", editingServiceId);
+        .eq("id", editingServiceId)
+        .eq("user_id", userId);
 
       error = response.error;
     } else {
       const response = await supabase.from("services").insert({
         user_id: userId,
         name: name,
-        price: Number(price),
-        duration_minutes: Number(duration),
+        price: Number.isFinite(Number(price)) ? Number(price) : 0,
+        duration_minutes: Number.isFinite(Number(duration))
+          ? Number(duration)
+          : 30,
         color_hex: colorHex,
       });
 
@@ -82,32 +109,66 @@ export default function AddServiceScreen() {
 
     setSuccessMessage("Service saved.");
 
-    setTimeout(() => {
-      router.replace("/dashboard" as any);
-    }, 300);
+    setName("");
+    setPrice("");
+    setDuration("");
+    setColorHex("#0F766E");
+    setEditingServiceId(null);
+    fetchServices();
 
     return;
   }
-  useEffect(() => {
-    fetchServices();
-  }, []);
 
   async function fetchServices() {
     const { data: userData } = await supabase.auth.getUser();
     const userId = userData.user?.id;
+
+    if (!userId) {
+      setServices([]);
+      return;
+    }
 
     const { data, error } = await supabase
       .from("services")
       .select("*")
       .eq("user_id", userId)
       .order("name");
-
     if (error) {
       Alert.alert("Error", error.message);
       return;
     }
 
     setServices(data || []);
+  }
+  async function handleDeleteService(service: any) {
+    const { data: userData } = await supabase.auth.getUser();
+    const currentUserId = userData.user?.id;
+
+    if (!currentUserId) {
+      Alert.alert("Login Required", "Please log in first.");
+      return;
+    }
+
+    await confirmDestructiveAction({
+      title: "Delete Service",
+      message: `Are you sure you want to delete "${service.name}"?`,
+      confirmText: "Delete",
+      onConfirm: async () => {
+        const { error } = await supabase
+          .from("services")
+          .delete()
+          .eq("id", service.id)
+          .eq("user_id", currentUserId);
+
+        if (error) {
+          Alert.alert("Error", error.message);
+          return;
+        }
+
+        setSuccessMessage("Service deleted.");
+        fetchServices();
+      },
+    });
   }
   return (
     <ScrollView
@@ -144,6 +205,12 @@ export default function AddServiceScreen() {
             {successMessage}
           </Text>
         </View>
+      ) : null}
+
+      {!canUseFeature("moreServices") ? (
+        <Text style={{ color: colors.mutedText, marginBottom: 14 }}>
+          Free: {services.length}/{FREE_TIER_LIMITS.services} services
+        </Text>
       ) : null}
 
       {showForm && (
@@ -253,7 +320,6 @@ export default function AddServiceScreen() {
       >
         Existing Services
       </Text>
-
       {services.map((service) => (
         <View
           key={service.id}
@@ -294,30 +360,10 @@ export default function AddServiceScreen() {
               alignItems: "center",
             }}
           >
-            <Text style={{ color: colors.text, fontWeight: "bold" }}>Edit</Text>
+            <Text style={{ color: "#FFFFFF", fontWeight: "bold" }}>Edit</Text>
           </Pressable>
           <Pressable
-            onPress={() => {
-              Alert.alert(
-                "Delete Service",
-                `Are you sure you want to delete "${service.name}"?`,
-                [
-                  { text: "Cancel", style: "cancel" },
-                  {
-                    text: "Delete",
-                    style: "destructive",
-                    onPress: async () => {
-                      await supabase
-                        .from("services")
-                        .delete()
-                        .eq("id", service.id);
-
-                      fetchServices();
-                    },
-                  },
-                ],
-              );
-            }}
+            onPress={() => handleDeleteService(service)}
             style={{
               marginTop: 8,
               backgroundColor: "#DC2626",

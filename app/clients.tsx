@@ -1,6 +1,8 @@
 import { useRouter } from "expo-router";
 import { useEffect, useState } from "react";
-import { Pressable, ScrollView, Text, TextInput, View } from "react-native";
+import { Alert, Pressable, ScrollView, Text, TextInput, View } from "react-native";
+import { normalizeClientTag } from "../lib/clientTags";
+import { canUseFeature, FREE_TIER_LIMITS } from "../lib/featureAccess";
 import { supabase } from "../lib/supabase";
 import { useAppTheme } from "../lib/useAppTheme";
 export default function ClientsScreen() {
@@ -16,7 +18,10 @@ export default function ClientsScreen() {
   async function fetchClients() {
     const { data: userData } = await supabase.auth.getUser();
     const userId = userData.user?.id;
-
+    if (!userId) {
+      setClients([]);
+      return;
+    }
     const { data } = await supabase
       .from("clients")
       .select("*")
@@ -27,11 +32,33 @@ export default function ClientsScreen() {
   }
 
   const filteredClients = clients.filter((client) => {
-    const clientName = String(client.name || "").toLowerCase();
     const search = searchText.toLowerCase();
 
-    return clientName.includes(search);
+    const clientName = String(client.name || "").toLowerCase();
+    const clientPhone = String(client.phone || "").toLowerCase();
+    const clientEmail = String(client.email || "").toLowerCase();
+
+    return (
+      clientName.includes(search) ||
+      clientPhone.includes(search) ||
+      clientEmail.includes(search)
+    );
   });
+
+  const canAddMoreClients =
+    canUseFeature("moreClients") || clients.length < FREE_TIER_LIMITS.clients;
+
+  function openAddClient() {
+    if (!canAddMoreClients) {
+      Alert.alert(
+        "Schedova Pro",
+        `Free includes up to ${FREE_TIER_LIMITS.clients} clients. Upgrade to add more.`,
+      );
+      return;
+    }
+
+    router.push("/add-client" as any);
+  }
 
   return (
     <ScrollView
@@ -49,7 +76,7 @@ export default function ClientsScreen() {
       </Text>
 
       <Pressable
-        onPress={() => router.push("/add-client" as any)}
+        onPress={openAddClient}
         style={{
           backgroundColor: colors.card,
           padding: 16,
@@ -62,6 +89,12 @@ export default function ClientsScreen() {
           Add Client
         </Text>
       </Pressable>
+
+      {!canUseFeature("moreClients") ? (
+        <Text style={{ color: colors.mutedText, marginBottom: 14 }}>
+          Free: {clients.length}/{FREE_TIER_LIMITS.clients} clients
+        </Text>
+      ) : null}
 
       <TextInput
         value={searchText}
@@ -79,9 +112,6 @@ export default function ClientsScreen() {
           fontSize: 18,
         }}
       />
-      <Text style={{ color: "red", marginBottom: 10 }}>
-        Search: {searchText}
-      </Text>
       {filteredClients.length === 0 && (
         <Text style={{ color: colors.text }}>No clients found.</Text>
       )}
@@ -109,6 +139,23 @@ export default function ClientsScreen() {
             >
               {client.name}
             </Text>
+
+            <View
+              style={{
+                alignSelf: "flex-start",
+                backgroundColor: colors.background,
+                borderWidth: 1,
+                borderColor: colors.border,
+                borderRadius: 999,
+                paddingHorizontal: 10,
+                paddingVertical: 4,
+                marginTop: 8,
+              }}
+            >
+              <Text style={{ color: colors.text, fontWeight: "800" }}>
+                {normalizeClientTag(client.client_tag)}
+              </Text>
+            </View>
 
             {!!client.phone && (
               <Text style={{ marginTop: 6, color: "#666666" }}>

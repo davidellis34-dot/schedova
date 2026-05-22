@@ -10,6 +10,11 @@ export default function LoginScreen() {
   const [password, setPassword] = useState("");
 
   async function signUp() {
+    if (!email || !password) {
+      Alert.alert("Missing Info", "Enter email and password.");
+      return;
+    }
+
     const { error } = await supabase.auth.signUp({
       email,
       password,
@@ -20,7 +25,7 @@ export default function LoginScreen() {
       return;
     }
 
-    Alert.alert("Account Created", "You can now log in.");
+    Alert.alert("Account Created", "Check your email to confirm your account.");
   }
 
   async function login() {
@@ -35,32 +40,6 @@ export default function LoginScreen() {
     }
 
     router.replace("/dashboard" as any);
-  }
-
-  function SocialButton({ title, color }: { title: string; color: string }) {
-    return (
-      <Pressable
-        onPress={() =>
-          Alert.alert("Coming Soon", `${title} needs provider setup first.`)
-        }
-        style={{
-          backgroundColor: color,
-          padding: 15,
-          borderRadius: 12,
-          alignItems: "center",
-          marginBottom: 12,
-        }}
-      >
-        <Text
-          style={{
-            color: "#ffffff",
-            fontWeight: "bold",
-          }}
-        >
-          {title}
-        </Text>
-      </Pressable>
-    );
   }
 
   return (
@@ -89,7 +68,7 @@ export default function LoginScreen() {
           marginBottom: 24,
         }}
       >
-        Sign in to manage your schedule.
+        Sign up or log in with your email to manage your schedule.
       </Text>
 
       <Text>Email</Text>
@@ -106,6 +85,8 @@ export default function LoginScreen() {
           borderRadius: 10,
           padding: 14,
           marginBottom: 16,
+          color: "#111111",
+          backgroundColor: "#FFFFFF",
         }}
       />
 
@@ -122,6 +103,8 @@ export default function LoginScreen() {
           borderRadius: 10,
           padding: 14,
           marginBottom: 20,
+          color: "#111111",
+          backgroundColor: "#FFFFFF",
         }}
       />
 
@@ -165,21 +148,35 @@ export default function LoginScreen() {
         </Text>
       </Pressable>
 
-      <Text
+      <View
         style={{
-          textAlign: "center",
-          color: "#777777",
-          marginBottom: 14,
+          borderWidth: 1,
+          borderColor: "#E5E7EB",
+          borderRadius: 12,
+          padding: 14,
+          backgroundColor: "#F9FAFB",
         }}
       >
-        Or continue with
-      </Text>
-
-      <SocialButton title="Continue with Google" color="#DB4437" />
-
-      <SocialButton title="Continue with Apple" color="#111111" />
-
-      <SocialButton title="Continue with Facebook" color="#1877F2" />
+        <Text
+          style={{
+            color: "#6B7280",
+            fontWeight: "700",
+            textAlign: "center",
+            marginBottom: 4,
+          }}
+        >
+          Google sign-in coming soon
+        </Text>
+        <Text
+          style={{
+            color: "#6B7280",
+            fontSize: 13,
+            textAlign: "center",
+          }}
+        >
+          For now, use email and password to access Schedova.
+        </Text>
+      </View>
     </View>
   );
 }

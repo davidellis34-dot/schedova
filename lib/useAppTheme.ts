@@ -24,7 +24,7 @@ const THEMES = {
     background: "#000000",
     card: "#111111",
     text: "#FFFFFF",
-    mutedText: "#D1D5DB",
+    mutedText: "#9CA3AF",
     border: "#333333",
     primary: "#0F766E",
   },
@@ -38,30 +38,44 @@ const THEMES = {
   },
 };
 
+let globalTheme: AppTheme = "white";
+let listeners: Array<(theme: AppTheme) => void> = [];
+
+function notifyThemeChange(theme: AppTheme) {
+  globalTheme = theme;
+  listeners.forEach((listener) => listener(theme));
+}
+
+function isAppTheme(value: string | null): value is AppTheme {
+  return (
+    value === "white" ||
+    value === "dark" ||
+    value === "black" ||
+    value === "brand"
+  );
+}
+
 export function useAppTheme() {
-  const [themeName, setThemeName] = useState<AppTheme>("white");
+  const [themeName, setThemeName] = useState<AppTheme>(globalTheme);
 
   useEffect(() => {
+    listeners.push(setThemeName);
+
     let active = true;
 
     async function loadTheme() {
       try {
         const savedTheme = await AsyncStorage.getItem("schedova_theme");
+        const nextTheme = isAppTheme(savedTheme) ? savedTheme : "white";
 
-        if (
-          savedTheme === "white" ||
-          savedTheme === "dark" ||
-          savedTheme === "black" ||
-          savedTheme === "brand"
-        ) {
-          if (active) setThemeName(savedTheme);
-          return;
+        if (active) {
+          notifyThemeChange(nextTheme);
         }
-
-        if (active) setThemeName("white");
       } catch (error) {
         console.log("🔥 APP THEME LOAD ERROR:", error);
-        if (active) setThemeName("white");
+        if (active) {
+          notifyThemeChange("white");
+        }
       }
     }
 
@@ -69,11 +83,18 @@ export function useAppTheme() {
 
     return () => {
       active = false;
+      listeners = listeners.filter((listener) => listener !== setThemeName);
     };
   }, []);
+
+  async function setTheme(theme: AppTheme) {
+    await AsyncStorage.setItem("schedova_theme", theme);
+    notifyThemeChange(theme);
+  }
 
   return {
     themeName,
     colors: THEMES[themeName],
+    setTheme,
   };
 }

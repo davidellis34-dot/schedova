@@ -2,31 +2,93 @@ import { Ionicons } from "@expo/vector-icons";
 import AsyncStorage from "@react-native-async-storage/async-storage";
 import { useFocusEffect, useRouter } from "expo-router";
 import { useCallback, useState } from "react";
-import { Pressable, ScrollView, Text, View } from "react-native";
+import { Alert, Modal, Pressable, ScrollView, Text, View } from "react-native";
+import {
+  getAppointmentServices as getSavedAppointmentServices,
+  getAppointmentServiceTotal,
+} from "../lib/appointmentServices";
+import { sendAppointmentSmsNonBlocking } from "../lib/appointmentSms";
+import { formatClockTime, getCalendarPreferences } from "../lib/calendarPreferences";
+import { confirmDestructiveAction } from "../lib/confirmDestructiveAction";
+import { canUseFeature } from "../lib/featureAccess";
+import { cancelAppointmentReminder } from "../lib/localNotifications";
 import { supabase } from "../lib/supabase";
 import { useAppTheme } from "../lib/useAppTheme";
-
 export default function Dashboard() {
   const router = useRouter();
   const { colors } = useAppTheme();
+  function getClientDisplayName(appointment: any) {
+    const appointmentName = String(appointment?.client_name || "").trim();
 
+    if (appointmentName && appointmentName !== "New Client") {
+      return appointmentName;
+    }
+
+    const matchedClient = clients.find(
+      (client) => String(client.id) === String(appointment.client_id),
+    );
+
+    return (
+      (String(matchedClient?.name || "").trim() !== "New Client"
+        ? String(matchedClient?.name || "").trim()
+        : "") ||
+      String(matchedClient?.phone || "").trim() ||
+      String(matchedClient?.email || "").trim() ||
+      "New Client"
+    );
+  }
+  const [clients, setClients] = useState<any[]>([]);
+  const [statusModalOpen, setStatusModalOpen] = useState(false);
+  const [selectedStatusAppointment, setSelectedStatusAppointment] = useState<
+    any | null
+  >(null);
   const [fontScale, setFontScale] = useState("normal");
+  const [use24Hour, setUse24Hour] = useState(false);
   const [hasBusiness, setHasBusiness] = useState<boolean | null>(null);
   const [appointments, setAppointments] = useState<any[]>([]);
   const [services, setServices] = useState<any[]>([]);
+  const [userEmail, setUserEmail] = useState("");
 
   useFocusEffect(
     useCallback(() => {
       loadFontScale();
+      void loadCalendarDisplayPreferences();
       checkBusiness();
       fetchAppointments();
       fetchServices();
+      fetchClients();
     }, []),
   );
+  async function fetchClients() {
+    const { data: userData } = await supabase.auth.getUser();
+    const userId = userData.user?.id;
 
+    if (!userId) {
+      setClients([]);
+      return;
+    }
+
+    const { data, error } = await supabase
+      .from("clients")
+      .select("*")
+      .eq("user_id", userId);
+
+    if (error) {
+      console.log("🔥 FETCH CLIENTS ERROR:", error.message);
+      setClients([]);
+      return;
+    }
+
+    setClients(data || []);
+  }
   async function loadFontScale() {
     const savedFont = await AsyncStorage.getItem("font_scale");
     setFontScale(savedFont || "normal");
+  }
+
+  async function loadCalendarDisplayPreferences() {
+    const preferences = await getCalendarPreferences();
+    setUse24Hour(preferences.timeFormat === "24h");
   }
 
   function getFontSize(base: number) {
@@ -38,6 +100,7 @@ export default function Dashboard() {
   async function checkBusiness() {
     const { data: userData } = await supabase.auth.getUser();
     const userId = userData.user?.id;
+    setUserEmail(userData.user?.email || "");
 
     if (!userId) {
       setHasBusiness(false);
@@ -62,6 +125,7 @@ export default function Dashboard() {
   async function fetchAppointments() {
     const { data: userData } = await supabase.auth.getUser();
     const userId = userData.user?.id;
+    setUserEmail(userData.user?.email || "");
 
     if (!userId) {
       setAppointments([]);
@@ -107,9 +171,83 @@ export default function Dashboard() {
     setServices(data || []);
   }
 
-  function getService(serviceId?: string | null) {
-    if (!serviceId) return null;
-    return services.find((service) => service.id === serviceId) || null;
+  async function deleteAppointment(id: string) {
+    await confirmDestructiveAction({
+      title: "Delete appointment?",
+      message: "This appointment will be removed.",
+      confirmText: "Delete",
+      onConfirm: async () => {
+        const {
+          data: { user },
+          error: userError,
+        } = await supabase.auth.getUser();
+
+        if (userError || !user) {
+          Alert.alert("Not signed in", "Please sign in again.");
+          return;
+        }
+
+        if (canUseFeature("smsAutomation")) {
+          await sendAppointmentSmsNonBlocking(id, "cancellation");
+        }
+
+        const { error } = await supabase
+          .from("appointments")
+          .delete()
+          .eq("id", id)
+          .eq("user_id", user.id);
+
+        if (error) {
+          Alert.alert("Error", error.message);
+          return;
+        }
+
+        await cancelAppointmentReminder(id);
+        await fetchAppointments();
+      },
+    });
+  }
+
+  async function updateAppointmentStatus(status: string) {
+    if (!selectedStatusAppointment?.id) return;
+
+    const {
+      data: { user },
+      error: userError,
+    } = await supabase.auth.getUser();
+
+    if (userError || !user) {
+      Alert.alert("Not signed in", "Please sign in again.");
+      return;
+    }
+
+    const { error } = await supabase
+      .from("appointments")
+      .update({ status })
+      .eq("id", selectedStatusAppointment.id)
+      .eq("user_id", user.id);
+
+    if (error) {
+      Alert.alert("Error", error.message);
+      return;
+    }
+
+    if (status === "canceled") {
+      if (canUseFeature("smsAutomation")) {
+        void sendAppointmentSmsNonBlocking(
+          selectedStatusAppointment.id,
+          "cancellation",
+        );
+      }
+      await cancelAppointmentReminder(selectedStatusAppointment.id);
+    }
+
+    await fetchAppointments();
+    setStatusModalOpen(false);
+  }
+
+  function getAppointmentServices(appointment: any) {
+    return getSavedAppointmentServices(appointment, services);
   }
 
   function formatDate(dateString?: string | null) {
@@ -119,28 +257,32 @@ export default function Dashboard() {
   }
 
   function formatTime(timeString?: string | null) {
-    if (!timeString) return "";
-
-    const [hourText, minuteText] = String(timeString).split(":");
-    let hour = Number(hourText);
-    const minute = minuteText || "00";
-
-    if (Number.isNaN(hour)) return "";
-
-    const ampm = hour >= 12 ? "PM" : "AM";
-    hour = hour % 12 || 12;
-
-    return `${hour}:${minute} ${ampm}`;
+    return formatClockTime(timeString, use24Hour);
   }
 
   function getStatusColor(status?: string | null) {
     if (status === "completed") return "#15803D";
     if (status === "canceled") return "#991B1B";
-    if (status === "no-show") return "#C2410C";
+    if (status === "no_show") return "#C2410C";
     return "#0F766E";
   }
 
-  const todayIso = new Date().toISOString().split("T")[0];
+  function openAppointmentEdit(appointment: any) {
+    router.push({
+      pathname: "/book-appointment",
+      params: {
+        appointmentId: appointment.id,
+        mode: "edit",
+      },
+    } as any);
+  }
+
+  const now = new Date();
+
+  const todayIso = `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(
+    2,
+    "0",
+  )}-${String(now.getDate()).padStart(2, "0")}`;
 
   const todaysAppointments = appointments.filter(
     (appointment) =>
@@ -156,11 +298,44 @@ export default function Dashboard() {
     )
     .slice(0, 5);
 
-  const estimatedRevenue = todaysAppointments.reduce((total, appointment) => {
-    const service = getService(appointment.service_id);
-    return total + Number(service?.price || appointment.final_price || 0);
-  }, 0);
+  const revenueAvailable = canUseFeature("revenueInsights");
 
+  const estimatedRevenue = revenueAvailable
+    ? todaysAppointments.reduce((total, appointment) => {
+        const serviceTotal =
+          appointment.final_price !== null &&
+          appointment.final_price !== undefined
+            ? Number(appointment.final_price || 0)
+            : getAppointmentServiceTotal(appointment, services);
+
+        return total + serviceTotal;
+      }, 0)
+    : 0;
+  const currentMonth = todayIso.slice(0, 7);
+  const monthAppointments = appointments.filter(
+    (appointment) =>
+      String(appointment.appointment_date || "").startsWith(currentMonth) &&
+      appointment.status !== "canceled",
+  );
+  const monthExpectedRevenue = revenueAvailable
+    ? monthAppointments.reduce((total, appointment) => {
+        const serviceTotal =
+          appointment.final_price !== null &&
+          appointment.final_price !== undefined
+            ? Number(appointment.final_price || 0)
+            : getAppointmentServiceTotal(appointment, services);
+
+        return total + serviceTotal;
+      }, 0)
+    : 0;
+  function getServiceSummary(serviceNames: string[]) {
+    if (serviceNames.length === 0) return "No service selected";
+    if (serviceNames.length <= 2) return serviceNames.join(", ");
+
+    return `${serviceNames.slice(0, 2).join(", ")} +${
+      serviceNames.length - 2
+    } more`;
+  }
   function MainButton({
     title,
     subtitle,
@@ -248,6 +423,10 @@ export default function Dashboard() {
             }}
           >
             Schedova
+          </Text>
+
+          <Text style={{ color: colors.mutedText, marginBottom: 12 }}>
+            Signed in as: {userEmail || "Unknown user"}
           </Text>
 
           <Text
@@ -382,6 +561,111 @@ export default function Dashboard() {
             marginBottom: 14,
           }}
         >
+          This Month
+        </Text>
+
+        <View
+          style={{
+            flexDirection: "row",
+            justifyContent: "space-between",
+            gap: 12,
+          }}
+        >
+          <View style={{ flex: 1 }}>
+            <Text
+              style={{
+                color: colors.mutedText,
+                fontSize: getFontSize(13),
+              }}
+            >
+              Appointments
+            </Text>
+
+            <Text
+              style={{
+                color: colors.text,
+                fontSize: getFontSize(30),
+                fontWeight: "bold",
+                marginTop: 4,
+              }}
+            >
+              {monthAppointments.length}
+            </Text>
+          </View>
+
+          {revenueAvailable ? (
+            <View style={{ flex: 1 }}>
+              <Text
+                style={{
+                  color: colors.mutedText,
+                  fontSize: getFontSize(13),
+                  textAlign: "right",
+                }}
+              >
+                Expected Revenue
+              </Text>
+
+              <Text
+                style={{
+                  color: colors.text,
+                  fontSize: getFontSize(30),
+                  fontWeight: "bold",
+                  marginTop: 4,
+                  textAlign: "right",
+                }}
+              >
+                ${monthExpectedRevenue.toFixed(2)}
+              </Text>
+            </View>
+          ) : (
+            <View style={{ flex: 1, alignItems: "flex-end" }}>
+              <Text
+                style={{
+                  color: colors.mutedText,
+                  fontSize: getFontSize(13),
+                  textAlign: "right",
+                }}
+              >
+                Revenue Insights
+              </Text>
+
+              <View
+                style={{
+                  borderWidth: 1,
+                  borderColor: colors.border,
+                  borderRadius: 999,
+                  paddingHorizontal: 10,
+                  paddingVertical: 4,
+                  marginTop: 8,
+                }}
+              >
+                <Text style={{ color: colors.text, fontWeight: "900" }}>
+                  Pro
+                </Text>
+              </View>
+            </View>
+          )}
+        </View>
+      </View>
+
+      <View
+        style={{
+          backgroundColor: colors.card,
+          borderRadius: 18,
+          padding: 18,
+          marginBottom: 20,
+          borderWidth: 1,
+          borderColor: colors.border,
+        }}
+      >
+        <Text
+          style={{
+            color: colors.text,
+            fontSize: getFontSize(20),
+            fontWeight: "bold",
+            marginBottom: 14,
+          }}
+        >
           Today
         </Text>
 
@@ -414,29 +698,58 @@ export default function Dashboard() {
             </Text>
           </View>
 
-          <View style={{ flex: 1 }}>
-            <Text
-              style={{
-                color: colors.mutedText,
-                fontSize: getFontSize(13),
-                textAlign: "right",
-              }}
-            >
-              Estimated Revenue
-            </Text>
+          {revenueAvailable ? (
+            <View style={{ flex: 1 }}>
+              <Text
+                style={{
+                  color: colors.mutedText,
+                  fontSize: getFontSize(13),
+                  textAlign: "right",
+                }}
+              >
+                Estimated Revenue
+              </Text>
 
-            <Text
-              style={{
-                color: colors.text,
-                fontSize: getFontSize(30),
-                fontWeight: "bold",
-                marginTop: 4,
-                textAlign: "right",
-              }}
-            >
-              ${estimatedRevenue}
-            </Text>
-          </View>
+              <Text
+                style={{
+                  color: colors.text,
+                  fontSize: getFontSize(30),
+                  fontWeight: "bold",
+                  marginTop: 4,
+                  textAlign: "right",
+                }}
+              >
+                ${estimatedRevenue.toFixed(2)}
+              </Text>
+            </View>
+          ) : (
+            <View style={{ flex: 1, alignItems: "flex-end" }}>
+              <Text
+                style={{
+                  color: colors.mutedText,
+                  fontSize: getFontSize(13),
+                  textAlign: "right",
+                }}
+              >
+                Expected Revenue
+              </Text>
+
+              <View
+                style={{
+                  borderWidth: 1,
+                  borderColor: colors.border,
+                  borderRadius: 999,
+                  paddingHorizontal: 10,
+                  paddingVertical: 4,
+                  marginTop: 8,
+                }}
+              >
+                <Text style={{ color: colors.text, fontWeight: "900" }}>
+                  Pro
+                </Text>
+              </View>
+            </View>
+          )}
         </View>
       </View>
 
@@ -473,90 +786,307 @@ export default function Dashboard() {
           </Text>
         ) : (
           upcomingAppointments.map((appointment) => {
-            const service = getService(appointment.service_id);
+            const appointmentServices = getAppointmentServices(appointment);
+
+            const totalDuration = appointmentServices.reduce(
+              (sum: number, service: any) =>
+                sum + Number(service.duration_minutes || 0),
+              0,
+            );
+
+            const totalPrice =
+              appointment.final_price !== null &&
+              appointment.final_price !== undefined
+                ? Number(appointment.final_price || 0)
+                : appointmentServices.reduce(
+                    (sum: number, service: any) =>
+                      sum + Number(service.price || 0),
+                    0,
+                  );
 
             return (
-              <Pressable
-                key={appointment.id}
-                onPress={() =>
-                  router.push({
-                    pathname: "/book-appointment",
-                    params: {
-                      appointmentId: appointment.id,
-                      editMode: "true",
-                    },
-                  } as any)
-                }
-                style={{
-                  backgroundColor: colors.background,
-                  borderWidth: 1,
-                  borderColor: colors.border,
-                  borderRadius: 14,
-                  padding: 14,
-                  marginBottom: 12,
-                }}
-              >
-                <Text
+              <View key={appointment.id}>
+                <Pressable
+                  onPress={() => openAppointmentEdit(appointment)}
                   style={{
-                    color: colors.text,
-                    fontSize: getFontSize(16),
-                    fontWeight: "bold",
+                    backgroundColor: colors.background,
+                    borderWidth: 1,
+                    borderColor: colors.border,
+                    borderRadius: 14,
+                    padding: 14,
+                    marginBottom: 12,
                   }}
                 >
-                  {appointment.client_name || "Appointment"}
-                </Text>
-
-                <View
-                  style={{
-                    alignSelf: "flex-start",
-                    backgroundColor: getStatusColor(appointment.status),
-                    paddingHorizontal: 10,
-                    paddingVertical: 4,
-                    borderRadius: 999,
-                    marginTop: 8,
-                    marginBottom: 6,
-                  }}
-                >
-                  <Text
-                    style={{
-                      color: "#FFFFFF",
-                      fontSize: getFontSize(12),
-                      fontWeight: "bold",
-                    }}
-                  >
-                    {(appointment.status || "scheduled").toUpperCase()}
-                  </Text>
-                </View>
-
-                <Text
-                  style={{
-                    color: colors.mutedText,
-                    fontSize: getFontSize(14),
-                    marginTop: 4,
-                  }}
-                >
-                  {service?.name || "Service"} ·{" "}
-                  {formatDate(appointment.appointment_date)} at{" "}
-                  {formatTime(appointment.appointment_time)}
-                </Text>
-
-                {appointment.appointment_notes ? (
                   <Text
                     style={{
                       color: colors.text,
-                      fontSize: getFontSize(13),
-                      marginTop: 8,
+                      fontSize: getFontSize(16),
+                      fontWeight: "bold",
                     }}
-                    numberOfLines={2}
                   >
-                    {appointment.appointment_notes}
+                    {getClientDisplayName(appointment)}
                   </Text>
-                ) : null}
-              </Pressable>
+
+                  <Text
+                    style={{
+                      color: colors.mutedText,
+                      fontSize: getFontSize(14),
+                      marginTop: 4,
+                    }}
+                    numberOfLines={1}
+                    ellipsizeMode="tail"
+                  >
+                    {getServiceSummary(
+                      appointmentServices
+                        .map((service: any) => service.name)
+                        .filter(Boolean),
+                    )}
+                  </Text>
+
+                  <Text
+                    style={{
+                      color: colors.mutedText,
+                      fontSize: getFontSize(14),
+                      fontWeight: "600",
+                      marginTop: 4,
+                    }}
+                  >
+                    {totalDuration} min • ${totalPrice}
+                  </Text>
+
+                  <View
+                    style={{
+                      alignSelf: "flex-start",
+                      backgroundColor: getStatusColor(appointment.status),
+                      paddingHorizontal: 10,
+                      paddingVertical: 4,
+                      borderRadius: 999,
+                      marginTop: 8,
+                      marginBottom: 6,
+                    }}
+                  >
+                    <Text
+                      style={{
+                        color: "#FFFFFF",
+                        fontSize: getFontSize(12),
+                        fontWeight: "bold",
+                      }}
+                    >
+                      {(appointment.status || "scheduled")
+                        .replace("_", " ")
+                        .toUpperCase()}
+                    </Text>
+                  </View>
+
+                  <Text
+                    style={{
+                      color: colors.mutedText,
+                      fontSize: getFontSize(14),
+                      marginTop: 6,
+                    }}
+                  >
+                    🕒 {formatTime(appointment.appointment_time)} •{" "}
+                    {formatDate(appointment.appointment_date)}
+                  </Text>
+
+                  {appointment.appointment_notes ? (
+                    <Text
+                      style={{
+                        color: colors.text,
+                        fontSize: getFontSize(13),
+                        marginTop: 8,
+                      }}
+                      numberOfLines={2}
+                    >
+                      {appointment.appointment_notes}
+                    </Text>
+                  ) : null}
+                </Pressable>
+
+                <View
+                  style={{
+                    flexDirection: "row",
+                    gap: 8,
+                    marginBottom: 12,
+                    marginTop: -4,
+                  }}
+                >
+                  <Pressable
+                    onPress={() => openAppointmentEdit(appointment)}
+                    style={{
+                      flex: 1,
+                      backgroundColor: "#2563EB",
+                      paddingVertical: 10,
+                      borderRadius: 12,
+                      alignItems: "center",
+                    }}
+                  >
+                    <Text
+                      style={{
+                        color: "#FFFFFF",
+                        fontWeight: "bold",
+                        fontSize: getFontSize(13),
+                      }}
+                    >
+                      Edit
+                    </Text>
+                  </Pressable>
+
+                  <Pressable
+                    onPress={() => {
+                      setSelectedStatusAppointment(appointment);
+                      setStatusModalOpen(true);
+                    }}
+                    style={{
+                      flex: 1,
+                      backgroundColor: colors.card,
+                      borderWidth: 1,
+                      borderColor: colors.border,
+                      paddingVertical: 10,
+                      borderRadius: 12,
+                      alignItems: "center",
+                    }}
+                  >
+                    <Text
+                      style={{
+                        color: colors.text,
+                        fontWeight: "bold",
+                        fontSize: getFontSize(13),
+                      }}
+                    >
+                      Status
+                    </Text>
+                  </Pressable>
+
+                  <Pressable
+                    onPress={() => {
+                      void deleteAppointment(appointment.id);
+                    }}
+                    style={{
+                      flex: 1,
+                      backgroundColor: "#DC2626",
+                      paddingVertical: 10,
+                      borderRadius: 12,
+                      alignItems: "center",
+                    }}
+                  >
+                    <Text
+                      style={{
+                        color: "#FFFFFF",
+                        fontWeight: "bold",
+                        fontSize: getFontSize(13),
+                      }}
+                    >
+                      Delete
+                    </Text>
+                  </Pressable>
+                </View>
+              </View>
             );
           })
         )}
       </View>
+
+      <Modal visible={statusModalOpen} transparent animationType="fade">
+        <Pressable
+          style={{
+            flex: 1,
+            backgroundColor: "rgba(0,0,0,0.5)",
+            justifyContent: "center",
+            padding: 24,
+          }}
+          onPress={() => setStatusModalOpen(false)}
+        >
+          <View
+            style={{
+              backgroundColor: colors.card,
+              borderRadius: 22,
+              padding: 20,
+              borderWidth: 1,
+              borderColor: colors.border,
+            }}
+          >
+            <Text
+              style={{
+                color: colors.text,
+                fontSize: getFontSize(22),
+                fontWeight: "bold",
+                marginBottom: 8,
+              }}
+            >
+              Change Status
+            </Text>
+
+            <Text
+              style={{
+                color: colors.mutedText,
+                marginBottom: 18,
+              }}
+            >
+              {selectedStatusAppointment?.client_name || "Appointment"}
+            </Text>
+
+            <Pressable
+              onPress={() => setStatusModalOpen(false)}
+              style={{
+                position: "absolute",
+                right: 16,
+                top: 16,
+              }}
+            >
+              <Text style={{ color: colors.mutedText, fontSize: 18 }}>✕</Text>
+            </Pressable>
+
+            <Pressable
+              onPress={async () => {
+                await updateAppointmentStatus("completed");
+              }}
+              style={{
+                backgroundColor: "#16A34A",
+                padding: 15,
+                borderRadius: 14,
+                marginBottom: 10,
+                alignItems: "center",
+              }}
+            >
+              <Text style={{ color: "#fff", fontWeight: "bold" }}>
+                Completed
+              </Text>
+            </Pressable>
+
+            <Pressable
+              onPress={async () => {
+                await updateAppointmentStatus("no_show");
+              }}
+              style={{
+                backgroundColor: "#D97706",
+                padding: 15,
+                borderRadius: 14,
+                marginBottom: 10,
+                alignItems: "center",
+              }}
+            >
+              <Text style={{ color: "#fff", fontWeight: "bold" }}>No Show</Text>
+            </Pressable>
+
+            <Pressable
+              onPress={async () => {
+                await updateAppointmentStatus("canceled");
+              }}
+              style={{
+                backgroundColor: "#DC2626",
+                padding: 15,
+                borderRadius: 14,
+                alignItems: "center",
+              }}
+            >
+              <Text style={{ color: "#fff", fontWeight: "bold" }}>
+                Canceled
+              </Text>
+            </Pressable>
+          </View>
+        </Pressable>
+      </Modal>
     </ScrollView>
   );
 }

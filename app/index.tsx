@@ -82,7 +82,7 @@ export default function SplashScreen() {
       </Text>
 
       <Pressable
-        onPress={() => router.push("/login" as any)}
+        onPress={() => router.replace("/login" as any)}
         style={{
           backgroundColor: "#0F766E",
           paddingVertical: 18,
@@ -107,26 +107,6 @@ export default function SplashScreen() {
           }}
         >
           Login / Create Account
-        </Text>
-      </Pressable>
-
-      <Pressable
-        onPress={() => router.replace("/dashboard" as any)}
-        style={{
-          backgroundColor: "#F3F4F6",
-          paddingVertical: 16,
-          borderRadius: 18,
-          alignItems: "center",
-        }}
-      >
-        <Text
-          style={{
-            color: "#111111",
-            fontSize: 16,
-            fontWeight: "bold",
-          }}
-        >
-          Continue to Dashboard
         </Text>
       </Pressable>
     </View>

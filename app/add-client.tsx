@@ -1,6 +1,9 @@
 import { useRouter } from "expo-router";
 import { useState } from "react";
-import { Alert, Pressable, ScrollView, Text, TextInput } from "react-native";
+import { Alert, Pressable, ScrollView, Switch, Text, TextInput, View } from "react-native";
+import { ClientTagPicker } from "../components/ClientTagPicker";
+import type { ClientTag } from "../lib/clientTags";
+import { canUseFeature, FREE_TIER_LIMITS } from "../lib/featureAccess";
 import { supabase } from "../lib/supabase";
 import { useAppTheme } from "../lib/useAppTheme";
 export default function AddClientScreen() {
@@ -12,30 +15,60 @@ export default function AddClientScreen() {
   const [notes, setNotes] = useState("");
   const [birthday, setBirthday] = useState("");
   const [rebookingWeeks, setRebookingWeeks] = useState("6");
+  const [smsOptIn, setSmsOptIn] = useState(false);
+  const [clientTag, setClientTag] = useState<ClientTag>("New");
 
   async function saveClient() {
-    if (!name.trim()) {
-      Alert.alert("Missing Name", "Please enter a client name.");
+    const trimmedName = name.trim();
+    const trimmedPhone = phone.trim();
+    const trimmedEmail = email.trim();
+    const displayName = trimmedName || trimmedPhone || trimmedEmail;
+
+    if (!displayName) {
+      Alert.alert("Missing Contact", "Enter a name, phone number, or email.");
       return;
     }
 
-    const { data: userData } = await supabase.auth.getUser();
+    const {
+      data: { user },
+      error: userError,
+    } = await supabase.auth.getUser();
 
-    const userId = userData.user?.id;
-
-    if (!userId) {
+    if (userError || !user) {
       Alert.alert("Error", "You must be logged in.");
       return;
     }
 
+    if (!canUseFeature("moreClients")) {
+      const { data: existingClients, error: clientsError } = await supabase
+        .from("clients")
+        .select("id")
+        .eq("user_id", user.id);
+
+      if (clientsError) {
+        Alert.alert("Error", clientsError.message);
+        return;
+      }
+
+      if ((existingClients || []).length >= FREE_TIER_LIMITS.clients) {
+        Alert.alert(
+          "Schedova Pro",
+          `Free includes up to ${FREE_TIER_LIMITS.clients} clients. Upgrade to add more.`,
+        );
+        return;
+      }
+    }
+
     const { error } = await supabase.from("clients").insert({
-      user_id: userId,
-      name,
-      phone,
-      email,
-      notes,
-      birthday: birthday || null,
-      rebooking_weeks: Number(rebookingWeeks || 6),
+      user_id: user.id,
+      name: displayName,
+      phone: trimmedPhone || null,
+      email: trimmedEmail || null,
+      notes: notes.trim() || null,
+      birthday: birthday.trim() || null,
+      rebooking_weeks: Number(rebookingWeeks) || 6,
+      client_tag: clientTag,
+      sms_opt_in: smsOptIn,
     });
 
     if (error) {
@@ -45,7 +78,7 @@ export default function AddClientScreen() {
 
     Alert.alert("Success", "Client added.");
 
-    router.back();
+    router.replace("/clients" as any);
   }
 
   return (
@@ -124,8 +157,18 @@ export default function AddClientScreen() {
 
       <TextInput
         value={birthday}
-        onChangeText={setBirthday}
-        placeholder="YYYY-MM-DD"
+        onChangeText={(text) => {
+          const numbers = text.replace(/\D/g, "");
+
+          if (numbers.length <= 2) {
+            setBirthday(numbers);
+          } else {
+            setBirthday(`${numbers.slice(0, 2)}/${numbers.slice(2, 4)}`);
+          }
+        }}
+        placeholder="MM/DD"
+        maxLength={5}
+        keyboardType="number-pad"
         placeholderTextColor="#888888"
         style={{
           borderWidth: 1,
@@ -156,6 +199,40 @@ export default function AddClientScreen() {
           color: colors.text,
         }}
       />
+
+      <ClientTagPicker
+        value={clientTag}
+        onChange={setClientTag}
+        colors={colors}
+      />
+
+      <View
+        style={{
+          borderWidth: 1,
+          borderColor: colors.border,
+          borderRadius: 12,
+          padding: 14,
+          marginBottom: 16,
+        }}
+      >
+        <View
+          style={{
+            flexDirection: "row",
+            alignItems: "center",
+            justifyContent: "space-between",
+          }}
+        >
+          <Text style={{ color: colors.text, fontWeight: "700", flex: 1 }}>
+            SMS appointment reminders
+          </Text>
+          <Switch value={smsOptIn} onValueChange={setSmsOptIn} />
+        </View>
+
+        <Text style={{ color: colors.mutedText, marginTop: 8, fontSize: 12 }}>
+          Turn this on only if the client agreed to receive appointment text
+          messages. They can opt out at any time.
+        </Text>
+      </View>
 
       <Text style={{ color: colors.text, marginBottom: 6 }}>Client Notes</Text>
 

@@ -20,7 +20,10 @@ export default function BusinessSetup() {
       router.replace("/login" as any);
       return;
     }
-
+    if (!businessName.trim()) {
+      Alert.alert("Missing Info", "Enter your business name.");
+      return;
+    }
     const { error } = await supabase.from("businesses").insert({
       user_id: userId,
       business_name: businessName,

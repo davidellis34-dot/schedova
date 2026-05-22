@@ -1,17 +1,20 @@
 import { useFocusEffect } from "expo-router";
 import { useCallback, useMemo, useState } from "react";
 import { ScrollView, Text, View } from "react-native";
-
-import { supabase } from "../../lib/supabase";
+import { canUseFeature } from "../lib/featureAccess";
+import { supabase } from "../lib/supabase";
+import { useAppTheme } from "../lib/useAppTheme";
 export default function ServiceReportsScreen() {
   const [appointments, setAppointments] = useState<any[]>([]);
-
+  const { colors } = useAppTheme();
   const [services, setServices] = useState<any[]>([]);
+  const reportsAvailable = canUseFeature("reports");
 
   useFocusEffect(
     useCallback(() => {
+      if (!reportsAvailable) return;
       fetchData();
-    }, []),
+    }, [reportsAvailable]),
   );
 
   async function fetchData() {
@@ -38,9 +41,15 @@ export default function ServiceReportsScreen() {
 
   const serviceStats = useMemo(() => {
     return services.map((service) => {
-      const serviceAppointments = appointments.filter(
-        (appointment) => appointment.service_id === service.id,
-      );
+      const serviceAppointments = appointments.filter((appointment) => {
+        const ids = Array.isArray(appointment.service_ids)
+          ? appointment.service_ids
+          : appointment.service_id
+            ? [appointment.service_id]
+            : [];
+
+        return ids.map(String).includes(String(service.id));
+      });
 
       const completed = serviceAppointments.filter(
         (appointment) => appointment.status === "completed",
@@ -48,7 +57,7 @@ export default function ServiceReportsScreen() {
 
       const cancelled = serviceAppointments.filter(
         (appointment) =>
-          appointment.status === "cancelled" ||
+          appointment.status === "canceled" ||
           appointment.status === "customer_cancelled" ||
           appointment.status === "business_cancelled",
       );
@@ -79,11 +88,51 @@ export default function ServiceReportsScreen() {
     });
   }, [appointments, services]);
 
+  if (!reportsAvailable) {
+    return (
+      <ScrollView
+        style={{
+          flex: 1,
+          backgroundColor: colors.background,
+          padding: 20,
+        }}
+      >
+        <Text
+          style={{
+            fontSize: 30,
+            fontWeight: "bold",
+            color: colors.text,
+            marginBottom: 20,
+          }}
+        >
+          Service Reports
+        </Text>
+
+        <View
+          style={{
+            backgroundColor: colors.card,
+            borderWidth: 1,
+            borderColor: colors.border,
+            borderRadius: 16,
+            padding: 18,
+          }}
+        >
+          <Text style={{ color: colors.text, fontSize: 20, fontWeight: "900" }}>
+            Schedova Pro
+          </Text>
+          <Text style={{ color: colors.mutedText, marginTop: 8 }}>
+            Service reports and revenue insights are Pro features.
+          </Text>
+        </View>
+      </ScrollView>
+    );
+  }
+
   return (
     <ScrollView
       style={{
         flex: 1,
-        backgroundColor: "#ffffff",
+        backgroundColor: colors.background,
         padding: 20,
       }}
     >
@@ -91,7 +140,7 @@ export default function ServiceReportsScreen() {
         style={{
           fontSize: 30,
           fontWeight: "bold",
-          color: "#111111",
+          color: colors.text,
           marginBottom: 20,
         }}
       >
@@ -101,7 +150,7 @@ export default function ServiceReportsScreen() {
       {serviceStats.length === 0 && (
         <Text
           style={{
-            color: "#666666",
+            color: colors.text,
           }}
         >
           No services yet.
@@ -112,7 +161,7 @@ export default function ServiceReportsScreen() {
         <View
           key={service.id}
           style={{
-            backgroundColor: "#F3F4F6",
+            backgroundColor: colors.card,
             borderLeftWidth: 8,
             borderLeftColor: service.color_hex || "#0F766E",
 
@@ -125,7 +174,7 @@ export default function ServiceReportsScreen() {
             style={{
               fontSize: 22,
               fontWeight: "bold",
-              color: "#111111",
+              color: colors.text,
             }}
           >
             {service.name}
@@ -134,7 +183,7 @@ export default function ServiceReportsScreen() {
           <Text
             style={{
               marginTop: 6,
-              color: "#555555",
+              color: colors.text,
             }}
           >
             Price: ${Number(service.price || 0).toFixed(2)}
@@ -150,14 +199,14 @@ export default function ServiceReportsScreen() {
             <View
               style={{
                 flex: 1,
-                backgroundColor: "#ffffff",
+                backgroundColor: colors.card,
                 padding: 14,
                 borderRadius: 14,
               }}
             >
               <Text
                 style={{
-                  color: "#555555",
+                  color: colors.text,
                   fontWeight: "bold",
                 }}
               >
@@ -166,7 +215,7 @@ export default function ServiceReportsScreen() {
 
               <Text
                 style={{
-                  color: "#111111",
+                  color: colors.text,
                   fontSize: 22,
                   fontWeight: "bold",
                   marginTop: 4,
@@ -179,14 +228,14 @@ export default function ServiceReportsScreen() {
             <View
               style={{
                 flex: 1,
-                backgroundColor: "#ffffff",
+                backgroundColor: colors.card,
                 padding: 14,
                 borderRadius: 14,
               }}
             >
               <Text
                 style={{
-                  color: "#555555",
+                  color: colors.text,
                   fontWeight: "bold",
                 }}
               >
@@ -195,7 +244,7 @@ export default function ServiceReportsScreen() {
 
               <Text
                 style={{
-                  color: "#111111",
+                  color: colors.text,
                   fontSize: 22,
                   fontWeight: "bold",
                   marginTop: 4,
@@ -216,14 +265,14 @@ export default function ServiceReportsScreen() {
             <View
               style={{
                 flex: 1,
-                backgroundColor: "#ffffff",
+                backgroundColor: colors.card,
                 padding: 14,
                 borderRadius: 14,
               }}
             >
               <Text
                 style={{
-                  color: "#555555",
+                  color: colors.text,
                   fontWeight: "bold",
                 }}
               >
@@ -232,7 +281,7 @@ export default function ServiceReportsScreen() {
 
               <Text
                 style={{
-                  color: "#111111",
+                  color: colors.text,
                   fontSize: 22,
                   fontWeight: "bold",
                   marginTop: 4,
@@ -245,14 +294,14 @@ export default function ServiceReportsScreen() {
             <View
               style={{
                 flex: 1,
-                backgroundColor: "#ffffff",
+                backgroundColor: colors.card,
                 padding: 14,
                 borderRadius: 14,
               }}
             >
               <Text
                 style={{
-                  color: "#555555",
+                  color: colors.text,
                   fontWeight: "bold",
                 }}
               >
@@ -261,7 +310,7 @@ export default function ServiceReportsScreen() {
 
               <Text
                 style={{
-                  color: "#111111",
+                  color: colors.text,
                   fontSize: 22,
                   fontWeight: "bold",
                   marginTop: 4,
@@ -282,14 +331,14 @@ export default function ServiceReportsScreen() {
             <View
               style={{
                 flex: 1,
-                backgroundColor: "#ffffff",
+                backgroundColor: colors.card,
                 padding: 14,
                 borderRadius: 14,
               }}
             >
               <Text
                 style={{
-                  color: "#555555",
+                  color: colors.text,
                   fontWeight: "bold",
                 }}
               >
@@ -298,7 +347,7 @@ export default function ServiceReportsScreen() {
 
               <Text
                 style={{
-                  color: "#111111",
+                  color: colors.text,
                   fontSize: 22,
                   fontWeight: "bold",
                   marginTop: 4,
@@ -311,14 +360,14 @@ export default function ServiceReportsScreen() {
             <View
               style={{
                 flex: 1,
-                backgroundColor: "#ffffff",
+                backgroundColor: colors.card,
                 padding: 14,
                 borderRadius: 14,
               }}
             >
               <Text
                 style={{
-                  color: "#555555",
+                  color: colors.text,
                   fontWeight: "bold",
                 }}
               >
@@ -327,7 +376,7 @@ export default function ServiceReportsScreen() {
 
               <Text
                 style={{
-                  color: "#111111",
+                  color: colors.text,
                   fontSize: 22,
                   fontWeight: "bold",
                   marginTop: 4,

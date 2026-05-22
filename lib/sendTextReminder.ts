@@ -1,17 +1,10 @@
-import { supabase } from "./supabase";
+import {
+  sendAppointmentSms,
+  sendAppointmentSmsNonBlocking,
+} from "./appointmentSms";
 
-export async function sendTextReminder(to: string, message: string) {
-  const { data, error } = await supabase.functions.invoke("rapid-action", {
-    body: {
-      to,
-      message,
-    },
-  });
+export { sendAppointmentSms, sendAppointmentSmsNonBlocking };
 
-  if (error) {
-    console.log("SMS error:", error);
-    throw error;
-  }
-
-  return data;
+export async function sendTextReminder(appointmentId: string) {
+  return await sendAppointmentSms(appointmentId, "reminder");
 }

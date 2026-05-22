@@ -1,10 +1,29 @@
 import { Tabs } from "expo-router";
+import { useAppTheme } from "../../lib/useAppTheme";
 
 export default function TabLayout() {
+  const { colors } = useAppTheme();
+
   return (
-    <Tabs>
-      <Tabs.Screen name="index" options={{ title: "Home" }} />
-      <Tabs.Screen name="explore" options={{ title: "Explore" }} />
+    <Tabs
+      screenOptions={{
+        headerShown: false,
+
+        tabBarStyle: {
+          backgroundColor: colors.background,
+          borderTopColor: colors.border,
+        },
+
+        tabBarActiveTintColor: colors.primary,
+        tabBarInactiveTintColor: colors.mutedText,
+      }}
+    >
+      <Tabs.Screen
+        name="index"
+        options={{
+          title: "Home",
+        }}
+      />
     </Tabs>
   );
 }

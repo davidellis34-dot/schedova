@@ -9,10 +9,22 @@ import {
   TextInput,
   View,
 } from "react-native";
+import { canUseFeature } from "../lib/featureAccess";
 import { supabase } from "../lib/supabase";
+
+function timeToMinutes(time: string) {
+  const [hours, minutes] = String(time || "00:00")
+    .slice(0, 5)
+    .split(":")
+    .map(Number);
+
+  return (Number.isFinite(hours) ? hours : 0) * 60 +
+    (Number.isFinite(minutes) ? minutes : 0);
+}
 
 export default function BlockTimeScreen() {
   const router = useRouter();
+  const customScheduleAvailable = canUseFeature("customBusinessHours");
 
   const [title, setTitle] = useState("");
   const [blockDate, setBlockDate] = useState("");
@@ -22,6 +34,14 @@ export default function BlockTimeScreen() {
   const [notes, setNotes] = useState("");
 
   async function saveBlock() {
+    if (!customScheduleAvailable) {
+      Alert.alert(
+        "Schedova Pro",
+        "Blocked time and custom business hours are Pro features.",
+      );
+      return;
+    }
+
     if (!title || !blockDate || !startTime || !endTime) {
       Alert.alert(
         "Missing Info",
@@ -29,24 +49,57 @@ export default function BlockTimeScreen() {
       );
       return;
     }
-    Alert.alert("Debug", "about to insert block");
+
     const { data: userData } = await supabase.auth.getUser();
     const userId = userData.user?.id;
     if (!userId) {
       Alert.alert("Login Required", "You must be logged in.");
       return;
     }
-    console.log("Saving block:", {
-      user_id: userId,
-      title,
-      block_date: blockDate,
-      start_time: startTime,
-      end_time: endTime,
-      block_type: blockType,
-      notes,
-    });
+    if (timeToMinutes(startTime) >= timeToMinutes(endTime)) {
+      Alert.alert("Invalid Time", "End time must be after start time.");
+      return;
+    }
 
-    const { data, error } = await supabase
+    const { data: overlappingAppointments, error: appointmentError } =
+      await supabase
+        .from("appointments")
+        .select("id")
+        .eq("user_id", userId)
+        .eq("appointment_date", blockDate)
+        .neq("status", "canceled")
+        .lt("appointment_time", endTime)
+        .gt("end_time", startTime);
+
+    if (appointmentError) {
+      Alert.alert("Error", appointmentError.message);
+      return;
+    }
+
+    if (overlappingAppointments?.length) {
+      Alert.alert("Conflict", "This blocked time overlaps an appointment.");
+      return;
+    }
+
+    const { data: overlappingBlocks, error: blockError } = await supabase
+      .from("blocked_times")
+      .select("id")
+      .eq("user_id", userId)
+      .eq("block_date", blockDate)
+      .lt("start_time", endTime)
+      .gt("end_time", startTime);
+
+    if (blockError) {
+      Alert.alert("Error", blockError.message);
+      return;
+    }
+
+    if (overlappingBlocks?.length) {
+      Alert.alert("Conflict", "This time overlaps an existing blocked time.");
+      return;
+    }
+
+    const { error } = await supabase
       .from("blocked_times")
       .insert({
         user_id: userId,
@@ -56,11 +109,7 @@ export default function BlockTimeScreen() {
         end_time: endTime,
         block_type: blockType,
         notes,
-      })
-      .select();
-
-    console.log("Save result:", data);
-    console.log("Save error:", error);
+      });
 
     if (error) {
       Alert.alert("Error", error.message);
@@ -68,6 +117,55 @@ export default function BlockTimeScreen() {
     }
 
     router.back();
+  }
+
+  if (!customScheduleAvailable) {
+    return (
+      <ScrollView style={{ flex: 1, backgroundColor: "#ffffff", padding: 20 }}>
+        <Text
+          style={{
+            fontSize: 30,
+            fontWeight: "bold",
+            marginBottom: 24,
+            color: "#111111",
+          }}
+        >
+          Block Time
+        </Text>
+
+        <View
+          style={{
+            borderWidth: 1,
+            borderColor: "#D1D5DB",
+            borderRadius: 16,
+            padding: 18,
+            marginBottom: 16,
+          }}
+        >
+          <Text style={{ color: "#111111", fontSize: 20, fontWeight: "900" }}>
+            Schedova Pro
+          </Text>
+          <Text style={{ color: "#666666", marginTop: 8 }}>
+            Blocked time, vacation blocks, and custom business hours are locked
+            on Free.
+          </Text>
+        </View>
+
+        <Pressable
+          onPress={() => router.back()}
+          style={{
+            backgroundColor: "#0F766E",
+            padding: 16,
+            borderRadius: 14,
+            alignItems: "center",
+          }}
+        >
+          <Text style={{ color: "#ffffff", fontWeight: "bold", fontSize: 16 }}>
+            Back
+          </Text>
+        </Pressable>
+      </ScrollView>
+    );
   }
 
   return (

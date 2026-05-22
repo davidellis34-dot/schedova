@@ -22,7 +22,7 @@ export default function CalendarMonthScreen() {
   const days = getMonthDays(monthDate);
 
   function openWeek(date: Date) {
-    router.push({
+    router.replace({
       pathname: "/calendar-view",
       params: {
         selectedDate: date.toISOString().split("T")[0],
