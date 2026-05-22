@@ -590,13 +590,7 @@ export function useBookAppointmentForm() {
 
       if (!saved) return;
 
-      router.replace({
-        pathname: "/calendar-view",
-        params: {
-          selectedDate: safeDate,
-          selectedTime: startTime,
-        },
-      } as any);
+      router.dismissTo("/dashboard" as any);
     } catch (error) {
       console.log("SAVE ENTRY CRASH:", error);
 

@@ -1,6 +1,14 @@
-import { useRouter } from "expo-router";
-import { useEffect, useState } from "react";
-import { Alert, Pressable, ScrollView, Text, TextInput, View } from "react-native";
+import { useFocusEffect, useRouter } from "expo-router";
+import { useCallback, useState } from "react";
+import {
+  ActivityIndicator,
+  Alert,
+  Pressable,
+  ScrollView,
+  Text,
+  TextInput,
+  View,
+} from "react-native";
 import { normalizeClientTag } from "../lib/clientTags";
 import { canUseFeature, FREE_TIER_LIMITS } from "../lib/featureAccess";
 import { supabase } from "../lib/supabase";
@@ -9,28 +17,82 @@ export default function ClientsScreen() {
   const router = useRouter();
   const { colors } = useAppTheme();
   const [clients, setClients] = useState<any[]>([]);
+  const [loadingClients, setLoadingClients] = useState(true);
   const [searchText, setSearchText] = useState("");
 
-  useEffect(() => {
-    fetchClients();
-  }, []);
+  useFocusEffect(
+    useCallback(() => {
+      let isActive = true;
 
-  async function fetchClients() {
-    const { data: userData } = await supabase.auth.getUser();
-    const userId = userData.user?.id;
-    if (!userId) {
-      setClients([]);
-      return;
-    }
-    const { data } = await supabase
-      .from("clients")
-      .select("*")
-      .eq("user_id", userId)
-      .is("archived_at", null)
-      .order("name");
+      async function fetchClients(userId?: string) {
+        if (!isActive) return;
 
-    setClients(data || []);
-  }
+        setLoadingClients(true);
+
+        let activeUserId = userId;
+
+        if (!activeUserId) {
+          const { data: sessionData, error: sessionError } =
+            await supabase.auth.getSession();
+
+          if (!isActive) return;
+
+          if (sessionError) {
+            Alert.alert("Error", sessionError.message);
+            setLoadingClients(false);
+            return;
+          }
+
+          activeUserId = sessionData.session?.user?.id;
+        }
+
+        if (!activeUserId) {
+          return;
+        }
+
+        const { data, error } = await supabase
+          .from("clients")
+          .select("*")
+          .eq("user_id", activeUserId)
+          .is("archived_at", null)
+          .order("name");
+
+        if (!isActive) return;
+
+        if (error) {
+          Alert.alert("Error", error.message);
+          setLoadingClients(false);
+          return;
+        }
+
+        setClients(data || []);
+        setLoadingClients(false);
+      }
+
+      void fetchClients();
+
+      const { data: authListener } = supabase.auth.onAuthStateChange(
+        (event, session) => {
+          if (!isActive) return;
+
+          if (session?.user?.id) {
+            void fetchClients(session.user.id);
+            return;
+          }
+
+          if (event === "SIGNED_OUT") {
+            setClients([]);
+            setLoadingClients(false);
+          }
+        },
+      );
+
+      return () => {
+        isActive = false;
+        authListener.subscription.unsubscribe();
+      };
+    }, []),
+  );
 
   const filteredClients = clients.filter((client) => {
     const search = searchText.toLowerCase();
@@ -93,7 +155,8 @@ export default function ClientsScreen() {
 
       {!canUseFeature("moreClients") ? (
         <Text style={{ color: colors.mutedText, marginBottom: 14 }}>
-          Free: {clients.length}/{FREE_TIER_LIMITS.clients} clients
+          Free: {loadingClients ? "..." : clients.length}/
+          {FREE_TIER_LIMITS.clients} clients
         </Text>
       ) : null}
 
@@ -113,9 +176,21 @@ export default function ClientsScreen() {
           fontSize: 18,
         }}
       />
-      {filteredClients.length === 0 && (
+      {loadingClients ? (
+        <View
+          style={{
+            alignItems: "center",
+            paddingVertical: 28,
+          }}
+        >
+          <ActivityIndicator color={colors.primary} />
+          <Text style={{ color: colors.mutedText, marginTop: 10 }}>
+            Loading clients...
+          </Text>
+        </View>
+      ) : filteredClients.length === 0 ? (
         <Text style={{ color: colors.text }}>No clients found.</Text>
-      )}
+      ) : null}
 
       {filteredClients.map((client) => (
         <View
