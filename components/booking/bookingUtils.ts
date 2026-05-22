@@ -23,14 +23,15 @@ export function normalizeId(value: unknown) {
 export function toDisplayTime(value: unknown, fallback = "09:00") {
   const text = String(value || fallback);
   if (!text) return fallback;
-  return text.slice(0, 5);
+  const clean = text.slice(0, 5);
+  return /^\d{2}:\d{2}$/.test(clean) ? clean : fallback;
 }
 
-export function toSqlTime(value: string, fallback: string) {
+export function toSqlTime(value: string | undefined | null, fallback: string) {
   if (!value) return fallback;
   const clean = value.slice(0, 8);
-  if (clean.length === 5) return `${clean}:00`;
-  return clean;
+  const withSeconds = clean.length === 5 ? `${clean}:00` : clean;
+  return /^\d{2}:\d{2}:\d{2}$/.test(withSeconds) ? withSeconds : fallback;
 }
 
 export function formatTimeLabel(time: string, use24Hour: boolean) {
@@ -48,7 +49,8 @@ export function formatTimeLabel(time: string, use24Hour: boolean) {
 }
 
 export function calculateEndTime(startTime: string, durationMinutes: number) {
-  const [hours, minutes] = startTime.split(":").map(Number);
+  const safeStartTime = toDisplayTime(startTime, "09:00");
+  const [hours, minutes] = safeStartTime.split(":").map(Number);
   const date = new Date();
 
   date.setHours(
@@ -57,20 +59,29 @@ export function calculateEndTime(startTime: string, durationMinutes: number) {
     0,
     0,
   );
-  date.setMinutes(date.getMinutes() + Math.max(0, durationMinutes || 0));
+  date.setMinutes(
+    date.getMinutes() +
+      Math.max(0, Number.isFinite(durationMinutes) ? durationMinutes : 0),
+  );
 
   return date.toTimeString().slice(0, 5);
 }
 
-export function getTotalDuration(services: Service[]) {
-  return services.reduce(
-    (sum, service) => sum + Number(service.duration_minutes || 0),
+export function getTotalDuration(
+  services: (Partial<Service> | null | undefined)[] = [],
+) {
+  return services.filter(Boolean).reduce(
+    (sum, service) => sum + Number(service?.duration_minutes || 0),
     0,
   );
 }
 
-export function getTotalPrice(services: Service[]) {
-  return services.reduce((sum, service) => sum + Number(service.price || 0), 0);
+export function getTotalPrice(
+  services: (Partial<Service> | null | undefined)[] = [],
+) {
+  return services
+    .filter(Boolean)
+    .reduce((sum, service) => sum + Number(service?.price || 0), 0);
 }
 
 export function formatMoney(value: number) {

@@ -42,10 +42,17 @@ function normalizeEntryType(value?: string): EntryType {
 }
 
 function addMinutesToTime(time: string, minutesToAdd: number) {
-  const [hourText, minuteText] = time.split(":");
+  const safeTime = toDisplayTime(time, "09:00");
+  const [hourText, minuteText] = safeTime.split(":");
   const date = new Date();
 
-  date.setHours(Number(hourText), Number(minuteText) + minutesToAdd, 0, 0);
+  date.setHours(
+    Number(hourText),
+    Number(minuteText) +
+      (Number.isFinite(minutesToAdd) ? minutesToAdd : 30),
+    0,
+    0,
+  );
 
   return `${String(date.getHours()).padStart(2, "0")}:${String(
     date.getMinutes(),
@@ -55,8 +62,12 @@ function addMinutesToTime(time: string, minutesToAdd: number) {
 function timeToMinutes(time: string) {
   const cleanTime = String(time || "00:00").slice(0, 5);
   const [hourText, minuteText] = cleanTime.split(":");
+  const hours = Number(hourText);
+  const minutes = Number(minuteText);
 
-  return Number(hourText) * 60 + Number(minuteText);
+  if (!Number.isFinite(hours) || !Number.isFinite(minutes)) return Number.NaN;
+
+  return hours * 60 + minutes;
 }
 
 function parseDateOnly(dateText: string) {
@@ -138,21 +149,30 @@ function getClientDisplayName(client: any) {
     "New Client"
   );
 }
+
+function isUsableService(service: unknown): service is Service {
+  return !!service && typeof service === "object";
+}
+
+function routeParam(value: string | string[] | undefined) {
+  if (Array.isArray(value)) return value[0] || "";
+  return typeof value === "string" ? value : "";
+}
 export function useBookAppointmentForm() {
   const router = useRouter();
   const params = useLocalSearchParams();
 
-  const appointmentId =
-    typeof params.appointmentId === "string" ? params.appointmentId : "";
-  const blockId = typeof params.blockId === "string" ? params.blockId : "";
-  const routeMode = typeof params.mode === "string" ? params.mode : "";
+  const appointmentId = routeParam(params.appointmentId);
+  const blockId = routeParam(params.blockId);
+  const routeMode = routeParam(params.mode);
 
-  const appointmentDateParam =
-    typeof params.appointmentDate === "string" ? params.appointmentDate : "";
-  const appointmentTimeParam =
-    typeof params.appointmentTime === "string" ? params.appointmentTime : "";
+  const appointmentDateParam = routeParam(params.appointmentDate);
+  const appointmentTimeParam = toDisplayTime(
+    routeParam(params.appointmentTime),
+    "09:00",
+  );
 
-  const isEditMode = routeMode === "edit" || params.editMode === "true";
+  const isEditMode = routeMode === "edit" || routeParam(params.editMode) === "true";
 
   const [use24Hour, setUse24Hour] = useState(false);
   const [calendarIntervalMinutes, setCalendarIntervalMinutes] = useState(30);
@@ -435,6 +455,11 @@ export function useBookAppointmentForm() {
   }
 
   function addServiceToAppointment(service: Service) {
+    if (!isUsableService(service)) {
+      Alert.alert("Service Error", "Select a valid service and try again.");
+      return;
+    }
+
     const cleanService = { ...service, id: normalizeId(service.id) };
     setSelectedServices((current) => [...current, cleanService]);
   }
@@ -568,8 +593,17 @@ export function useBookAppointmentForm() {
     setShowQuickService(false);
   }
 
+  function navigateAfterSave() {
+    try {
+      router.dismissTo("/dashboard" as any);
+    } catch (error) {
+      console.log("BOOKING NAVIGATION FALLBACK:", error);
+      router.replace("/dashboard" as any);
+    }
+  }
+
   async function saveEntry() {
-    if (saving) return;
+    if (saving) return false;
     setSaving(true);
 
     try {
@@ -578,7 +612,7 @@ export function useBookAppointmentForm() {
 
       if (!currentUserId) {
         Alert.alert("Login Required", "You must be logged in.");
-        return;
+        return false;
       }
 
       const safeDate = cleanDateOnly(appointmentDate);
@@ -588,13 +622,15 @@ export function useBookAppointmentForm() {
           ? await saveAppointment(currentUserId, safeDate)
           : await saveCalendarBlock(currentUserId, safeDate);
 
-      if (!saved) return;
+      if (!saved) return false;
 
-      router.dismissTo("/dashboard" as any);
+      navigateAfterSave();
+      return true;
     } catch (error) {
       console.log("SAVE ENTRY CRASH:", error);
 
       Alert.alert("Save Error", "Something went wrong while saving.");
+      return false;
     } finally {
       setSaving(false);
     }
@@ -666,7 +702,9 @@ export function useBookAppointmentForm() {
   }
 
   async function saveAppointment(currentUserId: string, safeDate: string) {
-    if (selectedServices.length === 0) {
+    const cleanSelectedServices = selectedServices.filter(isUsableService);
+
+    if (cleanSelectedServices.length === 0) {
       Alert.alert("Missing Info", "Select at least one service.");
       return false;
     }
@@ -691,7 +729,7 @@ export function useBookAppointmentForm() {
       isEditMode && !selectedClientRecord && !!preservedClientName;
 
     const finalEndTime = endTimeManuallyChanged
-      ? endTime
+      ? toDisplayTime(endTime, "09:30")
       : calculateEndTime(startTime, totalDuration || calendarIntervalMinutes);
 
     const newStartTime = toSqlTime(startTime, "09:00:00");
@@ -707,6 +745,11 @@ export function useBookAppointmentForm() {
       repeatType,
       cleanDateOnly(repeatUntil || safeDate),
     );
+
+    if (recurringDates.length === 0) {
+      Alert.alert("Date Error", "Choose a valid appointment date.");
+      return false;
+    }
 
     if (
       !isEditMode &&
@@ -794,14 +837,14 @@ export function useBookAppointmentForm() {
         : shouldPreserveArchivedClient
           ? preservedClientName
           : "New Client",
-      service_id: selectedServices[0]?.id
-        ? normalizeId(selectedServices[0].id)
+      service_id: cleanSelectedServices[0]?.id
+        ? normalizeId(cleanSelectedServices[0].id)
         : null,
 
-      service_ids: selectedServices
+      service_ids: cleanSelectedServices
         .map((service) => normalizeId(service.id))
         .filter(Boolean),
-      service_snapshots: createServiceSnapshots(selectedServices),
+      service_snapshots: createServiceSnapshots(cleanSelectedServices),
       appointment_time: newStartTime,
       end_time: newEndTime,
       appointment_notes: appointmentNotes.trim() || null,

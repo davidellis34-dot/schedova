@@ -52,15 +52,17 @@ function parseServiceSnapshots(value: unknown) {
 }
 
 export function createServiceSnapshots(
-  services: any[],
+  services: any[] = [],
 ): AppointmentServiceSnapshot[] {
-  return services.map((service) => ({
-    id: normalizeId(service.id),
-    name: String(service.name || "Unnamed Service"),
-    duration_minutes: Number(service.duration_minutes || 0),
-    price: Number(service.price || 0),
-    ...(service.color_hex ? { color_hex: String(service.color_hex) } : {}),
-  }));
+  return services
+    .filter(Boolean)
+    .map((service) => ({
+      id: normalizeId(service.id),
+      name: String(service.name || "Unnamed Service"),
+      duration_minutes: Number(service.duration_minutes || 0),
+      price: Number(service.price || 0),
+      ...(service.color_hex ? { color_hex: String(service.color_hex) } : {}),
+    }));
 }
 
 export function getAppointmentServices(
@@ -70,13 +72,15 @@ export function getAppointmentServices(
   const snapshots = parseServiceSnapshots(appointment?.service_snapshots);
 
   if (snapshots.length > 0) {
-    return snapshots.map((service: any) => ({
-      id: normalizeId(service.id),
-      name: String(service.name || "Unnamed Service"),
-      duration_minutes: Number(service.duration_minutes || 0),
-      price: Number(service.price || 0),
-      ...(service.color_hex ? { color_hex: String(service.color_hex) } : {}),
-    }));
+    return snapshots
+      .filter(Boolean)
+      .map((service: any) => ({
+        id: normalizeId(service.id),
+        name: String(service.name || "Unnamed Service"),
+        duration_minutes: Number(service.duration_minutes || 0),
+        price: Number(service.price || 0),
+        ...(service.color_hex ? { color_hex: String(service.color_hex) } : {}),
+      }));
   }
 
   return parseServiceIds(appointment)
@@ -95,21 +99,24 @@ export function getAppointmentServices(
     }));
 }
 
-export function getAppointmentServiceTotal(appointment: any, services: any[]) {
+export function getAppointmentServiceTotal(appointment: any, services: any[] = []) {
   return getAppointmentServices(appointment, services).reduce(
     (sum, service) => sum + Number(service.price || 0),
     0,
   );
 }
 
-export function getAppointmentDurationTotal(appointment: any, services: any[]) {
+export function getAppointmentDurationTotal(
+  appointment: any,
+  services: any[] = [],
+) {
   return getAppointmentServices(appointment, services).reduce(
     (sum, service) => sum + Number(service.duration_minutes || 0),
     0,
   );
 }
 
-export function getAppointmentServiceNames(appointment: any, services: any[]) {
+export function getAppointmentServiceNames(appointment: any, services: any[] = []) {
   return getAppointmentServices(appointment, services)
     .map((service) => service.name)
     .filter(Boolean);

@@ -29,8 +29,12 @@ function formatTimeLabel(time: string, use24Hour: boolean) {
 
 function buildTimeOptions(intervalMinutes: number, use24Hour: boolean) {
   const options: { label: string; value: string }[] = [];
+  const safeInterval =
+    Number.isFinite(intervalMinutes) && intervalMinutes > 0
+      ? Math.max(5, Math.min(240, Math.round(intervalMinutes)))
+      : 30;
 
-  for (let minutes = 0; minutes < 24 * 60; minutes += intervalMinutes) {
+  for (let minutes = 0; minutes < 24 * 60; minutes += safeInterval) {
     const hour = Math.floor(minutes / 60);
     const minute = minutes % 60;
 

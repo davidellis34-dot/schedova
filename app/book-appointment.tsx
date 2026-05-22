@@ -283,7 +283,7 @@ export default function BookAppointmentScreen() {
 
                   const picked = form.services.find(
                     (service) =>
-                      normalizeId(service.id) === normalizeId(item?.value),
+                      normalizeId(service?.id) === normalizeId(item?.value),
                   );
 
                   if (picked) form.addServiceToAppointment(picked);
@@ -317,12 +317,12 @@ export default function BookAppointmentScreen() {
                   Total:{" "}
                   {form.selectedServices.reduce(
                     (sum, service) =>
-                      sum + Number(service.duration_minutes || 0),
+                      sum + Number(service?.duration_minutes || 0),
                     0,
                   )}{" "}
                   min • $
                   {form.selectedServices.reduce(
-                    (sum, service) => sum + Number(service.price || 0),
+                    (sum, service) => sum + Number(service?.price || 0),
                     0,
                   )}
                 </Text>
@@ -490,9 +490,13 @@ export default function BookAppointmentScreen() {
         <Pressable
           disabled={form.saving || form.loading}
           onPress={async () => {
-            await form.saveEntry();
+            const saved = await form.saveEntry();
 
-            Haptics.notificationAsync(Haptics.NotificationFeedbackType.Success);
+            if (saved) {
+              void Haptics.notificationAsync(
+                Haptics.NotificationFeedbackType.Success,
+              ).catch(() => {});
+            }
           }}
           style={{
             backgroundColor: form.saving ? colors.mutedText : colors.primary,
@@ -511,7 +515,9 @@ export default function BookAppointmentScreen() {
         {form.isEditMode && form.appointmentId ? (
           <Pressable
             onPress={() => {
-              Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Medium);
+              void Haptics.impactAsync(
+                Haptics.ImpactFeedbackStyle.Medium,
+              ).catch(() => {});
 
               handleDeleteAppointment();
             }}
