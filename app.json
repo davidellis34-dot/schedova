@@ -3,7 +3,7 @@
     "name": "Schedova",
     "slug": "schedova",
     "scheme": "schedova",
-    "version": "1.0.2",
+    "version": "1.0.4",
     "orientation": "default",
     "icon": "./assets/images/app-icon.png",
     "userInterfaceStyle": "light",
@@ -19,7 +19,7 @@
         "monochromeImage": "./assets/images/adaptive-icon-monochrome.png"
       },
       "package": "com.davidellis34.schedova",
-      "versionCode": 3
+      "versionCode": 4
     },
     "web": {
       "favicon": "./assets/images/favicon.png"

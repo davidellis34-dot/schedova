@@ -1,5 +1,5 @@
 import { useFocusEffect, useLocalSearchParams, useRouter } from "expo-router";
-import { useCallback, useEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { Alert } from "react-native";
 
 import {
@@ -22,7 +22,7 @@ import {
   toSqlTime,
   todayIso,
 } from "./bookingUtils";
-import { cleanDateOnly } from "./dateUtils";
+import { cleanDateOnly, isValidDateOnly } from "./dateUtils";
 import type { Client, EntryType, Service } from "./types";
 
 type RepeatType = "none" | "daily" | "weekly" | "biweekly" | "monthly";
@@ -32,6 +32,11 @@ type SavedAppointmentForSideEffects = {
   appointment_date: string;
   appointment_time: string;
   client_name?: string | null;
+};
+
+type SafeService = Service & {
+  price: number;
+  duration_minutes: number;
 };
 
 function normalizeEntryType(value?: string): EntryType {
@@ -68,6 +73,53 @@ function timeToMinutes(time: string) {
   if (!Number.isFinite(hours) || !Number.isFinite(minutes)) return Number.NaN;
 
   return hours * 60 + minutes;
+}
+
+function parseTimeParts(value: unknown) {
+  if (typeof value !== "string") return null;
+
+  const match = /^(\d{2}):(\d{2})(?::(\d{2}))?$/.exec(value);
+  if (!match) return null;
+
+  const hours = Number(match[1]);
+  const minutes = Number(match[2]);
+  const seconds = Number(match[3] || 0);
+
+  if (
+    !Number.isFinite(hours) ||
+    !Number.isFinite(minutes) ||
+    !Number.isFinite(seconds) ||
+    hours < 0 ||
+    hours > 23 ||
+    minutes < 0 ||
+    minutes > 59 ||
+    seconds < 0 ||
+    seconds > 59
+  ) {
+    return null;
+  }
+
+  return { hours, minutes, seconds };
+}
+
+function buildLocalDateTime(dateText: string, timeText: string) {
+  if (!isValidDateOnly(dateText)) return null;
+
+  const timeParts = parseTimeParts(timeText);
+  if (!timeParts) return null;
+
+  const [year, month, day] = dateText.split("-").map(Number);
+  const date = new Date(
+    year,
+    month - 1,
+    day,
+    timeParts.hours,
+    timeParts.minutes,
+    timeParts.seconds,
+    0,
+  );
+
+  return Number.isNaN(date.getTime()) ? null : date;
 }
 
 function parseDateOnly(dateText: string) {
@@ -154,6 +206,75 @@ function isUsableService(service: unknown): service is Service {
   return !!service && typeof service === "object";
 }
 
+function numberWithDefault(value: unknown, fallback: number) {
+  const numberValue = Number(value);
+  return Number.isFinite(numberValue) ? numberValue : fallback;
+}
+
+function serviceNameWithDefault(value: unknown) {
+  return typeof value === "string" && value.trim()
+    ? value.trim()
+    : "Unnamed Service";
+}
+
+function toSafeService(service: unknown): SafeService | null {
+  if (!isUsableService(service)) return null;
+
+  const rawService = service as Partial<Service>;
+  const id = normalizeId(rawService.id).trim();
+
+  if (!id) return null;
+
+  const duration = numberWithDefault(rawService.duration_minutes, 30);
+  const price = numberWithDefault(rawService.price, 0);
+  const color =
+    typeof rawService.color_hex === "string" && rawService.color_hex.trim()
+      ? rawService.color_hex.trim()
+      : "";
+
+  return {
+    id,
+    name: serviceNameWithDefault(rawService.name),
+    duration_minutes: duration > 0 ? duration : 30,
+    price: price >= 0 ? price : 0,
+    ...(color ? { color_hex: color } : {}),
+  };
+}
+
+function getSafeSelectedServices(servicesValue: unknown): SafeService[] {
+  const servicesList = Array.isArray(servicesValue) ? servicesValue : [];
+  const safeServices: SafeService[] = [];
+
+  for (const service of servicesList) {
+    const safeService = toSafeService(service);
+    if (safeService) safeServices.push(safeService);
+  }
+
+  return safeServices;
+}
+
+function getUnknownErrorMessage(error: unknown) {
+  if (error instanceof Error) return error.message;
+
+  if (error && typeof error === "object" && "message" in error) {
+    const message = (error as { message?: unknown }).message;
+    return typeof message === "string" ? message : "Unknown error";
+  }
+
+  return "Unknown error";
+}
+
+function getUnknownErrorCode(error: unknown) {
+  if (error && typeof error === "object" && "code" in error) {
+    const code = (error as { code?: unknown }).code;
+    return typeof code === "string" || typeof code === "number"
+      ? String(code)
+      : "";
+  }
+
+  return "";
+}
+
 function routeParam(value: string | string[] | undefined) {
   if (Array.isArray(value)) return value[0] || "";
   return typeof value === "string" ? value : "";
@@ -178,6 +299,7 @@ export function useBookAppointmentForm() {
   const [calendarIntervalMinutes, setCalendarIntervalMinutes] = useState(30);
   const [loading, setLoading] = useState(true);
   const [saving, setSaving] = useState(false);
+  const savingRef = useRef(false);
   const [editLoaded, setEditLoaded] = useState(false);
 
   const [clients, setClients] = useState<Client[]>([]);
@@ -455,13 +577,14 @@ export function useBookAppointmentForm() {
   }
 
   function addServiceToAppointment(service: Service) {
-    if (!isUsableService(service)) {
+    const safeService = toSafeService(service);
+
+    if (!safeService) {
       Alert.alert("Service Error", "Select a valid service and try again.");
       return;
     }
 
-    const cleanService = { ...service, id: normalizeId(service.id) };
-    setSelectedServices((current) => [...current, cleanService]);
+    setSelectedServices((current) => [...current, safeService]);
   }
 
   function removeSelectedService(indexToRemove: number) {
@@ -595,23 +718,92 @@ export function useBookAppointmentForm() {
 
   function navigateAfterSave() {
     try {
-      router.dismissTo("/dashboard" as any);
+      const navigation = router as typeof router & {
+        dismissTo?: (href: string) => void;
+      };
+
+      if (typeof navigation.dismissTo === "function") {
+        navigation.dismissTo("/dashboard");
+        return;
+      }
+
+      router.replace("/dashboard" as any);
     } catch (error) {
       console.log("BOOKING NAVIGATION FALLBACK:", error);
-      router.replace("/dashboard" as any);
+
+      try {
+        router.replace("/dashboard" as any);
+      } catch (fallbackError) {
+        console.log("BOOKING NAVIGATION FALLBACK FAILED:", fallbackError);
+        Alert.alert(
+          "Appointment Saved",
+          "Your appointment was saved. Return to Dashboard to view it.",
+        );
+      }
     }
   }
 
+  function getSaveDebugContext(extra: Record<string, unknown> = {}) {
+    const safeServices = getSafeSelectedServices(selectedServices);
+
+    return {
+      mode: isEditMode ? "edit" : "create",
+      selectedClientId: normalizeId(selectedClient),
+      selectedServicesCount: Array.isArray(selectedServices)
+        ? selectedServices.length
+        : 0,
+      safeSelectedServicesCount: safeServices.length,
+      date: appointmentDate,
+      startTime,
+      endTime,
+      serviceIds: safeServices.map((service) => service.id),
+      serviceNames: safeServices.map((service) => service.name),
+      ...extra,
+    };
+  }
+
+  function logSaveContext(label: string, extra: Record<string, unknown> = {}) {
+    console.log(`BOOKING SAVE ${label}:`, getSaveDebugContext(extra));
+  }
+
+  function logSupabaseSaveError(operation: string, error: unknown) {
+    logSaveContext("SUPABASE ERROR", {
+      operation,
+      supabaseErrorMessage: getUnknownErrorMessage(error),
+      supabaseErrorCode: getUnknownErrorCode(error),
+    });
+  }
+
   async function saveEntry() {
-    if (saving) return false;
+    if (savingRef.current) {
+      logSaveContext("DUPLICATE TAP BLOCKED");
+      return false;
+    }
+
+    savingRef.current = true;
     setSaving(true);
+    logSaveContext("START");
 
     try {
-      const { data: userData } = await supabase.auth.getUser();
+      const { data: userData, error: userError } = await supabase.auth.getUser();
+
+      if (userError) {
+        logSupabaseSaveError("auth.getUser", userError);
+        Alert.alert("Login Required", "Please sign in again.");
+        return false;
+      }
+
       const currentUserId = userData.user?.id;
 
       if (!currentUserId) {
+        logSaveContext("NO AUTH USER");
         Alert.alert("Login Required", "You must be logged in.");
+        return false;
+      }
+
+      if (!isValidDateOnly(appointmentDate)) {
+        logSaveContext("INVALID DATE");
+        Alert.alert("Date Error", "Choose a valid appointment date.");
         return false;
       }
 
@@ -627,11 +819,15 @@ export function useBookAppointmentForm() {
       navigateAfterSave();
       return true;
     } catch (error) {
-      console.log("SAVE ENTRY CRASH:", error);
+      logSaveContext("CRASH", {
+        errorMessage: getUnknownErrorMessage(error),
+        errorCode: getUnknownErrorCode(error),
+      });
 
       Alert.alert("Save Error", "Something went wrong while saving.");
       return false;
     } finally {
+      savingRef.current = false;
       setSaving(false);
     }
   }
@@ -643,17 +839,25 @@ export function useBookAppointmentForm() {
   ) {
     if (!savedAppointments.length) return;
 
-    if (canUseFeature("smartReminders")) {
-      await Promise.all(
-        savedAppointments.map((appointment) =>
-          scheduleAppointmentReminder({
-            appointmentId: appointment.id,
-            clientName: appointment.client_name,
-            appointmentDate: appointment.appointment_date,
-            appointmentTime: appointment.appointment_time,
-          }),
-        ),
-      );
+    try {
+      if (canUseFeature("smartReminders")) {
+        await Promise.all(
+          savedAppointments.map((appointment) =>
+            scheduleAppointmentReminder({
+              appointmentId: appointment.id,
+              clientName: appointment.client_name,
+              appointmentDate: appointment.appointment_date,
+              appointmentTime: appointment.appointment_time,
+            }),
+          ),
+        );
+      }
+    } catch (error) {
+      logSaveContext("SIDE EFFECT ERROR", {
+        sideEffect: "scheduleAppointmentReminder",
+        errorMessage: getUnknownErrorMessage(error),
+        errorCode: getUnknownErrorCode(error),
+      });
     }
 
     const firstAppointment = savedAppointments[0];
@@ -683,6 +887,7 @@ export function useBookAppointmentForm() {
         .neq("status", "canceled");
 
       if (error) {
+        logSupabaseSaveError("appointments.freeLimit", error);
         Alert.alert("Error", error.message);
         return false;
       }
@@ -702,10 +907,37 @@ export function useBookAppointmentForm() {
   }
 
   async function saveAppointment(currentUserId: string, safeDate: string) {
-    const cleanSelectedServices = selectedServices.filter(isUsableService);
+    if (!currentUserId) {
+      logSaveContext("MISSING USER ID");
+      Alert.alert("Login Required", "Please sign in again.");
+      return false;
+    }
+
+    if (!isValidDateOnly(safeDate)) {
+      logSaveContext("INVALID SAFE DATE", { safeDate });
+      Alert.alert("Date Error", "Choose a valid appointment date.");
+      return false;
+    }
+
+    const cleanSelectedServices = getSafeSelectedServices(selectedServices);
 
     if (cleanSelectedServices.length === 0) {
-      Alert.alert("Missing Info", "Select at least one service.");
+      logSaveContext("INVALID SERVICES");
+      Alert.alert("Missing Info", "Select a valid service.");
+      return false;
+    }
+
+    const totalSafeDuration = getTotalDuration(cleanSelectedServices);
+
+    if (!Number.isFinite(totalSafeDuration) || totalSafeDuration <= 0) {
+      logSaveContext("INVALID SERVICE DURATION", { totalSafeDuration });
+      Alert.alert("Service Error", "Select a service with a valid duration.");
+      return false;
+    }
+
+    if (repeatType !== "none" && !isValidDateOnly(repeatUntil)) {
+      logSaveContext("INVALID REPEAT DATE", { repeatUntil });
+      Alert.alert("Date Error", "Choose a valid repeat-until date.");
       return false;
     }
 
@@ -727,15 +959,82 @@ export function useBookAppointmentForm() {
     const preservedClientId = normalizeId(existingAppointmentClientId);
     const shouldPreserveArchivedClient =
       isEditMode && !selectedClientRecord && !!preservedClientName;
+    const requestedClientId = normalizeId(selectedClient);
+
+    if (requestedClientId && !selectedClientRecord && !shouldPreserveArchivedClient) {
+      logSaveContext("INVALID CLIENT", { requestedClientId });
+      Alert.alert("Client Error", "Select a valid client and try again.");
+      return false;
+    }
+
+    if (!requestedClientId && !shouldPreserveArchivedClient) {
+      logSaveContext("MISSING CLIENT");
+      Alert.alert("Client Error", "Select a client before saving.");
+      return false;
+    }
+
+    const payloadClientId = selectedClientRecord
+      ? normalizeId(selectedClientRecord.id)
+      : shouldPreserveArchivedClient
+        ? preservedClientId
+        : null;
+    const payloadClientName = selectedClientRecord
+      ? getClientDisplayName(selectedClientRecord)
+      : shouldPreserveArchivedClient
+        ? preservedClientName
+        : "New Client";
+
+    if (!payloadClientId && !payloadClientName) {
+      logSaveContext("MISSING CLIENT NAME");
+      Alert.alert("Client Error", "Select a client or enter a client name.");
+      return false;
+    }
+
+    const cleanStartTime = toDisplayTime(startTime, "");
+
+    if (!cleanStartTime) {
+      logSaveContext("INVALID START TIME", { startTime });
+      Alert.alert("Invalid Time", "Choose a valid start time.");
+      return false;
+    }
 
     const finalEndTime = endTimeManuallyChanged
-      ? toDisplayTime(endTime, "09:30")
-      : calculateEndTime(startTime, totalDuration || calendarIntervalMinutes);
+      ? toDisplayTime(endTime, "")
+      : calculateEndTime(cleanStartTime, totalSafeDuration);
 
-    const newStartTime = toSqlTime(startTime, "09:00:00");
-    const newEndTime = toSqlTime(finalEndTime, "09:30:00");
+    const newStartTime = toSqlTime(cleanStartTime, "");
+    const newEndTime = toSqlTime(finalEndTime, "");
 
-    if (timeToMinutes(newEndTime) <= timeToMinutes(newStartTime)) {
+    if (!newStartTime || !newEndTime) {
+      logSaveContext("INVALID SQL TIME", {
+        cleanStartTime,
+        finalEndTime,
+        newStartTime,
+        newEndTime,
+      });
+      Alert.alert("Invalid Time", "Choose a valid start and end time.");
+      return false;
+    }
+
+    const newStartDateTime = buildLocalDateTime(safeDate, newStartTime);
+    const newEndDateTime = buildLocalDateTime(safeDate, newEndTime);
+
+    if (!newStartDateTime || !newEndDateTime) {
+      logSaveContext("INVALID DATE TIME", {
+        safeDate,
+        newStartTime,
+        newEndTime,
+      });
+      Alert.alert("Invalid Time", "Choose a valid appointment date and time.");
+      return false;
+    }
+
+    if (newEndDateTime.getTime() <= newStartDateTime.getTime()) {
+      logSaveContext("END BEFORE START", {
+        safeDate,
+        newStartTime,
+        newEndTime,
+      });
       Alert.alert("Invalid Time", "End time must be after start time.");
       return false;
     }
@@ -770,6 +1069,7 @@ export function useBookAppointmentForm() {
           .neq("status", "canceled");
 
       if (existingError) {
+        logSupabaseSaveError("appointments.availability", existingError);
         Alert.alert("Error", "Could not check appointment availability.");
         return false;
       }
@@ -813,6 +1113,7 @@ export function useBookAppointmentForm() {
         .gt("end_time", newStartTime);
 
       if (blockedError) {
+        logSupabaseSaveError("blocked_times.availability", blockedError);
         Alert.alert("Error", "Could not check blocked times.");
         return false;
       }
@@ -827,24 +1128,27 @@ export function useBookAppointmentForm() {
     }
 
     const finalPriceNumber = Number(finalPrice);
+    const serviceIds = cleanSelectedServices
+      .map((service) => normalizeId(service.id))
+      .filter(Boolean);
+    const serviceSnapshots = createServiceSnapshots(cleanSelectedServices);
+
+    if (serviceIds.length === 0 || serviceSnapshots.length === 0) {
+      logSaveContext("INVALID SERVICE PAYLOAD", {
+        serviceIdsLength: serviceIds.length,
+        serviceSnapshotsLength: serviceSnapshots.length,
+      });
+      Alert.alert("Service Error", "Select a valid service and try again.");
+      return false;
+    }
 
     const baseAppointmentData = {
       user_id: currentUserId,
-      client_id:
-        selectedClient || (shouldPreserveArchivedClient ? preservedClientId : null),
-      client_name: selectedClientRecord
-        ? getClientDisplayName(selectedClientRecord)
-        : shouldPreserveArchivedClient
-          ? preservedClientName
-          : "New Client",
-      service_id: cleanSelectedServices[0]?.id
-        ? normalizeId(cleanSelectedServices[0].id)
-        : null,
-
-      service_ids: cleanSelectedServices
-        .map((service) => normalizeId(service.id))
-        .filter(Boolean),
-      service_snapshots: createServiceSnapshots(cleanSelectedServices),
+      client_id: payloadClientId,
+      client_name: payloadClientName,
+      service_id: serviceIds[0],
+      service_ids: serviceIds,
+      service_snapshots: serviceSnapshots,
       appointment_time: newStartTime,
       end_time: newEndTime,
       appointment_notes: appointmentNotes.trim() || null,
@@ -867,6 +1171,7 @@ export function useBookAppointmentForm() {
         .eq("user_id", currentUserId);
 
       if (error) {
+        logSupabaseSaveError("appointments.update", error);
         Alert.alert("Error", error.message);
         return false;
       }
@@ -907,6 +1212,7 @@ export function useBookAppointmentForm() {
       .select("id, appointment_date, appointment_time, client_name");
 
     if (error) {
+      logSupabaseSaveError("appointments.insert", error);
       Alert.alert("Error", error.message);
       return false;
     }

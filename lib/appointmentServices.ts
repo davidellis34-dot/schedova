@@ -51,52 +51,82 @@ function parseServiceSnapshots(value: unknown) {
   return [];
 }
 
+function numberWithDefault(value: unknown, fallback: number) {
+  const numberValue = Number(value);
+  return Number.isFinite(numberValue) ? numberValue : fallback;
+}
+
+function toServiceSnapshot(service: unknown): AppointmentServiceSnapshot | null {
+  if (!service || typeof service !== "object") return null;
+
+  const rawService = service as {
+    id?: unknown;
+    name?: unknown;
+    duration_minutes?: unknown;
+    price?: unknown;
+    color_hex?: unknown;
+  };
+  const id = normalizeId(rawService.id);
+
+  if (!id) return null;
+
+  const name =
+    typeof rawService.name === "string" && rawService.name.trim()
+      ? rawService.name.trim()
+      : "Unnamed Service";
+  const duration = numberWithDefault(rawService.duration_minutes, 0);
+  const price = numberWithDefault(rawService.price, 0);
+  const color =
+    typeof rawService.color_hex === "string" && rawService.color_hex.trim()
+      ? rawService.color_hex.trim()
+      : "";
+
+  return {
+    id,
+    name,
+    duration_minutes: duration >= 0 ? duration : 0,
+    price: price >= 0 ? price : 0,
+    ...(color ? { color_hex: color } : {}),
+  };
+}
+
 export function createServiceSnapshots(
-  services: any[] = [],
+  services: unknown[] = [],
 ): AppointmentServiceSnapshot[] {
-  return services
-    .filter(Boolean)
-    .map((service) => ({
-      id: normalizeId(service.id),
-      name: String(service.name || "Unnamed Service"),
-      duration_minutes: Number(service.duration_minutes || 0),
-      price: Number(service.price || 0),
-      ...(service.color_hex ? { color_hex: String(service.color_hex) } : {}),
-    }));
+  const serviceList = Array.isArray(services) ? services : [];
+  const snapshots: AppointmentServiceSnapshot[] = [];
+
+  for (const service of serviceList) {
+    const snapshot = toServiceSnapshot(service);
+    if (snapshot) snapshots.push(snapshot);
+  }
+
+  return snapshots;
 }
 
 export function getAppointmentServices(
   appointment: any,
-  services: any[] = [],
+  services: unknown[] = [],
 ): AppointmentServiceSnapshot[] {
   const snapshots = parseServiceSnapshots(appointment?.service_snapshots);
+  const serviceList = Array.isArray(services) ? services : [];
 
   if (snapshots.length > 0) {
-    return snapshots
-      .filter(Boolean)
-      .map((service: any) => ({
-        id: normalizeId(service.id),
-        name: String(service.name || "Unnamed Service"),
-        duration_minutes: Number(service.duration_minutes || 0),
-        price: Number(service.price || 0),
-        ...(service.color_hex ? { color_hex: String(service.color_hex) } : {}),
-      }));
+    return createServiceSnapshots(snapshots);
   }
 
-  return parseServiceIds(appointment)
-    .map((serviceId) =>
-      services.find(
-        (service) => normalizeId(service.id) === normalizeId(serviceId),
-      ),
-    )
-    .filter(Boolean)
-    .map((service) => ({
-      id: normalizeId(service.id),
-      name: String(service.name || "Unnamed Service"),
-      duration_minutes: Number(service.duration_minutes || 0),
-      price: Number(service.price || 0),
-      ...(service.color_hex ? { color_hex: String(service.color_hex) } : {}),
-    }));
+  const matchedServices: unknown[] = [];
+
+  for (const serviceId of parseServiceIds(appointment)) {
+    const matchedService =
+      serviceList.find(
+        (service: any) => normalizeId(service?.id) === normalizeId(serviceId),
+      ) || null;
+
+    if (matchedService) matchedServices.push(matchedService);
+  }
+
+  return createServiceSnapshots(matchedServices);
 }
 
 export function getAppointmentServiceTotal(appointment: any, services: any[] = []) {

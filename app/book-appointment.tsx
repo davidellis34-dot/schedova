@@ -490,6 +490,8 @@ export default function BookAppointmentScreen() {
         <Pressable
           disabled={form.saving || form.loading}
           onPress={async () => {
+            if (form.saving || form.loading) return;
+
             const saved = await form.saveEntry();
 
             if (saved) {

@@ -20,18 +20,40 @@ export function normalizeId(value: unknown) {
   return value == null ? "" : String(value);
 }
 
+function isValidTimeText(value: string) {
+  const match = /^(\d{2}):(\d{2})(?::(\d{2}))?$/.exec(value);
+
+  if (!match) return false;
+
+  const hours = Number(match[1]);
+  const minutes = Number(match[2]);
+  const seconds = Number(match[3] || 0);
+
+  return (
+    Number.isFinite(hours) &&
+    Number.isFinite(minutes) &&
+    Number.isFinite(seconds) &&
+    hours >= 0 &&
+    hours <= 23 &&
+    minutes >= 0 &&
+    minutes <= 59 &&
+    seconds >= 0 &&
+    seconds <= 59
+  );
+}
+
 export function toDisplayTime(value: unknown, fallback = "09:00") {
   const text = String(value || fallback);
   if (!text) return fallback;
   const clean = text.slice(0, 5);
-  return /^\d{2}:\d{2}$/.test(clean) ? clean : fallback;
+  return isValidTimeText(clean) ? clean : fallback;
 }
 
 export function toSqlTime(value: string | undefined | null, fallback: string) {
   if (!value) return fallback;
   const clean = value.slice(0, 8);
   const withSeconds = clean.length === 5 ? `${clean}:00` : clean;
-  return /^\d{2}:\d{2}:\d{2}$/.test(withSeconds) ? withSeconds : fallback;
+  return isValidTimeText(withSeconds) ? withSeconds : fallback;
 }
 
 export function formatTimeLabel(time: string, use24Hour: boolean) {
