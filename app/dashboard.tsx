@@ -2,7 +2,8 @@ import { Ionicons } from "@expo/vector-icons";
 import AsyncStorage from "@react-native-async-storage/async-storage";
 import { useFocusEffect, useRouter } from "expo-router";
 import { useCallback, useState } from "react";
-import { Alert, Modal, Pressable, ScrollView, Text, View } from "react-native";
+import { Alert, Modal, Pressable, Text, View } from "react-native";
+import { AppScreen } from "../components/layout/AppScreen";
 import {
   getAppointmentServices as getSavedAppointmentServices,
   getAppointmentServiceTotal,
@@ -10,13 +11,14 @@ import {
 import { sendAppointmentSmsNonBlocking } from "../lib/appointmentSms";
 import { formatClockTime, getCalendarPreferences } from "../lib/calendarPreferences";
 import { confirmDestructiveAction } from "../lib/confirmDestructiveAction";
-import { canUseFeature } from "../lib/featureAccess";
+import { canUseFeature, useFeatureAccess } from "../lib/featureAccess";
 import { cancelAppointmentReminder } from "../lib/localNotifications";
 import { supabase } from "../lib/supabase";
 import { useAppTheme } from "../lib/useAppTheme";
 export default function Dashboard() {
   const router = useRouter();
   const { colors } = useAppTheme();
+  useFeatureAccess();
   function getClientDisplayName(appointment: any) {
     const appointmentName = String(appointment?.client_name || "").trim();
 
@@ -49,16 +51,6 @@ export default function Dashboard() {
   const [services, setServices] = useState<any[]>([]);
   const [userEmail, setUserEmail] = useState("");
 
-  useFocusEffect(
-    useCallback(() => {
-      loadFontScale();
-      void loadCalendarDisplayPreferences();
-      checkBusiness();
-      fetchAppointments();
-      fetchServices();
-      fetchClients();
-    }, []),
-  );
   async function fetchClients() {
     const { data: userData } = await supabase.auth.getUser();
     const userId = userData.user?.id;
@@ -97,13 +89,14 @@ export default function Dashboard() {
     return base;
   }
 
-  async function checkBusiness() {
+  const checkBusiness = useCallback(async () => {
     const { data: userData } = await supabase.auth.getUser();
     const userId = userData.user?.id;
     setUserEmail(userData.user?.email || "");
 
     if (!userId) {
       setHasBusiness(false);
+      router.replace("/login" as any);
       return;
     }
 
@@ -120,7 +113,18 @@ export default function Dashboard() {
     }
 
     setHasBusiness((data || []).length > 0);
-  }
+  }, [router]);
+
+  useFocusEffect(
+    useCallback(() => {
+      loadFontScale();
+      void loadCalendarDisplayPreferences();
+      checkBusiness();
+      fetchAppointments();
+      fetchServices();
+      fetchClients();
+    }, [checkBusiness]),
+  );
 
   async function fetchAppointments() {
     const { data: userData } = await supabase.auth.getUser();
@@ -395,22 +399,12 @@ export default function Dashboard() {
   }
 
   return (
-    <ScrollView
-      style={{
-        flex: 1,
-        backgroundColor: colors.background,
-      }}
-      contentContainerStyle={{
-        padding: 20,
-        paddingBottom: 40,
-      }}
-    >
+    <AppScreen scroll backgroundColor={colors.background}>
       <View
         style={{
           flexDirection: "row",
           justifyContent: "space-between",
           alignItems: "center",
-          marginTop: 24,
           marginBottom: 8,
         }}
       >
@@ -426,7 +420,7 @@ export default function Dashboard() {
           </Text>
 
           <Text style={{ color: colors.mutedText, marginBottom: 12 }}>
-            Signed in as: {userEmail || "Unknown user"}
+            {userEmail ? `Signed in as: ${userEmail}` : "Signed in"}
           </Text>
 
           <Text
@@ -436,7 +430,7 @@ export default function Dashboard() {
               marginTop: 4,
             }}
           >
-            Smart scheduling for service businesses.
+            Book clients, manage services, and keep your day organized.
           </Text>
         </View>
 
@@ -908,7 +902,7 @@ export default function Dashboard() {
                     flexDirection: "row",
                     gap: 8,
                     marginBottom: 12,
-                    marginTop: -4,
+                    marginTop: 0,
                   }}
                 >
                   <Pressable
@@ -1087,6 +1081,6 @@ export default function Dashboard() {
           </View>
         </Pressable>
       </Modal>
-    </ScrollView>
+    </AppScreen>
   );
 }

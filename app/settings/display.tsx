@@ -1,6 +1,7 @@
 import AsyncStorage from "@react-native-async-storage/async-storage";
 import { useEffect, useState } from "react";
-import { Alert, Pressable, ScrollView, Text, View } from "react-native";
+import { Alert, Pressable, Text, View } from "react-native";
+import { AppScreen } from "../../components/layout/AppScreen";
 import { useAppTheme } from "../../lib/useAppTheme";
 
 type AppTheme = "white" | "dark" | "black" | "brand";
@@ -66,10 +67,7 @@ export default function DisplaySettingsScreen() {
   ];
 
   return (
-    <ScrollView
-      style={{ flex: 1, backgroundColor: colors.background }}
-      contentContainerStyle={{ padding: 20, paddingBottom: 40 }}
-    >
+    <AppScreen scroll backgroundColor={colors.background}>
       <Text
         style={{
           fontSize: 30,
@@ -206,6 +204,6 @@ export default function DisplaySettingsScreen() {
           </Text>
         </Pressable>
       </View>
-    </ScrollView>
+    </AppScreen>
   );
 }

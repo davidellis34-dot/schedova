@@ -1,22 +1,24 @@
+import Constants from "expo-constants";
 import * as Linking from "expo-linking";
-import { Pressable, Text, View } from "react-native";
+import { Alert, Pressable, Text, View } from "react-native";
+import { AppScreen } from "../../components/layout/AppScreen";
 import { useAppTheme } from "../../lib/useAppTheme";
+
+const SUPPORT_URL =
+  "mailto:support@schedova.com?subject=Schedova%20Support%20Request";
 
 export default function SupportScreen() {
   const { colors } = useAppTheme();
+  const appVersion = Constants.expoConfig?.version || "1.0.4";
 
   const contactSupport = () => {
-    Linking.openURL("mailto:support@schedova.com?subject=Schedova Support");
+    void Linking.openURL(SUPPORT_URL).catch(() => {
+      Alert.alert("Contact Support", SUPPORT_URL);
+    });
   };
 
   return (
-    <View
-      style={{
-        flex: 1,
-        backgroundColor: colors.background,
-        padding: 20,
-      }}
-    >
+    <AppScreen backgroundColor={colors.background}>
       <Text
         style={{
           fontSize: 30,
@@ -74,9 +76,9 @@ export default function SupportScreen() {
             color: colors.mutedText,
           }}
         >
-          App Version: 1.0.0
+          App Version: {appVersion}
         </Text>
       </View>
-    </View>
+    </AppScreen>
   );
 }

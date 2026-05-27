@@ -4,18 +4,23 @@ import {
   ActivityIndicator,
   Alert,
   Pressable,
-  ScrollView,
   Text,
   TextInput,
   View,
 } from "react-native";
+import { AppScreen } from "../components/layout/AppScreen";
 import { normalizeClientTag } from "../lib/clientTags";
-import { canUseFeature, FREE_TIER_LIMITS } from "../lib/featureAccess";
+import {
+  canUseFeature,
+  FREE_TIER_LIMITS,
+  useFeatureAccess,
+} from "../lib/featureAccess";
 import { supabase } from "../lib/supabase";
 import { useAppTheme } from "../lib/useAppTheme";
 export default function ClientsScreen() {
   const router = useRouter();
   const { colors } = useAppTheme();
+  useFeatureAccess();
   const [clients, setClients] = useState<any[]>([]);
   const [loadingClients, setLoadingClients] = useState(true);
   const [searchText, setSearchText] = useState("");
@@ -47,6 +52,9 @@ export default function ClientsScreen() {
         }
 
         if (!activeUserId) {
+          setClients([]);
+          setLoadingClients(false);
+          router.replace("/login" as any);
           return;
         }
 
@@ -91,7 +99,7 @@ export default function ClientsScreen() {
         isActive = false;
         authListener.subscription.unsubscribe();
       };
-    }, []),
+    }, [router]),
   );
 
   const filteredClients = clients.filter((client) => {
@@ -124,9 +132,7 @@ export default function ClientsScreen() {
   }
 
   return (
-    <ScrollView
-      style={{ flex: 1, backgroundColor: colors.background, padding: 20 }}
-    >
+    <AppScreen scroll backgroundColor={colors.background}>
       <Text
         style={{
           fontSize: 28,
@@ -273,6 +279,6 @@ export default function ClientsScreen() {
           </Pressable>
         </View>
       ))}
-    </ScrollView>
+    </AppScreen>
   );
 }

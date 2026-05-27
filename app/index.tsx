@@ -1,34 +1,36 @@
 import { useRouter } from "expo-router";
-import { useEffect, useState } from "react";
-import { ActivityIndicator, Pressable, Text, View } from "react-native";
+import { useCallback, useEffect, useState } from "react";
+import { ActivityIndicator, Pressable, Text } from "react-native";
+import { AppScreen } from "../components/layout/AppScreen";
+import { refreshFeatureAccess } from "../lib/featureAccess";
 import { supabase } from "../lib/supabase";
 
 export default function SplashScreen() {
   const router = useRouter();
   const [loading, setLoading] = useState(true);
 
-  useEffect(() => {
-    checkSession();
-  }, []);
-
-  async function checkSession() {
+  const checkSession = useCallback(async () => {
     const response = await supabase.auth.getSession();
 
     const session = response.data.session;
 
     if (session) {
+      await refreshFeatureAccess(session.user.id, "splash-session");
       router.replace("/dashboard" as any);
     } else {
       setLoading(false);
     }
-  }
+  }, [router]);
+
+  useEffect(() => {
+    void checkSession();
+  }, [checkSession]);
 
   if (loading) {
     return (
-      <View
-        style={{
-          flex: 1,
-          backgroundColor: "#0F766E",
+      <AppScreen
+        backgroundColor="#0F766E"
+        contentContainerStyle={{
           justifyContent: "center",
           alignItems: "center",
         }}
@@ -45,18 +47,15 @@ export default function SplashScreen() {
         >
           Schedova
         </Text>
-      </View>
+      </AppScreen>
     );
   }
 
   return (
-    <View
-      style={{
-        flex: 1,
-        backgroundColor: "#ffffff",
-        padding: 28,
-        justifyContent: "center",
-      }}
+    <AppScreen
+      backgroundColor="#ffffff"
+      horizontalPadding={28}
+      contentContainerStyle={{ justifyContent: "center" }}
     >
       <Text
         style={{
@@ -78,7 +77,7 @@ export default function SplashScreen() {
           marginBottom: 46,
         }}
       >
-        Smart scheduling for service businesses.
+        Book clients, manage services, and keep your day organized.
       </Text>
 
       <Pressable
@@ -109,6 +108,6 @@ export default function SplashScreen() {
           Login / Create Account
         </Text>
       </Pressable>
-    </View>
+    </AppScreen>
   );
 }

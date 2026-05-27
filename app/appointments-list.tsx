@@ -2,18 +2,22 @@ import { useRouter } from "expo-router";
 import { useEffect, useState } from "react";
 import {
   Alert,
+  KeyboardAvoidingView,
   Modal,
+  Platform,
   Pressable,
   ScrollView,
   Text,
   TextInput,
   View,
 } from "react-native";
+import { useSafeAreaInsets } from "react-native-safe-area-context";
+import { AppScreen } from "../components/layout/AppScreen";
 import { getAppointmentServices as getSavedAppointmentServices } from "../lib/appointmentServices";
 import { sendAppointmentSmsNonBlocking } from "../lib/appointmentSms";
 import { formatClockTime, getCalendarPreferences } from "../lib/calendarPreferences";
 import { confirmDestructiveAction } from "../lib/confirmDestructiveAction";
-import { canUseFeature } from "../lib/featureAccess";
+import { canUseFeature, useFeatureAccess } from "../lib/featureAccess";
 import { cancelAppointmentReminder } from "../lib/localNotifications";
 import { supabase } from "../lib/supabase";
 import { useAppTheme } from "../lib/useAppTheme";
@@ -34,6 +38,8 @@ type Appointment = {
 export default function AppointmentsList() {
   const router = useRouter();
   const { colors } = useAppTheme();
+  useFeatureAccess();
+  const insets = useSafeAreaInsets();
   const [activeTab, setActiveTab] = useState<AppointmentTab>("upcoming");
   const [appointments, setAppointments] = useState<Appointment[]>([]);
   const [services, setServices] = useState<any[]>([]);
@@ -448,9 +454,7 @@ export default function AppointmentsList() {
       : null;
 
   return (
-    <ScrollView
-      style={{ flex: 1, backgroundColor: colors.background, padding: 20 }}
-    >
+    <AppScreen scroll backgroundColor={colors.background}>
       <Text
         style={{
           fontSize: 28,
@@ -633,44 +637,49 @@ export default function AppointmentsList() {
       })}
 
       <Modal visible={!!selectedAppointment} transparent animationType="slide">
-        <View
-          style={{
-            flex: 1,
-            backgroundColor: "rgba(0,0,0,0.4)",
-            justifyContent: "flex-end",
-          }}
+        <KeyboardAvoidingView
+          behavior={Platform.OS === "ios" ? "padding" : undefined}
+          style={{ flex: 1 }}
         >
           <View
             style={{
-              backgroundColor: colors.background,
-              padding: 24,
-              borderTopLeftRadius: 24,
-              borderTopRightRadius: 24,
-              maxHeight: "88%",
+              flex: 1,
+              backgroundColor: "rgba(0,0,0,0.4)",
+              justifyContent: "flex-end",
             }}
           >
-            <Pressable
-              onPress={() => setSelectedAppointment(null)}
+            <View
               style={{
-                width: 80,
-                height: 24,
-                alignSelf: "center",
-                marginBottom: 14,
-                justifyContent: "center",
-                alignItems: "center",
+                backgroundColor: colors.background,
+                padding: 24,
+                paddingBottom: insets.bottom + 24,
+                borderTopLeftRadius: 24,
+                borderTopRightRadius: 24,
+                maxHeight: "88%",
               }}
             >
-              <View
+              <Pressable
+                onPress={() => setSelectedAppointment(null)}
                 style={{
-                  width: 50,
-                  height: 5,
-                  borderRadius: 999,
-                  backgroundColor: "#D1D5DB",
+                  width: 80,
+                  height: 24,
+                  alignSelf: "center",
+                  marginBottom: 14,
+                  justifyContent: "center",
+                  alignItems: "center",
                 }}
-              />
-            </Pressable>
+              >
+                <View
+                  style={{
+                    width: 50,
+                    height: 5,
+                    borderRadius: 999,
+                    backgroundColor: "#D1D5DB",
+                  }}
+                />
+              </Pressable>
 
-            <ScrollView>
+              <ScrollView keyboardShouldPersistTaps="handled">
               <Pressable
                 onPress={() => {
                   const idToEdit = selectedAppointment?.id;
@@ -913,9 +922,10 @@ export default function AppointmentsList() {
                   Save & Close
                 </Text>
               </Pressable>
-            </ScrollView>
+              </ScrollView>
+            </View>
           </View>
-        </View>
+        </KeyboardAvoidingView>
       </Modal>
 
       {selectMode && selectedIds.length > 0 && (
@@ -987,6 +997,6 @@ export default function AppointmentsList() {
           )}
         </View>
       )}
-    </ScrollView>
+    </AppScreen>
   );
 }

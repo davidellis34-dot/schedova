@@ -1,6 +1,8 @@
 import { useRouter } from "expo-router";
 import { useState } from "react";
-import { Alert, Pressable, Text, TextInput, View } from "react-native";
+import { Alert, Pressable, Text, TextInput } from "react-native";
+import { AppScreen } from "../components/layout/AppScreen";
+import { refreshFeatureAccess } from "../lib/featureAccess";
 import { supabase } from "../lib/supabase";
 
 export default function LoginScreen() {
@@ -29,7 +31,7 @@ export default function LoginScreen() {
   }
 
   async function login() {
-    const { error } = await supabase.auth.signInWithPassword({
+    const { data, error } = await supabase.auth.signInWithPassword({
       email,
       password,
     });
@@ -39,17 +41,17 @@ export default function LoginScreen() {
       return;
     }
 
+    await refreshFeatureAccess(data.user?.id, "login");
     router.replace("/dashboard" as any);
   }
 
   return (
-    <View
-      style={{
-        flex: 1,
-        backgroundColor: "#ffffff",
-        padding: 24,
-        justifyContent: "center",
-      }}
+    <AppScreen
+      keyboardAware
+      backgroundColor="#ffffff"
+      horizontalPadding={24}
+      topPadding={24}
+      contentContainerStyle={{ justifyContent: "center" }}
     >
       <Text
         style={{
@@ -135,7 +137,6 @@ export default function LoginScreen() {
           padding: 16,
           borderRadius: 12,
           alignItems: "center",
-          marginBottom: 22,
         }}
       >
         <Text
@@ -147,36 +148,6 @@ export default function LoginScreen() {
           Create Account
         </Text>
       </Pressable>
-
-      <View
-        style={{
-          borderWidth: 1,
-          borderColor: "#E5E7EB",
-          borderRadius: 12,
-          padding: 14,
-          backgroundColor: "#F9FAFB",
-        }}
-      >
-        <Text
-          style={{
-            color: "#6B7280",
-            fontWeight: "700",
-            textAlign: "center",
-            marginBottom: 4,
-          }}
-        >
-          Google sign-in coming soon
-        </Text>
-        <Text
-          style={{
-            color: "#6B7280",
-            fontSize: 13,
-            textAlign: "center",
-          }}
-        >
-          For now, use email and password to access Schedova.
-        </Text>
-      </View>
-    </View>
+    </AppScreen>
   );
 }

@@ -1,5 +1,6 @@
 import { useMemo, useState } from "react";
 import { FlatList, Modal, Pressable, Text, View } from "react-native";
+import { useSafeAreaInsets } from "react-native-safe-area-context";
 import type { ThemeColors } from "./types";
 
 type Props = {
@@ -61,6 +62,7 @@ export function TimeDropdown({
   marginTop = 0,
   intervalMinutes = 30,
 }: Props) {
+  const insets = useSafeAreaInsets();
   const [open, setOpen] = useState(false);
 
   const timeOptions = useMemo(
@@ -122,7 +124,9 @@ export function TimeDropdown({
             flex: 1,
             backgroundColor: "rgba(0,0,0,0.45)",
             justifyContent: "center",
-            padding: 20,
+            paddingHorizontal: 20,
+            paddingTop: insets.top + 20,
+            paddingBottom: insets.bottom + 20,
           }}
         >
           <View

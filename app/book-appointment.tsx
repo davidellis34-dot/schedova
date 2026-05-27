@@ -2,8 +2,8 @@ import { useRouter } from "expo-router";
 import {
   Alert,
   Dimensions,
+  Platform,
   Pressable,
-  ScrollView,
   Switch,
   Text,
   TextInput,
@@ -23,9 +23,10 @@ import { SelectedServicesList } from "../components/booking/SelectedServicesList
 import { TimeDropdown } from "../components/booking/TimeDropdown";
 import type { ThemeColors } from "../components/booking/types";
 import { useBookAppointmentForm } from "../components/booking/useBookAppointmentForm";
+import { AppScreen } from "../components/layout/AppScreen";
 import { sendAppointmentSmsNonBlocking } from "../lib/appointmentSms";
 import { confirmDestructiveAction } from "../lib/confirmDestructiveAction";
-import { canUseFeature } from "../lib/featureAccess";
+import { canUseFeature, useFeatureAccess } from "../lib/featureAccess";
 import { cancelAppointmentReminder } from "../lib/localNotifications";
 import { supabase } from "../lib/supabase";
 import { useAppTheme } from "../lib/useAppTheme";
@@ -54,6 +55,7 @@ function textInputStyle(colors: ThemeColors) {
 export default function BookAppointmentScreen() {
   const router = useRouter();
   const theme = useAppTheme();
+  useFeatureAccess();
   const colors: ThemeColors = { ...FALLBACK_COLORS, ...(theme?.colors || {}) };
   const form = useBookAppointmentForm();
   const customScheduleAvailable = canUseFeature("customBusinessHours");
@@ -107,8 +109,9 @@ export default function BookAppointmentScreen() {
 
   const dropdownBoxStyle = {
     minHeight: 56,
+    width: "100%" as const,
     paddingHorizontal: 14,
-    paddingTop: 6,
+    paddingVertical: 6,
     backgroundColor: dropdownBackground,
     borderRadius: 14,
     justifyContent: "center" as const,
@@ -118,30 +121,34 @@ export default function BookAppointmentScreen() {
 
   return (
     <GestureHandlerRootView style={{ flex: 1 }}>
-      <ScrollView
+      <AppScreen
+        scroll
+        keyboardAware
+        backgroundColor={colors.background}
+        horizontalPadding={isTablet ? 24 : 16}
+        topPadding={isTablet ? 24 : 14}
+        bottomPadding={96}
+        androidBottomPadding={140}
+        keyboardDismissMode={Platform.OS === "ios" ? "interactive" : "none"}
         keyboardShouldPersistTaps="handled"
-        style={{ flex: 1, backgroundColor: colors.background }}
-        contentContainerStyle={{
-          padding: isTablet ? 24 : 16,
-          paddingBottom: 140,
-        }}
       >
-        <Text
-          style={{
-            color: colors.text,
-            fontSize: 30,
-            fontWeight: "900",
-            marginBottom: 6,
-          }}
-        >
-          {form.isEditMode ? "Edit Calendar Entry" : "Book Appointment"}
-        </Text>
+            <Text
+              style={{
+                color: colors.text,
+                fontSize: isTablet ? 32 : 28,
+                lineHeight: isTablet ? 38 : 34,
+                fontWeight: "900",
+                marginBottom: 6,
+              }}
+            >
+              {form.isEditMode ? "Edit Calendar Entry" : "Book Appointment"}
+            </Text>
 
-        <Text style={{ color: colors.mutedText, marginBottom: 22 }}>
-          {form.entryType === "appointment"
-            ? "Appointment details"
-            : blockTitleFor(form.entryType)}
-        </Text>
+            <Text style={{ color: colors.mutedText, marginBottom: 18 }}>
+              {form.entryType === "appointment"
+                ? "Appointment details"
+                : blockTitleFor(form.entryType)}
+            </Text>
 
         <EntryTypePicker
           value={form.entryType}
@@ -556,7 +563,7 @@ export default function BookAppointmentScreen() {
             Cancel
           </Text>
         </Pressable>
-      </ScrollView>
+      </AppScreen>
 
       <QuickClientModal
         visible={form.showQuickClient}

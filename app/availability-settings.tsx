@@ -1,8 +1,9 @@
 import { useRouter } from "expo-router";
 import { useEffect, useMemo, useState } from "react";
-import { Alert, Pressable, ScrollView, Switch, Text, View } from "react-native";
+import { Alert, Pressable, Switch, Text, View } from "react-native";
 import { Dropdown } from "react-native-element-dropdown";
-import { canUseFeature } from "../lib/featureAccess";
+import { AppScreen } from "../components/layout/AppScreen";
+import { canUseFeature, useFeatureAccess } from "../lib/featureAccess";
 import { supabase } from "../lib/supabase";
 import { useAppTheme } from "../lib/useAppTheme";
 
@@ -53,6 +54,7 @@ function defaultRules(): AvailabilityRule[] {
 export default function AvailabilitySettingsScreen() {
   const router = useRouter();
   const { colors } = useAppTheme();
+  useFeatureAccess();
   const customHoursAvailable = canUseFeature("customBusinessHours");
 
   const [rules, setRules] = useState<AvailabilityRule[]>(defaultRules());
@@ -204,10 +206,7 @@ export default function AvailabilitySettingsScreen() {
 
   if (!customHoursAvailable) {
     return (
-      <ScrollView
-        style={{ flex: 1, backgroundColor: colors.background }}
-        contentContainerStyle={{ padding: 20, paddingBottom: 40 }}
-      >
+      <AppScreen scroll backgroundColor={colors.background}>
         <Text
           style={{
             fontSize: 30,
@@ -248,7 +247,7 @@ export default function AvailabilitySettingsScreen() {
         >
           <Text style={{ color: "#FFFFFF", fontWeight: "900" }}>Back</Text>
         </Pressable>
-      </ScrollView>
+      </AppScreen>
     );
   }
 
@@ -299,9 +298,9 @@ export default function AvailabilitySettingsScreen() {
   }
 
   return (
-    <ScrollView
-      style={{ flex: 1, backgroundColor: colors.background }}
-      contentContainerStyle={{ padding: 20, paddingBottom: 40 }}
+    <AppScreen
+      scroll
+      backgroundColor={colors.background}
       keyboardShouldPersistTaps="handled"
       nestedScrollEnabled
     >
@@ -405,6 +404,6 @@ export default function AvailabilitySettingsScreen() {
           {saving ? "Saving..." : "Save Availability"}
         </Text>
       </Pressable>
-    </ScrollView>
+    </AppScreen>
   );
 }

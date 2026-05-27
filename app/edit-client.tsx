@@ -2,8 +2,6 @@ import { useLocalSearchParams, useRouter } from "expo-router";
 import { useCallback, useEffect, useRef, useState } from "react";
 import {
   Alert,
-  KeyboardAvoidingView,
-  Platform,
   Pressable,
   ScrollView,
   Switch,
@@ -12,6 +10,7 @@ import {
   View,
 } from "react-native";
 import { ClientTagPicker } from "../components/ClientTagPicker";
+import { AppScreen } from "../components/layout/AppScreen";
 import { normalizeClientTag, type ClientTag } from "../lib/clientTags";
 import { supabase } from "../lib/supabase";
 import { useAppTheme } from "../lib/useAppTheme";
@@ -173,18 +172,13 @@ export default function EditClientScreen() {
   }
 
   return (
-    <KeyboardAvoidingView
-      style={{ flex: 1, backgroundColor: colors.background }}
-      behavior={Platform.OS === "ios" ? "padding" : "height"}
+    <AppScreen
+      scroll
+      keyboardAware
+      ref={scrollRef}
+      backgroundColor={colors.background}
+      keyboardShouldPersistTaps="handled"
     >
-      <ScrollView
-        keyboardShouldPersistTaps="handled"
-        style={{
-          flex: 1,
-          backgroundColor: colors.background,
-          padding: 20,
-        }}
-      >
         <Text
           style={{
             fontSize: 30,
@@ -440,7 +434,6 @@ export default function EditClientScreen() {
             Delete Client
           </Text>
         </Pressable>
-      </ScrollView>
-    </KeyboardAvoidingView>
+    </AppScreen>
   );
 }

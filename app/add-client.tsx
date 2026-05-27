@@ -1,14 +1,20 @@
 import { useRouter } from "expo-router";
 import { useState } from "react";
-import { Alert, Pressable, ScrollView, Switch, Text, TextInput, View } from "react-native";
+import { Alert, Pressable, Switch, Text, TextInput, View } from "react-native";
 import { ClientTagPicker } from "../components/ClientTagPicker";
+import { AppScreen } from "../components/layout/AppScreen";
 import type { ClientTag } from "../lib/clientTags";
-import { canUseFeature, FREE_TIER_LIMITS } from "../lib/featureAccess";
+import {
+  canUseFeature,
+  FREE_TIER_LIMITS,
+  useFeatureAccess,
+} from "../lib/featureAccess";
 import { supabase } from "../lib/supabase";
 import { useAppTheme } from "../lib/useAppTheme";
 export default function AddClientScreen() {
   const router = useRouter();
   const { colors } = useAppTheme();
+  useFeatureAccess();
   const [name, setName] = useState("");
   const [phone, setPhone] = useState("");
   const [email, setEmail] = useState("");
@@ -83,13 +89,7 @@ export default function AddClientScreen() {
   }
 
   return (
-    <ScrollView
-      style={{
-        flex: 1,
-        backgroundColor: colors.card,
-        padding: 20,
-      }}
-    >
+    <AppScreen scroll keyboardAware backgroundColor={colors.card}>
       <Text
         style={{
           fontSize: 30,
@@ -275,6 +275,6 @@ export default function AddClientScreen() {
           Save Client
         </Text>
       </Pressable>
-    </ScrollView>
+    </AppScreen>
   );
 }

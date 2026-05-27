@@ -1,4 +1,15 @@
-import { Alert, Modal, Pressable, Text, TextInput, View } from "react-native";
+import {
+  Alert,
+  KeyboardAvoidingView,
+  Modal,
+  Platform,
+  Pressable,
+  ScrollView,
+  Text,
+  TextInput,
+  View,
+} from "react-native";
+import { useSafeAreaInsets } from "react-native-safe-area-context";
 import { supabase } from "../../lib/supabase";
 import type { Service, ThemeColors } from "./types";
 
@@ -41,6 +52,8 @@ export function QuickServiceModal({
   onCancel,
   onSaved,
 }: Props) {
+  const insets = useSafeAreaInsets();
+
   async function saveQuickService() {
     if (!userId) {
       Alert.alert("Login Required", "Please sign in to add a service.");
@@ -52,6 +65,16 @@ export function QuickServiceModal({
     const durationNumber = Number.isFinite(Number(duration))
       ? Number(duration)
       : 30;
+
+    if (priceNumber < 0) {
+      Alert.alert("Invalid Price", "Price must be zero or higher.");
+      return;
+    }
+
+    if (durationNumber <= 0) {
+      Alert.alert("Invalid Duration", "Duration must be greater than zero.");
+      return;
+    }
 
     const { data, error } = await supabase
       .from("services")
@@ -78,93 +101,106 @@ export function QuickServiceModal({
   }
 
   return (
-    <Modal visible={visible} transparent animationType="slide">
-      <View
-        style={{
-          flex: 1,
-          justifyContent: "center",
-          padding: 20,
-          backgroundColor: "rgba(0,0,0,0.35)",
-        }}
+    <Modal
+      visible={visible}
+      transparent
+      animationType="slide"
+      onRequestClose={onCancel}
+    >
+      <KeyboardAvoidingView
+        behavior={Platform.OS === "ios" ? "padding" : undefined}
+        style={{ flex: 1 }}
       >
-        <View
-          style={{
-            backgroundColor: colors.background,
-            borderRadius: 18,
-            padding: 20,
-            borderWidth: 1,
-            borderColor: colors.border,
+        <ScrollView
+          keyboardShouldPersistTaps="handled"
+          contentContainerStyle={{
+            flexGrow: 1,
+            justifyContent: "center",
+            paddingHorizontal: 20,
+            paddingTop: insets.top + 20,
+            paddingBottom: insets.bottom + 20,
+            backgroundColor: "rgba(0,0,0,0.35)",
           }}
         >
-          <Text
+          <View
             style={{
-              color: colors.text,
-              fontSize: 22,
-              fontWeight: "bold",
-              marginBottom: 16,
-            }}
-          >
-            Quick Add Service
-          </Text>
-
-          <TextInput
-            value={name}
-            onChangeText={onChangeName}
-            placeholder="Service name"
-            placeholderTextColor={colors.mutedText}
-            style={inputStyle(colors)}
-          />
-
-          <TextInput
-            value={price}
-            onChangeText={onChangePrice}
-            placeholder="Price"
-            placeholderTextColor={colors.mutedText}
-            keyboardType="numeric"
-            style={inputStyle(colors)}
-          />
-
-          <TextInput
-            value={duration}
-            onChangeText={onChangeDuration}
-            placeholder="Duration minutes"
-            placeholderTextColor={colors.mutedText}
-            keyboardType="numeric"
-            style={inputStyle(colors)}
-          />
-
-          <Pressable
-            onPress={saveQuickService}
-            style={{
-              backgroundColor: colors.primary,
-              padding: 14,
-              borderRadius: 12,
-              alignItems: "center",
-              marginBottom: 10,
-            }}
-          >
-            <Text style={{ color: "#FFFFFF", fontWeight: "bold" }}>
-              Save Service
-            </Text>
-          </Pressable>
-
-          <Pressable
-            onPress={onCancel}
-            style={{
-              backgroundColor: colors.card,
-              padding: 14,
-              borderRadius: 12,
-              alignItems: "center",
+              backgroundColor: colors.background,
+              borderRadius: 18,
+              padding: 20,
               borderWidth: 1,
               borderColor: colors.border,
             }}
           >
-            <Text style={{ color: colors.text, fontWeight: "bold" }}>
-              Cancel
+            <Text
+              style={{
+                color: colors.text,
+                fontSize: 22,
+                fontWeight: "bold",
+                marginBottom: 16,
+              }}
+            >
+              Quick Add Service
             </Text>
-          </Pressable>
-        </View>
-      </View>
+
+            <TextInput
+              value={name}
+              onChangeText={onChangeName}
+              placeholder="Service name"
+              placeholderTextColor={colors.mutedText}
+              style={inputStyle(colors)}
+            />
+
+            <TextInput
+              value={price}
+              onChangeText={onChangePrice}
+              placeholder="Price"
+              placeholderTextColor={colors.mutedText}
+              keyboardType="numeric"
+              style={inputStyle(colors)}
+            />
+
+            <TextInput
+              value={duration}
+              onChangeText={onChangeDuration}
+              placeholder="Duration minutes"
+              placeholderTextColor={colors.mutedText}
+              keyboardType="numeric"
+              style={inputStyle(colors)}
+            />
+
+            <Pressable
+              onPress={saveQuickService}
+              style={{
+                backgroundColor: colors.primary,
+                padding: 14,
+                borderRadius: 12,
+                alignItems: "center",
+                marginBottom: 10,
+              }}
+            >
+              <Text style={{ color: "#FFFFFF", fontWeight: "bold" }}>
+                Save Service
+              </Text>
+            </Pressable>
+
+            <Pressable
+              onPress={onCancel}
+              style={{
+                backgroundColor: colors.card,
+                padding: 14,
+                borderRadius: 12,
+                alignItems: "center",
+                borderWidth: 1,
+                borderColor: colors.border,
+              }}
+            >
+              <Text style={{ color: colors.text, fontWeight: "bold" }}>
+                Cancel
+              </Text>
+            </Pressable>
+          </View>
+        </ScrollView>
+      </KeyboardAvoidingView>
     </Modal>
   );
 }

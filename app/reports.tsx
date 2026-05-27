@@ -3,11 +3,12 @@ import { useFocusEffect, useRouter } from "expo-router";
 import * as Sharing from "expo-sharing";
 import { useCallback, useMemo, useState } from "react";
 import { Pressable, ScrollView, Text, View } from "react-native";
+import { AppScreen } from "../components/layout/AppScreen";
 import {
   getAppointmentServices,
   getAppointmentServiceTotal,
 } from "../lib/appointmentServices";
-import { canUseFeature } from "../lib/featureAccess";
+import { canUseFeature, useFeatureAccess } from "../lib/featureAccess";
 import { useAppTheme } from "../lib/useAppTheme";
 
 import { supabase } from "../lib/supabase";
@@ -30,6 +31,7 @@ const RANGES: {
 export default function ReportsScreen() {
   const router = useRouter();
   const { colors } = useAppTheme();
+  useFeatureAccess();
   const reportsAvailable = canUseFeature("reports");
   const [range, setRange] = useState<RangeKey>("today");
 
@@ -280,13 +282,7 @@ export default function ReportsScreen() {
 
   if (!reportsAvailable) {
     return (
-      <ScrollView
-        style={{
-          flex: 1,
-          backgroundColor: colors.background,
-          padding: 20,
-        }}
-      >
+      <AppScreen scroll backgroundColor={colors.background}>
         <Text
           style={{
             fontSize: 30,
@@ -327,18 +323,12 @@ export default function ReportsScreen() {
         >
           <Text style={{ color: "#FFFFFF", fontWeight: "900" }}>Back</Text>
         </Pressable>
-      </ScrollView>
+      </AppScreen>
     );
   }
 
   return (
-    <ScrollView
-      style={{
-        flex: 1,
-        backgroundColor: colors.background,
-        padding: 20,
-      }}
-    >
+    <AppScreen scroll backgroundColor={colors.background}>
       <Text
         style={{
           fontSize: 30,
@@ -550,6 +540,6 @@ export default function ReportsScreen() {
           View All Services
         </Text>
       </Pressable>
-    </ScrollView>
+    </AppScreen>
   );
 }

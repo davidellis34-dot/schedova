@@ -1,6 +1,7 @@
 import { useRouter } from "expo-router";
 import { useState } from "react";
-import { Alert, Pressable, Text, TextInput, View } from "react-native";
+import { Alert, Pressable, Text, TextInput } from "react-native";
+import { AppScreen } from "../components/layout/AppScreen";
 import { supabase } from "../lib/supabase";
 
 export default function BusinessSetup() {
@@ -39,7 +40,12 @@ export default function BusinessSetup() {
   }
 
   return (
-    <View style={{ flex: 1, padding: 24, backgroundColor: "#ffffff" }}>
+    <AppScreen
+      keyboardAware
+      backgroundColor="#ffffff"
+      horizontalPadding={24}
+      topPadding={24}
+    >
       <Text style={{ fontSize: 28, fontWeight: "bold", marginBottom: 24 }}>
         Set up your business
       </Text>
@@ -85,6 +91,6 @@ export default function BusinessSetup() {
           Save Business
         </Text>
       </Pressable>
-    </View>
+    </AppScreen>
   );
 }

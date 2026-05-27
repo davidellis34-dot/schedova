@@ -1,6 +1,7 @@
 import { useRouter } from "expo-router";
 import { useMemo, useState } from "react";
-import { Pressable, ScrollView, Text, View } from "react-native";
+import { Pressable, Text, View } from "react-native";
+import { AppScreen } from "../components/layout/AppScreen";
 
 const DAYS = ["Sun", "Mon", "Tue", "Wed", "Thu", "Fri", "Sat"];
 
@@ -31,7 +32,7 @@ export default function CalendarMonthScreen() {
   }
 
   return (
-    <ScrollView style={{ flex: 1, backgroundColor: "#ffffff", padding: 20 }}>
+    <AppScreen scroll backgroundColor="#ffffff">
       <Text
         style={{
           fontSize: 30,
@@ -148,7 +149,7 @@ export default function CalendarMonthScreen() {
       >
         Tap any date to return to the weekly calendar.
       </Text>
-    </ScrollView>
+    </AppScreen>
   );
 }
 

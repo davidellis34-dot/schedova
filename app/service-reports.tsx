@@ -1,12 +1,14 @@
 import { useFocusEffect } from "expo-router";
 import { useCallback, useMemo, useState } from "react";
-import { ScrollView, Text, View } from "react-native";
-import { canUseFeature } from "../lib/featureAccess";
+import { Text, View } from "react-native";
+import { AppScreen } from "../components/layout/AppScreen";
+import { canUseFeature, useFeatureAccess } from "../lib/featureAccess";
 import { supabase } from "../lib/supabase";
 import { useAppTheme } from "../lib/useAppTheme";
 export default function ServiceReportsScreen() {
   const [appointments, setAppointments] = useState<any[]>([]);
   const { colors } = useAppTheme();
+  useFeatureAccess();
   const [services, setServices] = useState<any[]>([]);
   const reportsAvailable = canUseFeature("reports");
 
@@ -90,13 +92,7 @@ export default function ServiceReportsScreen() {
 
   if (!reportsAvailable) {
     return (
-      <ScrollView
-        style={{
-          flex: 1,
-          backgroundColor: colors.background,
-          padding: 20,
-        }}
-      >
+      <AppScreen scroll backgroundColor={colors.background}>
         <Text
           style={{
             fontSize: 30,
@@ -124,18 +120,12 @@ export default function ServiceReportsScreen() {
             Service reports and revenue insights are Pro features.
           </Text>
         </View>
-      </ScrollView>
+      </AppScreen>
     );
   }
 
   return (
-    <ScrollView
-      style={{
-        flex: 1,
-        backgroundColor: colors.background,
-        padding: 20,
-      }}
-    >
+    <AppScreen scroll backgroundColor={colors.background}>
       <Text
         style={{
           fontSize: 30,
@@ -388,6 +378,6 @@ export default function ServiceReportsScreen() {
           </View>
         </View>
       ))}
-    </ScrollView>
+    </AppScreen>
   );
 }

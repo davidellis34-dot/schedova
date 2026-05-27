@@ -1,12 +1,17 @@
 import { useLocalSearchParams, useRouter } from "expo-router";
 import { useCallback, useEffect, useState } from "react";
-import { Pressable, ScrollView, Text, View } from "react-native";
+import { Pressable, Text, View } from "react-native";
+import { AppScreen } from "../components/layout/AppScreen";
 import {
   getAppointmentServices,
   getAppointmentServiceTotal,
 } from "../lib/appointmentServices";
 import { normalizeClientTag } from "../lib/clientTags";
-import { canUseFeature, FREE_TIER_LIMITS } from "../lib/featureAccess";
+import {
+  canUseFeature,
+  FREE_TIER_LIMITS,
+  useFeatureAccess,
+} from "../lib/featureAccess";
 import { supabase } from "../lib/supabase";
 import { useAppTheme } from "../lib/useAppTheme";
 
@@ -14,6 +19,7 @@ export default function ClientDetailsScreen() {
   const { clientId } = useLocalSearchParams();
   const router = useRouter();
   const { colors } = useAppTheme();
+  useFeatureAccess();
   const [client, setClient] = useState<any | null>(null);
   const [appointments, setAppointments] = useState<any[]>([]);
   const [services, setServices] = useState<any[]>([]);
@@ -137,9 +143,7 @@ export default function ClientDetailsScreen() {
   );
 
   return (
-    <ScrollView
-      style={{ flex: 1, backgroundColor: colors.background, padding: 20 }}
-    >
+    <AppScreen scroll backgroundColor={colors.background}>
       <Text style={{ fontSize: 30, fontWeight: "bold", color: colors.text }}>
         {client?.name || "Client"}
       </Text>
@@ -356,6 +360,6 @@ export default function ClientDetailsScreen() {
           </Text>
         </View>
       ) : null}
-    </ScrollView>
+    </AppScreen>
   );
 }

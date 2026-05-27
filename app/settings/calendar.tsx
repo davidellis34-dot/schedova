@@ -1,7 +1,8 @@
 import AsyncStorage from "@react-native-async-storage/async-storage";
-import { Picker } from "@react-native-picker/picker";
-import { ReactNode, useEffect, useState } from "react";
-import { Alert, Pressable, ScrollView, Text, View } from "react-native";
+import { useEffect, useState } from "react";
+import { Alert, Pressable, Text, View } from "react-native";
+import { AppSelectField } from "../../components/AppSelectField";
+import { AppScreen } from "../../components/layout/AppScreen";
 import { useAppTheme } from "../../lib/useAppTheme";
 
 export default function CalendarSettingsScreen() {
@@ -38,90 +39,52 @@ export default function CalendarSettingsScreen() {
   }
 
   const hourOptions = [
-    ["12 AM", "0"],
-    ["1 AM", "1"],
-    ["2 AM", "2"],
-    ["3 AM", "3"],
-    ["4 AM", "4"],
-    ["5 AM", "5"],
-    ["6 AM", "6"],
-    ["7 AM", "7"],
-    ["8 AM", "8"],
-    ["9 AM", "9"],
-    ["10 AM", "10"],
-    ["11 AM", "11"],
-    ["12 PM", "12"],
-    ["1 PM", "13"],
-    ["2 PM", "14"],
-    ["3 PM", "15"],
-    ["4 PM", "16"],
-    ["5 PM", "17"],
-    ["6 PM", "18"],
-    ["7 PM", "19"],
-    ["8 PM", "20"],
-    ["9 PM", "21"],
-    ["10 PM", "22"],
-    ["11 PM", "23"],
-    ["12 AM Next Day", "24"],
-    ["1 AM Next Day", "25"],
-    ["2 AM Next Day", "26"],
-    ["3 AM Next Day", "27"],
-    ["4 AM Next Day", "28"],
-    ["5 AM Next Day", "29"],
-    ["6 AM Next Day", "30"],
+    { label: "12 AM", value: "0" },
+    { label: "1 AM", value: "1" },
+    { label: "2 AM", value: "2" },
+    { label: "3 AM", value: "3" },
+    { label: "4 AM", value: "4" },
+    { label: "5 AM", value: "5" },
+    { label: "6 AM", value: "6" },
+    { label: "7 AM", value: "7" },
+    { label: "8 AM", value: "8" },
+    { label: "9 AM", value: "9" },
+    { label: "10 AM", value: "10" },
+    { label: "11 AM", value: "11" },
+    { label: "12 PM", value: "12" },
+    { label: "1 PM", value: "13" },
+    { label: "2 PM", value: "14" },
+    { label: "3 PM", value: "15" },
+    { label: "4 PM", value: "16" },
+    { label: "5 PM", value: "17" },
+    { label: "6 PM", value: "18" },
+    { label: "7 PM", value: "19" },
+    { label: "8 PM", value: "20" },
+    { label: "9 PM", value: "21" },
+    { label: "10 PM", value: "22" },
+    { label: "11 PM", value: "23" },
+    { label: "12 AM Next Day", value: "24" },
+    { label: "1 AM Next Day", value: "25" },
+    { label: "2 AM Next Day", value: "26" },
+    { label: "3 AM Next Day", value: "27" },
+    { label: "4 AM Next Day", value: "28" },
+    { label: "5 AM Next Day", value: "29" },
+    { label: "6 AM Next Day", value: "30" },
   ];
 
-  function PickerBox({
-    label,
-    value,
-    onChange,
-    children,
-  }: {
-    label: string;
-    value: string;
-    onChange: (value: string) => void;
-    children: ReactNode;
-  }) {
-    return (
-      <View style={{ marginBottom: 18 }}>
-        <Text
-          style={{ color: colors.text, fontWeight: "700", marginBottom: 8 }}
-        >
-          {label}
-        </Text>
+  const intervalOptions = [
+    { label: "15 minutes", value: "15" },
+    { label: "30 minutes", value: "30" },
+    { label: "60 minutes", value: "60" },
+  ];
 
-        <View
-          style={{
-            borderWidth: 1,
-            borderColor: colors.border,
-            borderRadius: 14,
-            backgroundColor: colors.card,
-            overflow: "hidden",
-            minHeight: 56,
-            justifyContent: "center",
-          }}
-        >
-          <Picker
-            selectedValue={value}
-            onValueChange={onChange}
-            dropdownIconColor={colors.text}
-            style={{
-              color: colors.text,
-              backgroundColor: colors.card,
-            }}
-          >
-            {children}
-          </Picker>
-        </View>
-      </View>
-    );
-  }
+  const timeFormatOptions = [
+    { label: "12-hour time, like 5:30 PM", value: "12" },
+    { label: "24-hour time, like 17:30", value: "24" },
+  ];
 
   return (
-    <ScrollView
-      style={{ flex: 1, backgroundColor: colors.background }}
-      contentContainerStyle={{ padding: 20, paddingBottom: 40 }}
-    >
+    <AppScreen scroll backgroundColor={colors.background}>
       <Text
         style={{
           fontSize: 30,
@@ -143,36 +106,37 @@ export default function CalendarSettingsScreen() {
           borderColor: colors.border,
         }}
       >
-        <PickerBox label="Start Time" value={startHour} onChange={setStartHour}>
-          {hourOptions.map(([label, value]) => (
-            <Picker.Item key={value} label={label} value={value} />
-          ))}
-        </PickerBox>
+        <AppSelectField
+          label="Start Time"
+          value={startHour}
+          options={hourOptions}
+          onChange={setStartHour}
+          colors={colors}
+        />
 
-        <PickerBox label="End Time" value={endHour} onChange={setEndHour}>
-          {hourOptions.map(([label, value]) => (
-            <Picker.Item key={value} label={label} value={value} />
-          ))}
-        </PickerBox>
+        <AppSelectField
+          label="End Time"
+          value={endHour}
+          options={hourOptions}
+          onChange={setEndHour}
+          colors={colors}
+        />
 
-        <PickerBox
+        <AppSelectField
           label="Time Interval"
           value={interval}
+          options={intervalOptions}
           onChange={setIntervalValue}
-        >
-          <Picker.Item label="15 minutes" value="15" />
-          <Picker.Item label="30 minutes" value="30" />
-          <Picker.Item label="60 minutes" value="60" />
-        </PickerBox>
+          colors={colors}
+        />
 
-        <PickerBox
+        <AppSelectField
           label="Time Format"
           value={timeFormat}
+          options={timeFormatOptions}
           onChange={setTimeFormat}
-        >
-          <Picker.Item label="12-hour time, like 5:30 PM" value="12" />
-          <Picker.Item label="24-hour time, like 17:30" value="24" />
-        </PickerBox>
+          colors={colors}
+        />
 
         <Pressable
           onPress={saveSettings}
@@ -189,6 +153,6 @@ export default function CalendarSettingsScreen() {
           </Text>
         </Pressable>
       </View>
-    </ScrollView>
+    </AppScreen>
   );
 }

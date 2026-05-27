@@ -1,9 +1,18 @@
 import { useFocusEffect, useLocalSearchParams, useRouter } from "expo-router";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
-import { Alert, Pressable, ScrollView, Text, View } from "react-native";
+import {
+  Alert,
+  Platform,
+  Pressable,
+  ScrollView,
+  Text,
+  View,
+} from "react-native";
+import { useSafeAreaInsets } from "react-native-safe-area-context";
+import { AppScreen } from "../components/layout/AppScreen";
 import { confirmDestructiveAction } from "../lib/confirmDestructiveAction";
 import { getCalendarPreferences } from "../lib/calendarPreferences";
-import { canUseFeature } from "../lib/featureAccess";
+import { canUseFeature, useFeatureAccess } from "../lib/featureAccess";
 import { cancelAppointmentReminder } from "../lib/localNotifications";
 import { supabase } from "../lib/supabase";
 import { useAppTheme } from "../lib/useAppTheme";
@@ -48,14 +57,6 @@ function toDateOnly(date: Date) {
     2,
     "0",
   )}-${String(date.getDate()).padStart(2, "0")}`;
-}
-
-function isValidInterval(value: number): value is CalendarIntervalMinutes {
-  return value === 15 || value === 30 || value === 60;
-}
-
-function isValidTimeFormat(value: unknown): value is TimeFormat {
-  return value === "12h" || value === "24h";
 }
 
 function normalizeTimeText(value: any) {
@@ -193,6 +194,8 @@ function hourToTimeText(hour: number) {
 export default function CalendarView() {
   const router = useRouter();
   const { colors } = useAppTheme();
+  useFeatureAccess();
+  const insets = useSafeAreaInsets();
   const customScheduleAvailable = canUseFeature("customBusinessHours");
   const { selectedDate, selectedTime } = useLocalSearchParams();
 
@@ -234,10 +237,13 @@ export default function CalendarView() {
 
   const parsedSelectedHour =
     typeof selectedTime === "string" ? Number(selectedTime.slice(0, 2)) : NaN;
+  const shouldAutoScrollToSelectedTime =
+    typeof selectedTime === "string" && selectedTime.length >= 2;
 
   const scrollHour = Number.isFinite(parsedSelectedHour)
     ? parsedSelectedHour
     : new Date().getHours();
+  const selectButtonBottom = Platform.OS === "ios" ? insets.bottom + 24 : 24;
 
   const getStatusColor = (status?: string) => {
     switch (status) {
@@ -511,36 +517,43 @@ export default function CalendarView() {
     });
   }
 
-  function scrollToTodayAndTime() {
+  function scrollToTodayAndTime(animated = false) {
     const dayY = dayLayouts.current[todayKey] || 0;
     const firstCalendarHour = 7;
     const timeOffset = Math.max((scrollHour - firstCalendarHour) * 85 - 220, 0);
 
     scrollRef.current?.scrollTo({
       y: dayY + timeOffset,
-      animated: true,
+      animated,
     });
   }
 
   return (
     <View style={{ flex: 1, backgroundColor: colors.background }}>
-      <ScrollView
+      <AppScreen
+        scroll
         ref={scrollRef}
+        backgroundColor={colors.background}
+        horizontalPadding={10}
+        topPadding={10}
+        bottomPadding={96}
+        androidBottomPadding={10}
         onContentSizeChange={() => {
           if (hasAutoScrolled.current) return;
 
           hasAutoScrolled.current = true;
 
+          if (!shouldAutoScrollToSelectedTime) return;
+
           setTimeout(() => {
-            scrollToTodayAndTime();
-          }, 150);
+            scrollToTodayAndTime(false);
+          }, 0);
         }}
         style={{
           flex: 1,
           backgroundColor: colors.background,
         }}
         contentContainerStyle={{
-          padding: 10,
           marginBottom: 6,
           borderRadius: 10,
         }}
@@ -1040,7 +1053,7 @@ export default function CalendarView() {
             </View>
           );
         })}
-      </ScrollView>
+      </AppScreen>
 
       <Pressable
         onPress={() => {
@@ -1050,7 +1063,7 @@ export default function CalendarView() {
         style={{
           position: "absolute",
           right: 20,
-          bottom: 24,
+          bottom: selectButtonBottom,
           backgroundColor: selectMode ? "#991B1B" : colors.primary,
           paddingVertical: 14,
           paddingHorizontal: 18,

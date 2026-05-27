@@ -1,4 +1,4 @@
-import { useFocusEffect, useRouter } from "expo-router";
+import { useFocusEffect } from "expo-router";
 import { useCallback, useRef, useState } from "react";
 import {
   Alert,
@@ -8,18 +8,22 @@ import {
   TextInput,
   View,
 } from "react-native";
+import { AppScreen } from "../components/layout/AppScreen";
 import { confirmDestructiveAction } from "../lib/confirmDestructiveAction";
-import { canUseFeature, FREE_TIER_LIMITS } from "../lib/featureAccess";
+import {
+  canUseFeature,
+  FREE_TIER_LIMITS,
+  useFeatureAccess,
+} from "../lib/featureAccess";
 import { supabase } from "../lib/supabase";
 import { useAppTheme } from "../lib/useAppTheme";
 export default function AddServiceScreen() {
+  useFeatureAccess();
   const [successMessage, setSuccessMessage] = useState("");
   const [name, setName] = useState("");
   const [price, setPrice] = useState("");
   const [duration, setDuration] = useState("");
   const [colorHex, setColorHex] = useState("#0F766E");
-  const router = useRouter();
-  const [userId, setUserId] = useState("");
   const { colors } = useAppTheme();
   const serviceColors = [
     "#0F766E",
@@ -54,8 +58,23 @@ export default function AddServiceScreen() {
       return;
     }
 
-    if (!name || !price || !duration) {
+    const trimmedName = name.trim();
+
+    if (!trimmedName || !price || !duration) {
       Alert.alert("Missing Info", "Please fill out all fields.");
+      return;
+    }
+
+    const priceNumber = Number(price);
+    const durationNumber = Number(duration);
+
+    if (!Number.isFinite(priceNumber) || priceNumber < 0) {
+      Alert.alert("Invalid Price", "Price must be zero or higher.");
+      return;
+    }
+
+    if (!Number.isFinite(durationNumber) || durationNumber <= 0) {
+      Alert.alert("Invalid Duration", "Duration must be greater than zero.");
       return;
     }
 
@@ -77,11 +96,9 @@ export default function AddServiceScreen() {
       const response = await supabase
         .from("services")
         .update({
-          name: name,
-          price: Number.isFinite(Number(price)) ? Number(price) : 0,
-          duration_minutes: Number.isFinite(Number(duration))
-            ? Number(duration)
-            : 30,
+          name: trimmedName,
+          price: priceNumber,
+          duration_minutes: durationNumber,
           color_hex: colorHex,
         })
         .eq("id", editingServiceId)
@@ -91,11 +108,9 @@ export default function AddServiceScreen() {
     } else {
       const response = await supabase.from("services").insert({
         user_id: userId,
-        name: name,
-        price: Number.isFinite(Number(price)) ? Number(price) : 0,
-        duration_minutes: Number.isFinite(Number(duration))
-          ? Number(duration)
-          : 30,
+        name: trimmedName,
+        price: priceNumber,
+        duration_minutes: durationNumber,
         color_hex: colorHex,
       });
 
@@ -171,9 +186,14 @@ export default function AddServiceScreen() {
     });
   }
   return (
-    <ScrollView
+    <AppScreen
+      scroll
+      keyboardAware
       ref={scrollRef}
-      style={{ flex: 1, backgroundColor: colors.background, padding: 24 }}
+      backgroundColor={colors.background}
+      horizontalPadding={24}
+      topPadding={24}
+      bottomPadding={24}
     >
       <Text
         style={{
@@ -378,6 +398,6 @@ export default function AddServiceScreen() {
           </Pressable>
         </View>
       ))}
-    </ScrollView>
+    </AppScreen>
   );
 }

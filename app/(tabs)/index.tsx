@@ -1,17 +1,16 @@
 import { useRouter } from "expo-router";
-import { Pressable, Text, View } from "react-native";
+import { Pressable, Text } from "react-native";
+import { AppScreen } from "../../components/layout/AppScreen";
 
 export default function HomeTab() {
   const router = useRouter();
 
   return (
-    <View
-      style={{
-        flex: 1,
-        backgroundColor: "#ffffff",
-        padding: 24,
-        justifyContent: "center",
-      }}
+    <AppScreen
+      backgroundColor="#ffffff"
+      horizontalPadding={24}
+      topPadding={24}
+      contentContainerStyle={{ justifyContent: "center" }}
     >
       <Text
         style={{
@@ -32,7 +31,7 @@ export default function HomeTab() {
           marginBottom: 30,
         }}
       >
-        Smart scheduling for service businesses.
+        Book clients, manage services, and keep your day organized.
       </Text>
 
       <Pressable
@@ -48,6 +47,6 @@ export default function HomeTab() {
           Open Dashboard
         </Text>
       </Pressable>
-    </View>
+    </AppScreen>
   );
 }

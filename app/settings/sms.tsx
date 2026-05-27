@@ -1,7 +1,8 @@
 import { useFocusEffect } from "expo-router";
 import { useCallback, useState } from "react";
-import { Alert, Pressable, ScrollView, Switch, Text, View } from "react-native";
-import { canUseFeature } from "../../lib/featureAccess";
+import { Alert, Pressable, Switch, Text, View } from "react-native";
+import { AppScreen } from "../../components/layout/AppScreen";
+import { canUseFeature, useFeatureAccess } from "../../lib/featureAccess";
 import { supabase } from "../../lib/supabase";
 import { useAppTheme } from "../../lib/useAppTheme";
 
@@ -25,6 +26,7 @@ const DEFAULT_SMS_SETTINGS: SmsSettings = {
 
 export default function SmsSettingsScreen() {
   const { colors } = useAppTheme();
+  useFeatureAccess();
   const [loading, setLoading] = useState(true);
   const [saving, setSaving] = useState(false);
   const [isPaid, setIsPaid] = useState(false);
@@ -185,10 +187,7 @@ export default function SmsSettingsScreen() {
   }
 
   return (
-    <ScrollView
-      style={{ flex: 1, backgroundColor: colors.background }}
-      contentContainerStyle={{ padding: 20, paddingBottom: 40 }}
-    >
+    <AppScreen scroll backgroundColor={colors.background}>
       <Text
         style={{
           color: colors.text,
@@ -294,6 +293,6 @@ export default function SmsSettingsScreen() {
           {saving ? "Saving..." : "Save SMS Settings"}
         </Text>
       </Pressable>
-    </ScrollView>
+    </AppScreen>
   );
 }

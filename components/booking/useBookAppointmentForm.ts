@@ -8,7 +8,11 @@ import {
 } from "../../lib/appointmentServices";
 import { sendAppointmentSmsNonBlocking } from "../../lib/appointmentSms";
 import { getCalendarPreferences } from "../../lib/calendarPreferences";
-import { canUseFeature, FREE_TIER_LIMITS } from "../../lib/featureAccess";
+import {
+  canUseFeature,
+  FREE_TIER_LIMITS,
+  useFeatureAccess,
+} from "../../lib/featureAccess";
 import { scheduleAppointmentReminder } from "../../lib/localNotifications";
 import { supabase } from "../../lib/supabase";
 import {
@@ -282,6 +286,7 @@ function routeParam(value: string | string[] | undefined) {
 export function useBookAppointmentForm() {
   const router = useRouter();
   const params = useLocalSearchParams();
+  useFeatureAccess();
 
   const appointmentId = routeParam(params.appointmentId);
   const blockId = routeParam(params.blockId);
@@ -436,6 +441,106 @@ export function useBookAppointmentForm() {
   );
 
   useEffect(() => {
+    if (entryType !== "appointment") return;
+    if (endTimeManuallyChanged) return;
+
+    setEndTime(calculateEndTime(startTime, totalDuration || calendarIntervalMinutes));
+  }, [
+    entryType,
+    startTime,
+    totalDuration,
+    endTimeManuallyChanged,
+    calendarIntervalMinutes,
+  ]);
+
+  useEffect(() => {
+    if (repeatType === "none") return;
+
+    setRepeatUntil(
+      getDefaultRepeatUntil(cleanDateOnly(appointmentDate), repeatType),
+    );
+  }, [appointmentDate, repeatType]);
+
+  useEffect(() => {
+    if (entryType === "appointment") return;
+    if (allDay) return;
+
+    setEndTime(addMinutesToTime(startTime, calendarIntervalMinutes));
+  }, [entryType, allDay, startTime, calendarIntervalMinutes]);
+
+  const loadBlockForEdit = useCallback(async (id: string) => {
+    const { data, error } = await supabase
+      .from("blocked_times")
+      .select("*")
+      .eq("id", id)
+      .single();
+
+    if (error || !data) {
+      Alert.alert("Error", error?.message || "Calendar entry not found.");
+      return;
+    }
+
+    const cleanStart = toDisplayTime(data.start_time, "09:00");
+    const cleanEnd = toDisplayTime(data.end_time, "09:30");
+    const isAllDayBlock =
+      String(data.start_time).startsWith("00:00") &&
+      String(data.end_time).startsWith("23:45");
+
+    setEntryType(normalizeEntryType(data.block_type));
+    setSelectedClient("");
+    setExistingAppointmentClientId("");
+    setExistingAppointmentClientName("");
+    setSelectedServices([]);
+    setAppointmentNotes("");
+    setFinalPrice("");
+    setAppointmentDate(cleanDateOnly(data.block_date));
+    setStartTime(cleanStart);
+    setEndTime(cleanEnd);
+    setTitle(data.title || "");
+    setAllDay(isAllDayBlock);
+  }, []);
+
+  const loadAppointmentForEdit = useCallback(async (id: string) => {
+    const { data, error } = await supabase
+      .from("appointments")
+      .select("*")
+      .eq("id", id)
+      .single();
+
+    if (error || !data) {
+      Alert.alert("Error", error?.message || "Appointment not found.");
+      return;
+    }
+
+    const matchedServices = getAppointmentServices(data, services);
+
+    const clientId = normalizeId(data.client_id);
+    const matchedClient = clients.find(
+      (client) => normalizeId(client.id) === clientId,
+    );
+
+    setEntryType("appointment");
+    setSelectedClient(matchedClient ? normalizeId(matchedClient.id) : "");
+    setExistingAppointmentClientId(clientId);
+    setExistingAppointmentClientName(data.client_name || "");
+    setSelectedServices(matchedServices);
+    setTitle("");
+    setAppointmentDate(cleanDateOnly(data.appointment_date));
+    setStartTime(toDisplayTime(data.appointment_time, "09:00"));
+    setEndTime(toDisplayTime(data.end_time || data.appointment_time, "09:30"));
+    setEndTimeManuallyChanged(true);
+    setAllDay(false);
+    setRepeatType("none");
+    setRepeatUntil(cleanDateOnly(data.appointment_date));
+    setAppointmentNotes(data.appointment_notes || "");
+    setFinalPrice(
+      data.final_price !== null && data.final_price !== undefined
+        ? String(data.final_price)
+        : "",
+    );
+  }, [clients, services]);
+
+  useEffect(() => {
     if (loading || editLoaded) return;
 
     if (appointmentId) {
@@ -474,107 +579,9 @@ export function useBookAppointmentForm() {
     appointmentDateParam,
     appointmentTimeParam,
     calendarIntervalMinutes,
+    loadAppointmentForEdit,
+    loadBlockForEdit,
   ]);
-
-  useEffect(() => {
-    if (entryType !== "appointment") return;
-    if (endTimeManuallyChanged) return;
-
-    setEndTime(calculateEndTime(startTime, totalDuration || calendarIntervalMinutes));
-  }, [
-    entryType,
-    startTime,
-    totalDuration,
-    endTimeManuallyChanged,
-    calendarIntervalMinutes,
-  ]);
-
-  useEffect(() => {
-    if (repeatType === "none") return;
-
-    setRepeatUntil(
-      getDefaultRepeatUntil(cleanDateOnly(appointmentDate), repeatType),
-    );
-  }, [appointmentDate, repeatType]);
-
-  useEffect(() => {
-    if (entryType === "appointment") return;
-    if (allDay) return;
-
-    setEndTime(addMinutesToTime(startTime, calendarIntervalMinutes));
-  }, [entryType, allDay, startTime, calendarIntervalMinutes]);
-
-  async function loadBlockForEdit(id: string) {
-    const { data, error } = await supabase
-      .from("blocked_times")
-      .select("*")
-      .eq("id", id)
-      .single();
-
-    if (error || !data) {
-      Alert.alert("Error", error?.message || "Calendar entry not found.");
-      return;
-    }
-
-    const cleanStart = toDisplayTime(data.start_time, "09:00");
-    const cleanEnd = toDisplayTime(data.end_time, "09:30");
-    const isAllDayBlock =
-      String(data.start_time).startsWith("00:00") &&
-      String(data.end_time).startsWith("23:45");
-
-    setEntryType(normalizeEntryType(data.block_type));
-    setSelectedClient("");
-    setExistingAppointmentClientId("");
-    setExistingAppointmentClientName("");
-    setSelectedServices([]);
-    setAppointmentNotes("");
-    setFinalPrice("");
-    setAppointmentDate(cleanDateOnly(data.block_date));
-    setStartTime(cleanStart);
-    setEndTime(cleanEnd);
-    setTitle(data.title || "");
-    setAllDay(isAllDayBlock);
-  }
-
-  async function loadAppointmentForEdit(id: string) {
-    const { data, error } = await supabase
-      .from("appointments")
-      .select("*")
-      .eq("id", id)
-      .single();
-
-    if (error || !data) {
-      Alert.alert("Error", error?.message || "Appointment not found.");
-      return;
-    }
-
-    const matchedServices = getAppointmentServices(data, services);
-
-    const clientId = normalizeId(data.client_id);
-    const matchedClient = clients.find(
-      (client) => normalizeId(client.id) === clientId,
-    );
-
-    setEntryType("appointment");
-    setSelectedClient(matchedClient ? normalizeId(matchedClient.id) : "");
-    setExistingAppointmentClientId(clientId);
-    setExistingAppointmentClientName(data.client_name || "");
-    setSelectedServices(matchedServices);
-    setTitle("");
-    setAppointmentDate(cleanDateOnly(data.appointment_date));
-    setStartTime(toDisplayTime(data.appointment_time, "09:00"));
-    setEndTime(toDisplayTime(data.end_time || data.appointment_time, "09:30"));
-    setEndTimeManuallyChanged(true);
-    setAllDay(false);
-    setRepeatType("none");
-    setRepeatUntil(cleanDateOnly(data.appointment_date));
-    setAppointmentNotes(data.appointment_notes || "");
-    setFinalPrice(
-      data.final_price !== null && data.final_price !== undefined
-        ? String(data.final_price)
-        : "",
-    );
-  }
 
   function addServiceToAppointment(service: Service) {
     const safeService = toSafeService(service);
@@ -685,13 +692,23 @@ export function useBookAppointmentForm() {
     const priceNumber = Number(newServicePrice);
     const durationNumber = Number(newServiceDuration);
 
+    if (!Number.isFinite(priceNumber) || priceNumber < 0) {
+      Alert.alert("Invalid Price", "Price must be zero or higher.");
+      return;
+    }
+
+    if (!Number.isFinite(durationNumber) || durationNumber <= 0) {
+      Alert.alert("Invalid Duration", "Duration must be greater than zero.");
+      return;
+    }
+
     const { data, error } = await supabase
       .from("services")
       .insert({
         user_id: currentUserId,
         name: newServiceName.trim(),
-        price: Number.isFinite(priceNumber) ? priceNumber : 0,
-        duration_minutes: Number.isFinite(durationNumber) ? durationNumber : 30,
+        price: priceNumber,
+        duration_minutes: durationNumber,
       })
       .select("*")
       .single();
@@ -763,6 +780,8 @@ export function useBookAppointmentForm() {
   }
 
   function logSaveContext(label: string, extra: Record<string, unknown> = {}) {
+    if (!__DEV__) return;
+
     console.log(`BOOKING SAVE ${label}:`, getSaveDebugContext(extra));
   }
 

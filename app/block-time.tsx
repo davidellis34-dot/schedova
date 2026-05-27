@@ -1,16 +1,83 @@
-import { Picker } from "@react-native-picker/picker";
 import { useRouter } from "expo-router";
 import { useState } from "react";
 import {
   Alert,
   Pressable,
-  ScrollView,
   Text,
   TextInput,
   View,
 } from "react-native";
-import { canUseFeature } from "../lib/featureAccess";
+import { AppSelectField } from "../components/AppSelectField";
+import { AppScreen } from "../components/layout/AppScreen";
+import { canUseFeature, useFeatureAccess } from "../lib/featureAccess";
 import { supabase } from "../lib/supabase";
+
+const BLOCK_COLORS = {
+  background: "#ffffff",
+  card: "#ffffff",
+  text: "#111111",
+  mutedText: "#666666",
+  border: "#D1D5DB",
+  primary: "#0F766E",
+};
+
+const BLOCK_TYPE_OPTIONS = [
+  { label: "Personal", value: "personal" },
+  { label: "Vacation", value: "vacation" },
+  { label: "Lunch", value: "lunch" },
+  { label: "Closed", value: "closed" },
+];
+
+const TIME_OPTIONS = [
+  "00:00",
+  "00:30",
+  "01:00",
+  "01:30",
+  "02:00",
+  "02:30",
+  "03:00",
+  "03:30",
+  "04:00",
+  "04:30",
+  "05:00",
+  "05:30",
+  "06:00",
+  "06:30",
+  "07:00",
+  "07:30",
+  "08:00",
+  "08:30",
+  "09:00",
+  "09:30",
+  "10:00",
+  "10:30",
+  "11:00",
+  "11:30",
+  "12:00",
+  "12:30",
+  "13:00",
+  "13:30",
+  "14:00",
+  "14:30",
+  "15:00",
+  "15:30",
+  "16:00",
+  "16:30",
+  "17:00",
+  "17:30",
+  "18:00",
+  "18:30",
+  "19:00",
+  "19:30",
+  "20:00",
+  "20:30",
+  "21:00",
+  "21:30",
+  "22:00",
+  "22:30",
+  "23:00",
+  "23:30",
+].map((time) => ({ label: time, value: time }));
 
 function timeToMinutes(time: string) {
   const [hours, minutes] = String(time || "00:00")
@@ -24,6 +91,7 @@ function timeToMinutes(time: string) {
 
 export default function BlockTimeScreen() {
   const router = useRouter();
+  useFeatureAccess();
   const customScheduleAvailable = canUseFeature("customBusinessHours");
 
   const [title, setTitle] = useState("");
@@ -121,7 +189,7 @@ export default function BlockTimeScreen() {
 
   if (!customScheduleAvailable) {
     return (
-      <ScrollView style={{ flex: 1, backgroundColor: "#ffffff", padding: 20 }}>
+      <AppScreen scroll backgroundColor="#ffffff">
         <Text
           style={{
             fontSize: 30,
@@ -164,12 +232,12 @@ export default function BlockTimeScreen() {
             Back
           </Text>
         </Pressable>
-      </ScrollView>
+      </AppScreen>
     );
   }
 
   return (
-    <ScrollView style={{ flex: 1, backgroundColor: "#ffffff", padding: 20 }}>
+    <AppScreen scroll keyboardAware backgroundColor="#ffffff">
       <Text
         style={{
           fontSize: 30,
@@ -217,36 +285,17 @@ export default function BlockTimeScreen() {
         }}
       />
 
-      <Text style={{ color: "#111111", fontWeight: "bold", marginBottom: 8 }}>
-        Start Time
-      </Text>
-      <TimePicker value={startTime} onChange={setStartTime} />
+      <TimePicker label="Start Time" value={startTime} onChange={setStartTime} />
 
-      <Text style={{ color: "#111111", fontWeight: "bold", marginBottom: 8 }}>
-        End Time
-      </Text>
-      <TimePicker value={endTime} onChange={setEndTime} />
+      <TimePicker label="End Time" value={endTime} onChange={setEndTime} />
 
-      <Text style={{ color: "#111111", fontWeight: "bold", marginBottom: 8 }}>
-        Type
-      </Text>
-      <View
-        style={{
-          borderWidth: 1,
-          borderColor: "#D1D5DB",
-          borderRadius: 12,
-          backgroundColor: "#ffffff",
-          overflow: "hidden",
-          marginBottom: 16,
-        }}
-      >
-        <Picker selectedValue={blockType} onValueChange={setBlockType}>
-          <Picker.Item label="Personal" value="personal" />
-          <Picker.Item label="Vacation" value="vacation" />
-          <Picker.Item label="Lunch" value="lunch" />
-          <Picker.Item label="Closed" value="closed" />
-        </Picker>
-      </View>
+      <AppSelectField
+        label="Type"
+        value={blockType}
+        options={BLOCK_TYPE_OPTIONS}
+        onChange={setBlockType}
+        colors={BLOCK_COLORS}
+      />
 
       <Text style={{ color: "#111111", fontWeight: "bold", marginBottom: 8 }}>
         Notes
@@ -283,84 +332,26 @@ export default function BlockTimeScreen() {
           Save Blocked Time
         </Text>
       </Pressable>
-    </ScrollView>
+    </AppScreen>
   );
 }
 
 function TimePicker({
+  label,
   value,
   onChange,
 }: {
+  label: string;
   value: string;
   onChange: (value: string) => void;
 }) {
-  const times = [
-    "00:00",
-    "00:30",
-    "01:00",
-    "01:30",
-    "02:00",
-    "02:30",
-    "03:00",
-    "03:30",
-    "04:00",
-    "04:30",
-    "05:00",
-    "05:30",
-    "06:00",
-    "06:30",
-    "07:00",
-    "07:30",
-    "08:00",
-    "08:30",
-    "09:00",
-    "09:30",
-    "10:00",
-    "10:30",
-    "11:00",
-    "11:30",
-    "12:00",
-    "12:30",
-    "13:00",
-    "13:30",
-    "14:00",
-    "14:30",
-    "15:00",
-    "15:30",
-    "16:00",
-    "16:30",
-    "17:00",
-    "17:30",
-    "18:00",
-    "18:30",
-    "19:00",
-    "19:30",
-    "20:00",
-    "20:30",
-    "21:00",
-    "21:30",
-    "22:00",
-    "22:30",
-    "23:00",
-    "23:30",
-  ];
-
   return (
-    <View
-      style={{
-        borderWidth: 1,
-        borderColor: "#D1D5DB",
-        borderRadius: 12,
-        backgroundColor: "#ffffff",
-        overflow: "hidden",
-        marginBottom: 16,
-      }}
-    >
-      <Picker selectedValue={value} onValueChange={onChange}>
-        {times.map((time) => (
-          <Picker.Item key={time} label={time} value={time} />
-        ))}
-      </Picker>
-    </View>
+    <AppSelectField
+      label={label}
+      value={value}
+      options={TIME_OPTIONS}
+      onChange={onChange}
+      colors={BLOCK_COLORS}
+    />
   );
 }
