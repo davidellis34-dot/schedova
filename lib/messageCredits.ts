@@ -14,6 +14,7 @@ export const MESSAGE_PACK_CREDITS: Record<string, number> = {
 };
 
 const EXPECTED_MESSAGE_PACK_IDS = Object.keys(MESSAGE_PACK_CREDITS);
+type MessagePackId = keyof typeof MESSAGE_PACK_CREDITS;
 const REVENUECAT_ANDROID_API_KEY =
   process.env.EXPO_PUBLIC_REVENUECAT_ANDROID_API_KEY ||
   "goog_XvtXUmgyBINZuvwhTvTzefmPClJ";
@@ -35,6 +36,20 @@ export type MessageCreditPurchaseResult = {
   creditsAdded: number;
   creditsRemaining: number;
   purchaseCreated: boolean;
+};
+
+export type AndroidMessagePackDebug = {
+  defaultOfferingLoaded: boolean;
+  packageIdentifiers: string[];
+  storeProductIdentifiers: string[];
+  foundMessagePacks: Record<MessagePackId, boolean>;
+  fetchError: string | null;
+  platform: string;
+  appOwnership: string;
+  supported: boolean;
+  supportReason: string | null;
+  currentOfferingIdentifier: string | null;
+  offeringIdentifiers: string[];
 };
 
 let purchasesModulePromise: Promise<PurchasesModule> | null = null;
@@ -79,6 +94,31 @@ export function isAndroidMessagePacksSupported() {
 
 export function shouldShowAndroidMessagePackArea() {
   return Platform.OS === "android";
+}
+
+export function createAndroidMessagePackDebug(
+  overrides: Partial<AndroidMessagePackDebug> = {},
+): AndroidMessagePackDebug {
+  const support = getAndroidMessagePackSupportStatus();
+
+  return {
+    defaultOfferingLoaded: false,
+    packageIdentifiers: [],
+    storeProductIdentifiers: [],
+    foundMessagePacks: {
+      message_pack_100: false,
+      message_pack_250: false,
+      message_pack_500: false,
+    },
+    fetchError: null,
+    platform: String(support.platform || Platform.OS),
+    appOwnership: String(support.appOwnership || "unknown"),
+    supported: support.supported,
+    supportReason: support.reason,
+    currentOfferingIdentifier: null,
+    offeringIdentifiers: [],
+    ...overrides,
+  };
 }
 
 function normalizeIdentifier(value: unknown) {
@@ -160,6 +200,21 @@ function logRevenueCatPackages(label: string, packages: PurchasesPackage[]) {
   );
 }
 
+function getErrorMessage(error: unknown) {
+  if (error instanceof Error) return error.message;
+
+  if (error && typeof error === "object" && "message" in error) {
+    const message = (error as { message?: unknown }).message;
+    if (typeof message === "string" && message.trim()) return message;
+  }
+
+  try {
+    return JSON.stringify(error);
+  } catch {
+    return String(error);
+  }
+}
+
 async function getPurchasesModule() {
   const support = getAndroidMessagePackSupportStatus();
 
@@ -234,105 +289,167 @@ export async function fetchMessageCredits() {
   return Number(data?.credits_remaining || 0);
 }
 
-export async function fetchAndroidMessagePacks() {
+export async function fetchAndroidMessagePackOfferings() {
   const support = getAndroidMessagePackSupportStatus();
+  let debug = createAndroidMessagePackDebug();
 
   if (!support.supported) {
     if (__DEV__) {
       console.log("Skipping RevenueCat message pack fetch", support);
     }
 
-    return [] satisfies AndroidMessagePack[];
+    return {
+      packs: [] satisfies AndroidMessagePack[],
+      debug,
+    };
   }
 
-  const userId = await getSignedInUserId();
-  const Purchases = await configureAndroidRevenueCat(userId);
-  const offerings = await Purchases.getOfferings();
-  const defaultOffering = offerings.all[REVENUECAT_DEFAULT_OFFERING_ID];
+  try {
+    const userId = await getSignedInUserId();
+    const Purchases = await configureAndroidRevenueCat(userId);
+    const offerings = await Purchases.getOfferings();
+    const defaultOffering = offerings.all[REVENUECAT_DEFAULT_OFFERING_ID];
 
-  if (!defaultOffering) {
-    if (__DEV__) {
-      console.log("RevenueCat default offering missing", {
-        currentOfferingIdentifier: offerings.current?.identifier || null,
-        allOfferingIdentifiers: Object.keys(offerings.all || {}),
-      });
-    }
+    debug = {
+      ...debug,
+      currentOfferingIdentifier: offerings.current?.identifier || null,
+      offeringIdentifiers: Object.keys(offerings.all || {}),
+    };
 
-    throw new Error("Message packs are not available yet.");
-  }
+    if (!defaultOffering) {
+      const fetchError = "RevenueCat default offering missing.";
 
-  const availablePackages = defaultOffering.availablePackages || [];
-
-  logRevenueCatPackages(
-    "RevenueCat default offering packages",
-    availablePackages,
-  );
-
-  if (availablePackages.length === 0 && __DEV__) {
-    console.log("RevenueCat default offering returned no packages", {
-      offeringIdentifier: defaultOffering.identifier,
-      expectedMessagePackIds: EXPECTED_MESSAGE_PACK_IDS,
-    });
-  }
-
-  const packs = availablePackages
-    .map((pkg) => {
-      const matchedMessagePackId = getMessagePackIdForIdentifiers(
-        pkg.identifier,
-        pkg.product.identifier,
-      );
-      const credits = getMessagePackCreditsForIdentifiers(
-        pkg.identifier,
-        pkg.product.identifier,
-      );
-
-      if (!matchedMessagePackId && __DEV__) {
-        console.log("RevenueCat package is not a message pack", {
-          packageIdentifier: pkg.identifier,
-          storeProductIdentifier: pkg.product.identifier,
-          packageType: String(pkg.packageType),
-          productType: String(pkg.product.productType),
+      if (__DEV__) {
+        console.log("RevenueCat default offering missing", {
+          currentOfferingIdentifier: offerings.current?.identifier || null,
+          allOfferingIdentifiers: Object.keys(offerings.all || {}),
         });
       }
 
-      if (credits <= 0) return null;
-
       return {
-        id: matchedMessagePackId || pkg.identifier,
-        packageIdentifier: pkg.identifier,
-        productIdentifier: pkg.product.identifier,
-        credits,
-        title: `${credits} message credits`,
-        priceString: pkg.product.priceString || "Price unavailable",
-        revenueCatPackage: pkg,
-      } satisfies AndroidMessagePack;
-    })
-    .filter((pkg): pkg is AndroidMessagePack => Boolean(pkg))
-    .sort((a, b) => a.credits - b.credits);
+        packs: [] satisfies AndroidMessagePack[],
+        debug: {
+          ...debug,
+          fetchError,
+        },
+      };
+    }
 
-  if (__DEV__) {
+    const availablePackages = defaultOffering.availablePackages || [];
+    const packageIdentifiers = availablePackages.map((pkg) => pkg.identifier);
+    const storeProductIdentifiers = availablePackages.map(
+      (pkg) => pkg.product.identifier,
+    );
+
+    debug = {
+      ...debug,
+      defaultOfferingLoaded: true,
+      packageIdentifiers,
+      storeProductIdentifiers,
+    };
+
+    logRevenueCatPackages(
+      "RevenueCat default offering packages",
+      availablePackages,
+    );
+
+    if (availablePackages.length === 0 && __DEV__) {
+      console.log("RevenueCat default offering returned no packages", {
+        offeringIdentifier: defaultOffering.identifier,
+        expectedMessagePackIds: EXPECTED_MESSAGE_PACK_IDS,
+      });
+    }
+
+    const packs = availablePackages
+      .map((pkg) => {
+        const matchedMessagePackId = getMessagePackIdForIdentifiers(
+          pkg.identifier,
+          pkg.product.identifier,
+        );
+        const credits = getMessagePackCreditsForIdentifiers(
+          pkg.identifier,
+          pkg.product.identifier,
+        );
+
+        if (!matchedMessagePackId && __DEV__) {
+          console.log("RevenueCat package is not a message pack", {
+            packageIdentifier: pkg.identifier,
+            storeProductIdentifier: pkg.product.identifier,
+            packageType: String(pkg.packageType),
+            productType: String(pkg.product.productType),
+          });
+        }
+
+        if (credits <= 0) return null;
+
+        return {
+          id: matchedMessagePackId || pkg.identifier,
+          packageIdentifier: pkg.identifier,
+          productIdentifier: pkg.product.identifier,
+          credits,
+          title: `${credits} message credits`,
+          priceString: pkg.product.priceString || "Price unavailable",
+          revenueCatPackage: pkg,
+        } satisfies AndroidMessagePack;
+      })
+      .filter((pkg): pkg is AndroidMessagePack => Boolean(pkg))
+      .sort((a, b) => a.credits - b.credits);
+
     const returnedPackIds = new Set(packs.map((pack) => pack.id));
     const missingPackIds = EXPECTED_MESSAGE_PACK_IDS.filter(
       (packId) => !returnedPackIds.has(packId),
     );
+    const foundMessagePacks = {
+      message_pack_100: returnedPackIds.has("message_pack_100"),
+      message_pack_250: returnedPackIds.has("message_pack_250"),
+      message_pack_500: returnedPackIds.has("message_pack_500"),
+    };
 
-    console.log("RevenueCat Android message packs matched", {
-      expectedMessagePackIds: EXPECTED_MESSAGE_PACK_IDS,
-      returnedPackIds: packs.map((pack) => pack.id),
-      missingPackIds,
-      packageIdentifiers: packs.map((pack) => pack.packageIdentifier),
-      storeProductIdentifiers: packs.map((pack) => pack.productIdentifier),
+    debug = {
+      ...debug,
+      foundMessagePacks,
+    };
+
+    if (__DEV__) {
+      console.log("RevenueCat Android message packs matched", {
+        expectedMessagePackIds: EXPECTED_MESSAGE_PACK_IDS,
+        returnedPackIds: packs.map((pack) => pack.id),
+        missingPackIds,
+        packageIdentifiers: packs.map((pack) => pack.packageIdentifier),
+        storeProductIdentifiers: packs.map((pack) => pack.productIdentifier),
+      });
+
+      if (missingPackIds.length > 0) {
+        console.log("RevenueCat missing expected message packs", {
+          missingPackIds,
+          hint:
+            "Confirm the products are active in Google Play, attached to the RevenueCat default offering, and available to this Android build/test account.",
+        });
+      }
+    }
+
+    return { packs, debug };
+  } catch (error) {
+    const fetchError = getErrorMessage(error);
+
+    console.log("RevenueCat message pack fetch error", {
+      fetchError,
+      support,
+      error,
     });
 
-    if (missingPackIds.length > 0) {
-      console.log("RevenueCat missing expected message packs", {
-        missingPackIds,
-        hint:
-          "Confirm the products are active in Google Play, attached to the RevenueCat default offering, and available to this Android build/test account.",
-      });
-    }
+    return {
+      packs: [] satisfies AndroidMessagePack[],
+      debug: {
+        ...debug,
+        fetchError,
+      },
+    };
   }
+}
 
+export async function fetchAndroidMessagePacks() {
+  const { packs } = await fetchAndroidMessagePackOfferings();
   return packs;
 }
 

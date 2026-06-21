@@ -10,7 +10,8 @@ import {
 } from "react-native";
 import { AppScreen } from "../../components/layout/AppScreen";
 import {
-  fetchAndroidMessagePacks,
+  createAndroidMessagePackDebug,
+  fetchAndroidMessagePackOfferings,
   fetchMessageCredits,
   getAndroidMessagePackSupportStatus,
   isAndroidMessagePacksSupported,
@@ -18,6 +19,7 @@ import {
   purchaseAndroidMessagePack,
   shouldShowAndroidMessagePackArea,
   type AndroidMessagePack,
+  type AndroidMessagePackDebug,
 } from "../../lib/messageCredits";
 import { supabase } from "../../lib/supabase";
 import { useAppTheme } from "../../lib/useAppTheme";
@@ -55,6 +57,8 @@ export default function SmsSettingsScreen() {
   const [messagePackError, setMessagePackError] = useState<string | null>(null);
   const [purchasingPackId, setPurchasingPackId] = useState<string | null>(null);
   const messagePackSupport = getAndroidMessagePackSupportStatus();
+  const [messagePackDebug, setMessagePackDebug] =
+    useState<AndroidMessagePackDebug>(() => createAndroidMessagePackDebug());
 
   const loadSettings = useCallback(async () => {
     setLoading(true);
@@ -112,6 +116,7 @@ export default function SmsSettingsScreen() {
       setMessageCredits(null);
       setMessagePacks([]);
       setMessagePackError(null);
+      setMessagePackDebug(createAndroidMessagePackDebug());
       return;
     }
 
@@ -119,19 +124,26 @@ export default function SmsSettingsScreen() {
     setMessagePackError(null);
 
     try {
-      const [credits, packs] = await Promise.all([
+      const [credits, offeringResult] = await Promise.all([
         fetchMessageCredits(),
-        fetchAndroidMessagePacks(),
+        fetchAndroidMessagePackOfferings(),
       ]);
 
       setMessageCredits(credits);
-      setMessagePacks(packs);
+      setMessagePacks(offeringResult.packs);
+      setMessagePackDebug(offeringResult.debug);
     } catch (error) {
       console.log("Message credit load failed", {
         error,
         support: getAndroidMessagePackSupportStatus(),
       });
       setMessagePackError("Message packs are not available right now.");
+      setMessagePackDebug(
+        createAndroidMessagePackDebug({
+          fetchError:
+            error instanceof Error ? error.message : "Message pack load failed.",
+        }),
+      );
     } finally {
       setMessagePacksLoading(false);
     }
@@ -262,6 +274,46 @@ export default function SmsSettingsScreen() {
     );
   }
 
+  function yesNo(value: boolean) {
+    return value ? "yes" : "no";
+  }
+
+  function DebugRow({ label, value }: { label: string; value: string }) {
+    return (
+      <View style={{ marginTop: 8 }}>
+        <Text style={{ color: colors.mutedText, fontSize: 12 }}>
+          {label}
+        </Text>
+        <Text
+          selectable
+          style={{
+            color: colors.text,
+            fontSize: 13,
+            fontWeight: "800",
+            marginTop: 2,
+          }}
+        >
+          {value || "(empty)"}
+        </Text>
+      </View>
+    );
+  }
+
+  function DebugList({
+    label,
+    values,
+  }: {
+    label: string;
+    values: string[];
+  }) {
+    return (
+      <DebugRow
+        label={label}
+        value={values.length > 0 ? values.join(", ") : "(none)"}
+      />
+    );
+  }
+
   return (
     <AppScreen scroll backgroundColor={colors.background}>
       <Text
@@ -386,10 +438,81 @@ export default function SmsSettingsScreen() {
             <Text
               style={{ color: colors.mutedText, marginTop: 12, lineHeight: 20 }}
             >
-              Message packs will appear here when the Android RevenueCat
-              offering is available.
+              Message packs are being set up. Please check back soon.
             </Text>
           ) : null}
+
+          <View
+            style={{
+              borderTopWidth: 1,
+              borderTopColor: colors.border,
+              marginTop: 16,
+              paddingTop: 14,
+            }}
+          >
+            <Text
+              style={{
+                color: colors.text,
+                fontWeight: "900",
+                fontSize: 15,
+              }}
+            >
+              Android message pack debug
+            </Text>
+
+            <DebugRow
+              label="default RevenueCat offering loaded"
+              value={yesNo(messagePackDebug.defaultOfferingLoaded)}
+            />
+            <DebugList
+              label="all package identifiers returned"
+              values={messagePackDebug.packageIdentifiers}
+            />
+            <DebugList
+              label="all store product identifiers returned"
+              values={messagePackDebug.storeProductIdentifiers}
+            />
+            <DebugRow
+              label="message_pack_100 found"
+              value={yesNo(messagePackDebug.foundMessagePacks.message_pack_100)}
+            />
+            <DebugRow
+              label="message_pack_250 found"
+              value={yesNo(messagePackDebug.foundMessagePacks.message_pack_250)}
+            />
+            <DebugRow
+              label="message_pack_500 found"
+              value={yesNo(messagePackDebug.foundMessagePacks.message_pack_500)}
+            />
+            <DebugRow
+              label="RevenueCat fetch error"
+              value={messagePackDebug.fetchError || "none"}
+            />
+            <DebugRow
+              label="platform/build type"
+              value={`${messagePackDebug.platform} / ${messagePackDebug.appOwnership}`}
+            />
+            <DebugRow
+              label="support status"
+              value={
+                messagePackDebug.supported
+                  ? "supported"
+                  : messagePackDebug.supportReason || "not supported"
+              }
+            />
+            <DebugRow
+              label="RevenueCat offering identifiers"
+              value={
+                messagePackDebug.offeringIdentifiers.length > 0
+                  ? messagePackDebug.offeringIdentifiers.join(", ")
+                  : "(none)"
+              }
+            />
+            <DebugRow
+              label="current RevenueCat offering"
+              value={messagePackDebug.currentOfferingIdentifier || "(none)"}
+            />
+          </View>
         </View>
       ) : null}
 
