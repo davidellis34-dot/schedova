@@ -80,9 +80,7 @@ export default function BookAppointmentScreen() {
           return;
         }
 
-        if (canUseFeature("smsAutomation")) {
-          await sendAppointmentSmsNonBlocking(appointmentId, "cancellation");
-        }
+        await sendAppointmentSmsNonBlocking(appointmentId, "cancellation");
 
         const { error } = await supabase
           .from("appointments")

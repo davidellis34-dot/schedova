@@ -11,14 +11,6 @@ type AppointmentSmsMessageType =
   | "cancellation"
   | "reminder";
 
-type UserSubscription = {
-  status?: string | null;
-  plan?: string | null;
-  current_period_end?: string | null;
-  entitlement?: string | null;
-  entitlement_expires_at?: string | null;
-};
-
 const corsHeaders = {
   "Access-Control-Allow-Origin": "*",
   "Access-Control-Allow-Headers":
@@ -27,6 +19,8 @@ const corsHeaders = {
 
 const SMS_SEND_FRIENDLY_ERROR =
   "SMS reminder could not be sent. Please check settings and try again.";
+const MESSAGE_CREDITS_EMPTY_MESSAGE =
+  "You've used your included messages. Buy a message pack to keep sending reminders and client updates.";
 
 function jsonResponse(body: Record<string, unknown>, status = 200) {
   return new Response(JSON.stringify(body), {
@@ -38,37 +32,63 @@ function jsonResponse(body: Record<string, unknown>, status = 200) {
   });
 }
 
-function normalize(value: unknown) {
-  return String(value || "")
-    .trim()
-    .toLowerCase();
+async function getMessageCreditsRemaining(
+  serviceClient: any,
+  userId: string,
+) {
+  const { data, error } = await serviceClient
+    .from("user_message_credits")
+    .select("credits_remaining")
+    .eq("user_id", userId)
+    .maybeSingle();
+
+  if (error) {
+    console.error("SMS message credit lookup failed", error);
+    throw error;
+  }
+
+  return Number((data as any)?.credits_remaining || 0);
 }
 
-function isOpenOrFuture(value: string | null | undefined) {
-  if (!value) return true;
+async function consumeMessageCredit({
+  serviceClient,
+  userId,
+  appointmentId,
+  smsMessageLogId,
+  providerMessageId,
+  messageType,
+}: {
+  serviceClient: any;
+  userId: string;
+  appointmentId: string;
+  smsMessageLogId: string | null;
+  providerMessageId: string;
+  messageType: AppointmentSmsMessageType;
+}) {
+  const { data, error } = await serviceClient.rpc(
+    "consume_message_credit_for_sms",
+    {
+      p_user_id: userId,
+      p_appointment_id: appointmentId,
+      p_sms_message_log_id: smsMessageLogId,
+      p_provider_message_id: providerMessageId,
+      p_metadata: { message_type: messageType },
+    },
+  );
 
-  const timestamp = new Date(value).getTime();
-  return Number.isFinite(timestamp) && timestamp > Date.now();
-}
+  if (error) {
+    console.error("SMS message credit deduction failed", {
+      userId,
+      appointmentId,
+      providerMessageId,
+      error,
+    });
+    throw error;
+  }
 
-function hasActiveProSubscription(subscription: UserSubscription) {
-  const statusActive = normalize(subscription.status) === "active";
-  const entitlement = normalize(subscription.entitlement);
-  const entitlementPro =
-    statusActive &&
-    ["pro", "schedova_pro", "monthly", "yearly", "lifetime"].includes(
-      entitlement,
-    ) &&
-    isOpenOrFuture(subscription.entitlement_expires_at);
+  const result = Array.isArray(data) ? data[0] : data;
 
-  const paidPlanActive =
-    statusActive &&
-    ["pro", "paid", "monthly", "yearly", "lifetime"].includes(
-      normalize(subscription.plan),
-    ) &&
-    isOpenOrFuture(subscription.current_period_end);
-
-  return entitlementPro || paidPlanActive;
+  return Number((result as any)?.credits_remaining || 0);
 }
 
 function messageEnabledKey(messageType: AppointmentSmsMessageType) {
@@ -155,27 +175,18 @@ Deno.serve(async (req) => {
 
   const body = await req.json().catch(() => ({}));
   const appointmentId = String(body.appointmentId || "").trim();
-  const messageType = String(body.messageType || "") as AppointmentSmsMessageType;
-  const validMessageTypes = ["confirmation", "update", "cancellation", "reminder"];
+  const messageType = String(
+    body.messageType || "",
+  ) as AppointmentSmsMessageType;
+  const validMessageTypes = [
+    "confirmation",
+    "update",
+    "cancellation",
+    "reminder",
+  ];
 
   if (!appointmentId || !validMessageTypes.includes(messageType)) {
     return jsonResponse({ ok: false, message: "Invalid SMS request" }, 400);
-  }
-
-  const { data: subscriptions, error: subscriptionError } = await serviceClient
-    .from("user_subscriptions")
-    .select(
-      "status, plan, current_period_end, entitlement, entitlement_expires_at",
-    )
-    .eq("user_id", user.id);
-
-  if (subscriptionError) {
-    console.error("SMS subscription lookup failed", subscriptionError);
-    return jsonResponse({ ok: false, message: SMS_SEND_FRIENDLY_ERROR }, 500);
-  }
-
-  if (!((subscriptions || []) as UserSubscription[]).some(hasActiveProSubscription)) {
-    return jsonResponse({ ok: false, code: "not_paid" }, 402);
   }
 
   const { data: appointment, error: appointmentError } = await serviceClient
@@ -193,7 +204,11 @@ Deno.serve(async (req) => {
   }
 
   if (!appointment) {
-    return jsonResponse({ ok: false, skipped: true, code: "missing_appointment" });
+    return jsonResponse({
+      ok: false,
+      skipped: true,
+      code: "missing_appointment",
+    });
   }
 
   const { data: settings } = await serviceClient
@@ -245,7 +260,11 @@ Deno.serve(async (req) => {
   }
 
   if (!client.sms_opt_in) {
-    return jsonResponse({ ok: true, skipped: true, code: "client_not_opted_in" });
+    return jsonResponse({
+      ok: true,
+      skipped: true,
+      code: "client_not_opted_in",
+    });
   }
 
   const smsBody = buildMessage({
@@ -263,6 +282,39 @@ Deno.serve(async (req) => {
     to_phone: toPhone,
     body: smsBody,
   };
+
+  let creditsRemaining = 0;
+
+  try {
+    creditsRemaining = await getMessageCreditsRemaining(serviceClient, user.id);
+  } catch {
+    return jsonResponse(
+      {
+        ok: false,
+        code: "message_credits_lookup_failed",
+        message: SMS_SEND_FRIENDLY_ERROR,
+      },
+      500,
+    );
+  }
+
+  if (creditsRemaining <= 0) {
+    await serviceClient.from("sms_message_logs").insert({
+      ...logPayload,
+      status: "failed",
+      error_message: "message_credits_empty",
+    });
+
+    return jsonResponse(
+      {
+        ok: false,
+        code: "message_credits_empty",
+        message: MESSAGE_CREDITS_EMPTY_MESSAGE,
+        creditsRemaining: 0,
+      },
+      402,
+    );
+  }
 
   if (
     !twilioAccountSid ||
@@ -301,7 +353,9 @@ Deno.serve(async (req) => {
     {
       method: "POST",
       headers: {
-        Authorization: `Basic ${btoa(`${twilioAccountSid}:${twilioAuthToken}`)}`,
+        Authorization: `Basic ${
+          btoa(`${twilioAccountSid}:${twilioAuthToken}`)
+        }`,
         "Content-Type": "application/x-www-form-urlencoded",
       },
       body: form,
@@ -328,14 +382,40 @@ Deno.serve(async (req) => {
     );
   }
 
-  await serviceClient.from("sms_message_logs").insert({
-    ...logPayload,
-    status: "sent",
-    provider_message_id: String(twilioResult.sid || ""),
-  });
+  const providerMessageId = String(twilioResult.sid || "");
+  const { data: sentLog, error: sentLogError } = await serviceClient
+    .from("sms_message_logs")
+    .insert({
+      ...logPayload,
+      status: "sent",
+      provider_message_id: providerMessageId,
+    })
+    .select("id")
+    .maybeSingle();
+
+  if (sentLogError) {
+    console.error("SMS sent log insert failed", sentLogError);
+  }
+
+  let nextCreditsRemaining: number | null = null;
+
+  try {
+    nextCreditsRemaining = await consumeMessageCredit({
+      serviceClient,
+      userId: user.id,
+      appointmentId: appointment.id,
+      smsMessageLogId: sentLog?.id || null,
+      providerMessageId,
+      messageType,
+    });
+  } catch {
+    // The provider already accepted the send, so do not report the SMS itself as failed.
+    nextCreditsRemaining = null;
+  }
 
   return jsonResponse({
     ok: true,
-    providerMessageId: twilioResult.sid || null,
+    providerMessageId: providerMessageId || null,
+    creditsRemaining: nextCreditsRemaining,
   });
 });

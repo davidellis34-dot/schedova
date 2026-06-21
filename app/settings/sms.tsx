@@ -1,8 +1,24 @@
 import { useFocusEffect } from "expo-router";
 import { useCallback, useState } from "react";
-import { Alert, Pressable, Switch, Text, View } from "react-native";
+import {
+  ActivityIndicator,
+  Alert,
+  Pressable,
+  Switch,
+  Text,
+  View,
+} from "react-native";
 import { AppScreen } from "../../components/layout/AppScreen";
-import { canUseFeature, useFeatureAccess } from "../../lib/featureAccess";
+import {
+  fetchAndroidMessagePacks,
+  fetchMessageCredits,
+  getAndroidMessagePackSupportStatus,
+  isAndroidMessagePacksSupported,
+  MESSAGE_CREDITS_EMPTY_COPY,
+  purchaseAndroidMessagePack,
+  shouldShowAndroidMessagePackArea,
+  type AndroidMessagePack,
+} from "../../lib/messageCredits";
 import { supabase } from "../../lib/supabase";
 import { useAppTheme } from "../../lib/useAppTheme";
 
@@ -26,24 +42,25 @@ const DEFAULT_SMS_SETTINGS: SmsSettings = {
 
 export default function SmsSettingsScreen() {
   const { colors } = useAppTheme();
-  useFeatureAccess();
   const [loading, setLoading] = useState(true);
   const [saving, setSaving] = useState(false);
-  const [isPaid, setIsPaid] = useState(false);
   const [settings, setSettings] = useState<SmsSettings>(DEFAULT_SMS_SETTINGS);
-  const smsAvailable = canUseFeature("smsAutomation");
+  const [settingsNotice, setSettingsNotice] = useState<string | null>(null);
+  const [messageCredits, setMessageCredits] = useState<number | null>(null);
+  const [messagePacks, setMessagePacks] = useState<AndroidMessagePack[]>([]);
+  const [messagePacksLoading, setMessagePacksLoading] = useState(false);
+  const [messagePackNotice, setMessagePackNotice] = useState<string | null>(
+    null,
+  );
+  const [messagePackError, setMessagePackError] = useState<string | null>(null);
+  const [purchasingPackId, setPurchasingPackId] = useState<string | null>(null);
+  const messagePackSupport = getAndroidMessagePackSupportStatus();
 
   const loadSettings = useCallback(async () => {
     setLoading(true);
+    setSettingsNotice(null);
 
     try {
-      setIsPaid(smsAvailable);
-
-      if (!smsAvailable) {
-        setSettings(DEFAULT_SMS_SETTINGS);
-        return;
-      }
-
       const {
         data: { user },
         error: userError,
@@ -84,24 +101,52 @@ export default function SmsSettingsScreen() {
     } finally {
       setLoading(false);
     }
-  }, [smsAvailable]);
+  }, []);
+
+  const loadMessageCreditData = useCallback(async () => {
+    if (!isAndroidMessagePacksSupported()) {
+      console.log("Message packs unavailable in this build", {
+        ...getAndroidMessagePackSupportStatus(),
+      });
+
+      setMessageCredits(null);
+      setMessagePacks([]);
+      setMessagePackError(null);
+      return;
+    }
+
+    setMessagePacksLoading(true);
+    setMessagePackError(null);
+
+    try {
+      const [credits, packs] = await Promise.all([
+        fetchMessageCredits(),
+        fetchAndroidMessagePacks(),
+      ]);
+
+      setMessageCredits(credits);
+      setMessagePacks(packs);
+    } catch (error) {
+      console.log("Message credit load failed", {
+        error,
+        support: getAndroidMessagePackSupportStatus(),
+      });
+      setMessagePackError("Message packs are not available right now.");
+    } finally {
+      setMessagePacksLoading(false);
+    }
+  }, []);
 
   useFocusEffect(
     useCallback(() => {
       void loadSettings();
-    }, [loadSettings]),
+      void loadMessageCreditData();
+    }, [loadMessageCreditData, loadSettings]),
   );
 
   async function saveSettings() {
-    if (!smsAvailable) {
-      Alert.alert(
-        "Schedova Pro",
-        "Automatic SMS reminders and confirmations are Pro features.",
-      );
-      return;
-    }
-
     setSaving(true);
+    setSettingsNotice(null);
 
     try {
       const {
@@ -125,7 +170,7 @@ export default function SmsSettingsScreen() {
         return;
       }
 
-      Alert.alert("Saved", "SMS settings updated.");
+      setSettingsNotice("SMS settings saved.");
     } finally {
       setSaving(false);
     }
@@ -136,6 +181,37 @@ export default function SmsSettingsScreen() {
       ...current,
       [key]: value,
     }));
+  }
+
+  async function buyMessagePack(pack: AndroidMessagePack) {
+    setPurchasingPackId(pack.id);
+    setMessagePackError(null);
+    setMessagePackNotice(null);
+
+    try {
+      const result = await purchaseAndroidMessagePack(pack);
+
+      setMessageCredits(result.creditsRemaining);
+      setMessagePackNotice(
+        result.purchaseCreated
+          ? `${result.creditsAdded} message credits added.`
+          : "That purchase was already credited.",
+      );
+    } catch (error) {
+      const record = error as { userCancelled?: boolean; message?: string };
+
+      if (record?.userCancelled) {
+        return;
+      }
+
+      console.log("Message pack purchase failed", error);
+      setMessagePackError(
+        record?.message || "Unable to buy message credits right now.",
+      );
+    } finally {
+      setPurchasingPackId(null);
+      void loadMessageCreditData();
+    }
   }
 
   function ToggleRow({
@@ -202,11 +278,12 @@ export default function SmsSettingsScreen() {
       <Text
         style={{ color: colors.mutedText, marginBottom: 20, lineHeight: 21 }}
       >
-        Automatic SMS reminders and confirmations are a Schedova Pro feature.
-        Free keeps the three copy/paste message templates.
+        Send appointment confirmations, updates, cancellations, and reminders
+        using account message credits. Message packs are available on Android
+        for both Free and Pro accounts.
       </Text>
 
-      {!isPaid ? (
+      {shouldShowAndroidMessagePackArea() ? (
         <View
           style={{
             backgroundColor: colors.card,
@@ -218,14 +295,101 @@ export default function SmsSettingsScreen() {
           }}
         >
           <Text style={{ color: colors.text, fontWeight: "900", fontSize: 17 }}>
-            Schedova Pro
+            Message Credits
           </Text>
-          <Text
-            style={{ color: colors.mutedText, marginTop: 8, lineHeight: 20 }}
-          >
-            SMS automation is locked on Free. No automatic texts will be sent
-            until Pro is wired up.
-          </Text>
+
+          {!messagePackSupport.supported ? (
+            <Text
+              style={{ color: colors.mutedText, marginTop: 8, lineHeight: 20 }}
+            >
+              {messagePackSupport.reason ||
+                "Message packs are not available in this build."}
+            </Text>
+          ) : (
+            <Text
+              style={{ color: colors.mutedText, marginTop: 8, lineHeight: 20 }}
+            >
+              {messageCredits === null
+                ? "Checking your message credit balance..."
+                : `${messageCredits} message credit${
+                    messageCredits === 1 ? "" : "s"
+                  } remaining.`}
+            </Text>
+          )}
+
+          {messagePackSupport.supported && messageCredits === 0 ? (
+            <Text style={{ color: colors.text, marginTop: 10, lineHeight: 20 }}>
+              {MESSAGE_CREDITS_EMPTY_COPY}
+            </Text>
+          ) : null}
+
+          {messagePackSupport.supported && messagePacksLoading ? (
+            <View style={{ paddingVertical: 18, alignItems: "center" }}>
+              <ActivityIndicator color={colors.primary} />
+            </View>
+          ) : null}
+
+          {messagePackNotice ? (
+            <Text
+              style={{
+                color: colors.primary,
+                marginTop: 12,
+                fontWeight: "800",
+              }}
+            >
+              {messagePackNotice}
+            </Text>
+          ) : null}
+
+          {messagePackError ? (
+            <Text
+              style={{
+                color: "#B91C1C",
+                marginTop: 12,
+                fontWeight: "700",
+              }}
+            >
+              {messagePackError}
+            </Text>
+          ) : null}
+
+          {messagePackSupport.supported && messagePacks.length > 0 ? (
+            <View style={{ gap: 10, marginTop: 14 }}>
+              {messagePacks.map((pack) => {
+                const purchasing = purchasingPackId === pack.id;
+
+                return (
+                  <Pressable
+                    key={pack.id}
+                    disabled={Boolean(purchasingPackId)}
+                    onPress={() => void buyMessagePack(pack)}
+                    style={{
+                      backgroundColor: purchasing
+                        ? colors.mutedText
+                        : colors.primary,
+                      borderRadius: 14,
+                      padding: 14,
+                      alignItems: "center",
+                      opacity: purchasingPackId && !purchasing ? 0.55 : 1,
+                    }}
+                  >
+                    <Text style={{ color: "#FFFFFF", fontWeight: "900" }}>
+                      {purchasing
+                        ? "Purchasing..."
+                        : `Buy ${pack.title} - ${pack.priceString}`}
+                    </Text>
+                  </Pressable>
+                );
+              })}
+            </View>
+          ) : messagePackSupport.supported && !messagePacksLoading ? (
+            <Text
+              style={{ color: colors.mutedText, marginTop: 12, lineHeight: 20 }}
+            >
+              Message packs will appear here when the Android RevenueCat
+              offering is available.
+            </Text>
+          ) : null}
         </View>
       ) : null}
 
@@ -241,10 +405,10 @@ export default function SmsSettingsScreen() {
       >
         <ToggleRow
           label="Enable SMS"
-          description="Master switch for Twilio appointment texts."
+          description="Master switch for appointment texts."
           value={settings.enabled}
           onValueChange={(value) => updateSetting("enabled", value)}
-          disabled={!isPaid || loading}
+          disabled={loading}
         />
 
         <ToggleRow
@@ -254,7 +418,7 @@ export default function SmsSettingsScreen() {
           onValueChange={(value) =>
             updateSetting("appointment_confirmations_enabled", value)
           }
-          disabled={!isPaid || !settings.enabled || loading}
+          disabled={!settings.enabled || loading}
         />
 
         <ToggleRow
@@ -264,7 +428,7 @@ export default function SmsSettingsScreen() {
           onValueChange={(value) =>
             updateSetting("appointment_updates_enabled", value)
           }
-          disabled={!isPaid || !settings.enabled || loading}
+          disabled={!settings.enabled || loading}
         />
 
         <ToggleRow
@@ -274,9 +438,21 @@ export default function SmsSettingsScreen() {
           onValueChange={(value) =>
             updateSetting("appointment_cancellations_enabled", value)
           }
-          disabled={!isPaid || !settings.enabled || loading}
+          disabled={!settings.enabled || loading}
         />
       </View>
+
+      {settingsNotice ? (
+        <Text
+          style={{
+            color: colors.primary,
+            fontWeight: "800",
+            marginBottom: 12,
+          }}
+        >
+          {settingsNotice}
+        </Text>
+      ) : null}
 
       <Pressable
         disabled={saving || loading}
