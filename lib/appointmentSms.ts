@@ -12,7 +12,20 @@ export type AppointmentSmsResult = {
   status?: number;
   code?: string;
   message?: string;
+  creditsRemaining?: number | null;
 };
+
+async function readFunctionErrorBody(error: unknown) {
+  const context = (error as { context?: Response }).context;
+
+  if (!context) return null;
+
+  try {
+    return await context.clone().json();
+  } catch {
+    return null;
+  }
+}
 
 export async function sendAppointmentSms(
   appointmentId: string,
@@ -34,11 +47,25 @@ export async function sendAppointmentSms(
 
   if (error) {
     const context = (error as { context?: Response }).context;
+    const errorBody = await readFunctionErrorBody(error);
+
     return {
       ok: false,
       status: context?.status,
-      code: context?.status === 402 ? "not_paid" : "function_error",
-      message: error.message,
+      code:
+        typeof errorBody?.code === "string"
+          ? errorBody.code
+          : context?.status === 402
+            ? "not_paid"
+            : "function_error",
+      message:
+        typeof errorBody?.message === "string"
+          ? errorBody.message
+          : error.message,
+      creditsRemaining:
+        typeof errorBody?.creditsRemaining === "number"
+          ? errorBody.creditsRemaining
+          : null,
     };
   }
 

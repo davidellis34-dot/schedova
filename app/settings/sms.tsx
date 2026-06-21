@@ -1,8 +1,23 @@
 import { useFocusEffect } from "expo-router";
 import { useCallback, useState } from "react";
-import { Alert, Pressable, Switch, Text, View } from "react-native";
+import {
+  ActivityIndicator,
+  Alert,
+  Pressable,
+  Switch,
+  Text,
+  View,
+} from "react-native";
 import { AppScreen } from "../../components/layout/AppScreen";
 import { canUseFeature, useFeatureAccess } from "../../lib/featureAccess";
+import {
+  fetchAndroidMessagePacks,
+  fetchMessageCredits,
+  isAndroidMessagePacksSupported,
+  MESSAGE_CREDITS_EMPTY_COPY,
+  purchaseAndroidMessagePack,
+  type AndroidMessagePack,
+} from "../../lib/messageCredits";
 import { supabase } from "../../lib/supabase";
 import { useAppTheme } from "../../lib/useAppTheme";
 
@@ -31,6 +46,14 @@ export default function SmsSettingsScreen() {
   const [saving, setSaving] = useState(false);
   const [isPaid, setIsPaid] = useState(false);
   const [settings, setSettings] = useState<SmsSettings>(DEFAULT_SMS_SETTINGS);
+  const [messageCredits, setMessageCredits] = useState<number | null>(null);
+  const [messagePacks, setMessagePacks] = useState<AndroidMessagePack[]>([]);
+  const [messagePacksLoading, setMessagePacksLoading] = useState(false);
+  const [messagePackNotice, setMessagePackNotice] = useState<string | null>(
+    null,
+  );
+  const [messagePackError, setMessagePackError] = useState<string | null>(null);
+  const [purchasingPackId, setPurchasingPackId] = useState<string | null>(null);
   const smsAvailable = canUseFeature("smsAutomation");
 
   const loadSettings = useCallback(async () => {
@@ -86,10 +109,38 @@ export default function SmsSettingsScreen() {
     }
   }, [smsAvailable]);
 
+  const loadMessageCreditData = useCallback(async () => {
+    if (!smsAvailable || !isAndroidMessagePacksSupported()) {
+      setMessageCredits(null);
+      setMessagePacks([]);
+      setMessagePackError(null);
+      return;
+    }
+
+    setMessagePacksLoading(true);
+    setMessagePackError(null);
+
+    try {
+      const [credits, packs] = await Promise.all([
+        fetchMessageCredits(),
+        fetchAndroidMessagePacks(),
+      ]);
+
+      setMessageCredits(credits);
+      setMessagePacks(packs);
+    } catch (error) {
+      console.log("Message credit load failed", error);
+      setMessagePackError("Message packs are not available right now.");
+    } finally {
+      setMessagePacksLoading(false);
+    }
+  }, [smsAvailable]);
+
   useFocusEffect(
     useCallback(() => {
       void loadSettings();
-    }, [loadSettings]),
+      void loadMessageCreditData();
+    }, [loadMessageCreditData, loadSettings]),
   );
 
   async function saveSettings() {
@@ -136,6 +187,37 @@ export default function SmsSettingsScreen() {
       ...current,
       [key]: value,
     }));
+  }
+
+  async function buyMessagePack(pack: AndroidMessagePack) {
+    setPurchasingPackId(pack.id);
+    setMessagePackError(null);
+    setMessagePackNotice(null);
+
+    try {
+      const result = await purchaseAndroidMessagePack(pack);
+
+      setMessageCredits(result.creditsRemaining);
+      setMessagePackNotice(
+        result.purchaseCreated
+          ? `${result.creditsAdded} message credits added.`
+          : "That purchase was already credited.",
+      );
+    } catch (error) {
+      const record = error as { userCancelled?: boolean; message?: string };
+
+      if (record?.userCancelled) {
+        return;
+      }
+
+      console.log("Message pack purchase failed", error);
+      setMessagePackError(
+        record?.message || "Unable to buy message credits right now.",
+      );
+    } finally {
+      setPurchasingPackId(null);
+      void loadMessageCreditData();
+    }
   }
 
   function ToggleRow({
@@ -226,6 +308,107 @@ export default function SmsSettingsScreen() {
             SMS automation is locked on Free. No automatic texts will be sent
             until Pro is wired up.
           </Text>
+        </View>
+      ) : null}
+
+      {isPaid && isAndroidMessagePacksSupported() ? (
+        <View
+          style={{
+            backgroundColor: colors.card,
+            borderWidth: 1,
+            borderColor: colors.border,
+            borderRadius: 16,
+            padding: 16,
+            marginBottom: 18,
+          }}
+        >
+          <Text style={{ color: colors.text, fontWeight: "900", fontSize: 17 }}>
+            Message Credits
+          </Text>
+
+          <Text
+            style={{ color: colors.mutedText, marginTop: 8, lineHeight: 20 }}
+          >
+            {messageCredits === null
+              ? "Checking your message credit balance..."
+              : `${messageCredits} message credit${
+                  messageCredits === 1 ? "" : "s"
+                } remaining.`}
+          </Text>
+
+          {messageCredits === 0 ? (
+            <Text style={{ color: colors.text, marginTop: 10, lineHeight: 20 }}>
+              {MESSAGE_CREDITS_EMPTY_COPY}
+            </Text>
+          ) : null}
+
+          {messagePacksLoading ? (
+            <View style={{ paddingVertical: 18, alignItems: "center" }}>
+              <ActivityIndicator color={colors.primary} />
+            </View>
+          ) : null}
+
+          {messagePackNotice ? (
+            <Text
+              style={{
+                color: colors.primary,
+                marginTop: 12,
+                fontWeight: "800",
+              }}
+            >
+              {messagePackNotice}
+            </Text>
+          ) : null}
+
+          {messagePackError ? (
+            <Text
+              style={{
+                color: "#B91C1C",
+                marginTop: 12,
+                fontWeight: "700",
+              }}
+            >
+              {messagePackError}
+            </Text>
+          ) : null}
+
+          {messagePacks.length > 0 ? (
+            <View style={{ gap: 10, marginTop: 14 }}>
+              {messagePacks.map((pack) => {
+                const purchasing = purchasingPackId === pack.id;
+
+                return (
+                  <Pressable
+                    key={pack.id}
+                    disabled={Boolean(purchasingPackId)}
+                    onPress={() => void buyMessagePack(pack)}
+                    style={{
+                      backgroundColor: purchasing
+                        ? colors.mutedText
+                        : colors.primary,
+                      borderRadius: 14,
+                      padding: 14,
+                      alignItems: "center",
+                      opacity: purchasingPackId && !purchasing ? 0.55 : 1,
+                    }}
+                  >
+                    <Text style={{ color: "#FFFFFF", fontWeight: "900" }}>
+                      {purchasing
+                        ? "Purchasing..."
+                        : `Buy ${pack.title} - ${pack.priceString}`}
+                    </Text>
+                  </Pressable>
+                );
+              })}
+            </View>
+          ) : !messagePacksLoading ? (
+            <Text
+              style={{ color: colors.mutedText, marginTop: 12, lineHeight: 20 }}
+            >
+              Message packs will appear here when the Android RevenueCat
+              offering is available.
+            </Text>
+          ) : null}
         </View>
       ) : null}
 
