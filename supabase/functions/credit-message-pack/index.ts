@@ -12,6 +12,8 @@ const MESSAGE_PACK_CREDITS: Record<string, number> = {
   message_pack_500: 500,
 };
 
+const EXPECTED_MESSAGE_PACK_IDS = Object.keys(MESSAGE_PACK_CREDITS);
+
 function jsonResponse(body: Record<string, unknown>, status = 200) {
   return new Response(JSON.stringify(body), {
     status,
@@ -28,6 +30,19 @@ function normalize(value: unknown) {
     .toLowerCase();
 }
 
+function identifierMatchesMessagePack(identifier: unknown, messagePackId: string) {
+  const normalized = normalize(identifier);
+  const expected = normalize(messagePackId);
+
+  if (!normalized || !expected) return false;
+
+  return (
+    normalized === expected ||
+    normalized.endsWith(`.${expected}`) ||
+    normalized.endsWith(`:${expected}`)
+  );
+}
+
 function getCreditsForPurchase({
   productIdentifier,
   packageIdentifier,
@@ -35,13 +50,12 @@ function getCreditsForPurchase({
   productIdentifier: string;
   packageIdentifier: string;
 }) {
-  const identifiers = [productIdentifier, packageIdentifier]
-    .map(normalize)
-    .filter(Boolean);
-
-  for (const identifier of identifiers) {
-    if (MESSAGE_PACK_CREDITS[identifier]) {
-      return MESSAGE_PACK_CREDITS[identifier];
+  for (const messagePackId of EXPECTED_MESSAGE_PACK_IDS) {
+    if (
+      identifierMatchesMessagePack(productIdentifier, messagePackId) ||
+      identifierMatchesMessagePack(packageIdentifier, messagePackId)
+    ) {
+      return MESSAGE_PACK_CREDITS[messagePackId];
     }
   }
 
@@ -149,6 +163,13 @@ Deno.serve(async (req) => {
   }
 
   if (!productIdentifier || !packageIdentifier || credits <= 0) {
+    console.error("credit-message-pack unknown message pack", {
+      userId: user.id,
+      productIdentifier,
+      packageIdentifier,
+      expectedMessagePackIds: EXPECTED_MESSAGE_PACK_IDS,
+    });
+
     return jsonResponse(
       { ok: false, code: "unknown_message_pack" },
       400,

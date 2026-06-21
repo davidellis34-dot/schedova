@@ -12,9 +12,11 @@ import { AppScreen } from "../../components/layout/AppScreen";
 import {
   fetchAndroidMessagePacks,
   fetchMessageCredits,
+  getAndroidMessagePackSupportStatus,
   isAndroidMessagePacksSupported,
   MESSAGE_CREDITS_EMPTY_COPY,
   purchaseAndroidMessagePack,
+  shouldShowAndroidMessagePackArea,
   type AndroidMessagePack,
 } from "../../lib/messageCredits";
 import { supabase } from "../../lib/supabase";
@@ -52,6 +54,7 @@ export default function SmsSettingsScreen() {
   );
   const [messagePackError, setMessagePackError] = useState<string | null>(null);
   const [purchasingPackId, setPurchasingPackId] = useState<string | null>(null);
+  const messagePackSupport = getAndroidMessagePackSupportStatus();
 
   const loadSettings = useCallback(async () => {
     setLoading(true);
@@ -102,6 +105,10 @@ export default function SmsSettingsScreen() {
 
   const loadMessageCreditData = useCallback(async () => {
     if (!isAndroidMessagePacksSupported()) {
+      console.log("Message packs unavailable in this build", {
+        ...getAndroidMessagePackSupportStatus(),
+      });
+
       setMessageCredits(null);
       setMessagePacks([]);
       setMessagePackError(null);
@@ -120,7 +127,10 @@ export default function SmsSettingsScreen() {
       setMessageCredits(credits);
       setMessagePacks(packs);
     } catch (error) {
-      console.log("Message credit load failed", error);
+      console.log("Message credit load failed", {
+        error,
+        support: getAndroidMessagePackSupportStatus(),
+      });
       setMessagePackError("Message packs are not available right now.");
     } finally {
       setMessagePacksLoading(false);
@@ -273,7 +283,7 @@ export default function SmsSettingsScreen() {
         for both Free and Pro accounts.
       </Text>
 
-      {isAndroidMessagePacksSupported() ? (
+      {shouldShowAndroidMessagePackArea() ? (
         <View
           style={{
             backgroundColor: colors.card,
@@ -288,23 +298,32 @@ export default function SmsSettingsScreen() {
             Message Credits
           </Text>
 
-          <Text
-            style={{ color: colors.mutedText, marginTop: 8, lineHeight: 20 }}
-          >
-            {messageCredits === null
-              ? "Checking your message credit balance..."
-              : `${messageCredits} message credit${
-                  messageCredits === 1 ? "" : "s"
-                } remaining.`}
-          </Text>
+          {!messagePackSupport.supported ? (
+            <Text
+              style={{ color: colors.mutedText, marginTop: 8, lineHeight: 20 }}
+            >
+              {messagePackSupport.reason ||
+                "Message packs are not available in this build."}
+            </Text>
+          ) : (
+            <Text
+              style={{ color: colors.mutedText, marginTop: 8, lineHeight: 20 }}
+            >
+              {messageCredits === null
+                ? "Checking your message credit balance..."
+                : `${messageCredits} message credit${
+                    messageCredits === 1 ? "" : "s"
+                  } remaining.`}
+            </Text>
+          )}
 
-          {messageCredits === 0 ? (
+          {messagePackSupport.supported && messageCredits === 0 ? (
             <Text style={{ color: colors.text, marginTop: 10, lineHeight: 20 }}>
               {MESSAGE_CREDITS_EMPTY_COPY}
             </Text>
           ) : null}
 
-          {messagePacksLoading ? (
+          {messagePackSupport.supported && messagePacksLoading ? (
             <View style={{ paddingVertical: 18, alignItems: "center" }}>
               <ActivityIndicator color={colors.primary} />
             </View>
@@ -334,7 +353,7 @@ export default function SmsSettingsScreen() {
             </Text>
           ) : null}
 
-          {messagePacks.length > 0 ? (
+          {messagePackSupport.supported && messagePacks.length > 0 ? (
             <View style={{ gap: 10, marginTop: 14 }}>
               {messagePacks.map((pack) => {
                 const purchasing = purchasingPackId === pack.id;
@@ -363,7 +382,7 @@ export default function SmsSettingsScreen() {
                 );
               })}
             </View>
-          ) : !messagePacksLoading ? (
+          ) : messagePackSupport.supported && !messagePacksLoading ? (
             <Text
               style={{ color: colors.mutedText, marginTop: 12, lineHeight: 20 }}
             >

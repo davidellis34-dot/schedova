@@ -13,6 +13,7 @@ export const MESSAGE_PACK_CREDITS: Record<string, number> = {
   message_pack_500: 500,
 };
 
+const EXPECTED_MESSAGE_PACK_IDS = Object.keys(MESSAGE_PACK_CREDITS);
 const REVENUECAT_ANDROID_API_KEY =
   process.env.EXPO_PUBLIC_REVENUECAT_ANDROID_API_KEY ||
   "goog_XvtXUmgyBINZuvwhTvTzefmPClJ";
@@ -44,34 +45,130 @@ function isExpoGo() {
   return Constants.appOwnership === "expo";
 }
 
+export function getAndroidMessagePackSupportStatus() {
+  if (Platform.OS !== "android") {
+    return {
+      supported: false,
+      reason: "Message packs are available on Android only.",
+      platform: Platform.OS,
+      appOwnership: Constants.appOwnership || "unknown",
+    };
+  }
+
+  if (isExpoGo()) {
+    return {
+      supported: false,
+      reason:
+        "Google Play Billing products cannot load in Expo Go. Use an Android development build or Google Play internal testing build.",
+      platform: Platform.OS,
+      appOwnership: Constants.appOwnership || "unknown",
+    };
+  }
+
+  return {
+    supported: true,
+    reason: null,
+    platform: Platform.OS,
+    appOwnership: Constants.appOwnership || "unknown",
+  };
+}
+
 export function isAndroidMessagePacksSupported() {
-  return Platform.OS === "android" && !isExpoGo();
+  return getAndroidMessagePackSupportStatus().supported;
+}
+
+export function shouldShowAndroidMessagePackArea() {
+  return Platform.OS === "android";
+}
+
+function normalizeIdentifier(value: unknown) {
+  return String(value || "")
+    .trim()
+    .toLowerCase();
+}
+
+function identifierMatchesMessagePack(identifier: unknown, messagePackId: string) {
+  const normalized = normalizeIdentifier(identifier);
+  const expected = normalizeIdentifier(messagePackId);
+
+  if (!normalized || !expected) return false;
+
+  return (
+    normalized === expected ||
+    normalized.endsWith(`.${expected}`) ||
+    normalized.endsWith(`:${expected}`)
+  );
+}
+
+function getMessagePackIdForIdentifiers(
+  packageIdentifier: string | null | undefined,
+  productIdentifier: string | null | undefined,
+) {
+  for (const messagePackId of EXPECTED_MESSAGE_PACK_IDS) {
+    if (
+      identifierMatchesMessagePack(packageIdentifier, messagePackId) ||
+      identifierMatchesMessagePack(productIdentifier, messagePackId)
+    ) {
+      return messagePackId;
+    }
+  }
+
+  return null;
 }
 
 function getMessagePackCreditsForIdentifiers(
   packageIdentifier: string | null | undefined,
   productIdentifier: string | null | undefined,
 ) {
-  const identifiers = [packageIdentifier, productIdentifier]
-    .map((value) =>
-      String(value || "")
-        .trim()
-        .toLowerCase(),
-    )
-    .filter(Boolean);
+  const messagePackId = getMessagePackIdForIdentifiers(
+    packageIdentifier,
+    productIdentifier,
+  );
 
-  for (const identifier of identifiers) {
-    if (MESSAGE_PACK_CREDITS[identifier]) {
-      return MESSAGE_PACK_CREDITS[identifier];
-    }
-  }
+  if (messagePackId) return MESSAGE_PACK_CREDITS[messagePackId];
 
   return 0;
 }
 
+function getPackageDebugInfo(pkg: PurchasesPackage) {
+  return {
+    packageIdentifier: pkg.identifier,
+    packageType: String(pkg.packageType),
+    offeringIdentifier: pkg.offeringIdentifier,
+    storeProductIdentifier: pkg.product.identifier,
+    storeProductTitle: pkg.product.title,
+    storeProductDescription: pkg.product.description,
+    price: pkg.product.price,
+    priceString: pkg.product.priceString,
+    currencyCode: pkg.product.currencyCode,
+    productType: String(pkg.product.productType),
+    productCategory: String(pkg.product.productCategory),
+    subscriptionPeriod: pkg.product.subscriptionPeriod,
+    matchedMessagePackId: getMessagePackIdForIdentifiers(
+      pkg.identifier,
+      pkg.product.identifier,
+    ),
+  };
+}
+
+function logRevenueCatPackages(label: string, packages: PurchasesPackage[]) {
+  if (!__DEV__) return;
+
+  console.log(
+    label,
+    packages.map((pkg) => getPackageDebugInfo(pkg)),
+  );
+}
+
 async function getPurchasesModule() {
-  if (!isAndroidMessagePacksSupported()) {
-    throw new Error("Android message packs require an Android build.");
+  const support = getAndroidMessagePackSupportStatus();
+
+  if (!support.supported) {
+    if (__DEV__) {
+      console.log("Android message packs unsupported", support);
+    }
+
+    throw new Error(support.reason || "Android message packs are unavailable.");
   }
 
   if (!purchasesModulePromise) {
@@ -138,7 +235,13 @@ export async function fetchMessageCredits() {
 }
 
 export async function fetchAndroidMessagePacks() {
-  if (!isAndroidMessagePacksSupported()) {
+  const support = getAndroidMessagePackSupportStatus();
+
+  if (!support.supported) {
+    if (__DEV__) {
+      console.log("Skipping RevenueCat message pack fetch", support);
+    }
+
     return [] satisfies AndroidMessagePack[];
   }
 
@@ -148,30 +251,89 @@ export async function fetchAndroidMessagePacks() {
   const defaultOffering = offerings.all[REVENUECAT_DEFAULT_OFFERING_ID];
 
   if (!defaultOffering) {
+    if (__DEV__) {
+      console.log("RevenueCat default offering missing", {
+        currentOfferingIdentifier: offerings.current?.identifier || null,
+        allOfferingIdentifiers: Object.keys(offerings.all || {}),
+      });
+    }
+
     throw new Error("Message packs are not available yet.");
   }
 
-  return defaultOffering.availablePackages
+  const availablePackages = defaultOffering.availablePackages || [];
+
+  logRevenueCatPackages(
+    "RevenueCat default offering packages",
+    availablePackages,
+  );
+
+  if (availablePackages.length === 0 && __DEV__) {
+    console.log("RevenueCat default offering returned no packages", {
+      offeringIdentifier: defaultOffering.identifier,
+      expectedMessagePackIds: EXPECTED_MESSAGE_PACK_IDS,
+    });
+  }
+
+  const packs = availablePackages
     .map((pkg) => {
+      const matchedMessagePackId = getMessagePackIdForIdentifiers(
+        pkg.identifier,
+        pkg.product.identifier,
+      );
       const credits = getMessagePackCreditsForIdentifiers(
         pkg.identifier,
         pkg.product.identifier,
       );
 
+      if (!matchedMessagePackId && __DEV__) {
+        console.log("RevenueCat package is not a message pack", {
+          packageIdentifier: pkg.identifier,
+          storeProductIdentifier: pkg.product.identifier,
+          packageType: String(pkg.packageType),
+          productType: String(pkg.product.productType),
+        });
+      }
+
       if (credits <= 0) return null;
 
       return {
-        id: pkg.identifier,
+        id: matchedMessagePackId || pkg.identifier,
         packageIdentifier: pkg.identifier,
         productIdentifier: pkg.product.identifier,
         credits,
         title: `${credits} message credits`,
-        priceString: pkg.product.priceString,
+        priceString: pkg.product.priceString || "Price unavailable",
         revenueCatPackage: pkg,
       } satisfies AndroidMessagePack;
     })
     .filter((pkg): pkg is AndroidMessagePack => Boolean(pkg))
     .sort((a, b) => a.credits - b.credits);
+
+  if (__DEV__) {
+    const returnedPackIds = new Set(packs.map((pack) => pack.id));
+    const missingPackIds = EXPECTED_MESSAGE_PACK_IDS.filter(
+      (packId) => !returnedPackIds.has(packId),
+    );
+
+    console.log("RevenueCat Android message packs matched", {
+      expectedMessagePackIds: EXPECTED_MESSAGE_PACK_IDS,
+      returnedPackIds: packs.map((pack) => pack.id),
+      missingPackIds,
+      packageIdentifiers: packs.map((pack) => pack.packageIdentifier),
+      storeProductIdentifiers: packs.map((pack) => pack.productIdentifier),
+    });
+
+    if (missingPackIds.length > 0) {
+      console.log("RevenueCat missing expected message packs", {
+        missingPackIds,
+        hint:
+          "Confirm the products are active in Google Play, attached to the RevenueCat default offering, and available to this Android build/test account.",
+      });
+    }
+  }
+
+  return packs;
 }
 
 function getLatestMatchingTransaction(
@@ -214,13 +376,39 @@ function buildTransactionId({
 export async function purchaseAndroidMessagePack(
   pack: AndroidMessagePack,
 ): Promise<MessageCreditPurchaseResult> {
-  if (!isAndroidMessagePacksSupported()) {
-    throw new Error("Message packs are available on Android only.");
+  const support = getAndroidMessagePackSupportStatus();
+
+  if (!support.supported) {
+    throw new Error(support.reason || "Message packs are unavailable.");
   }
 
   const userId = await getSignedInUserId();
   const Purchases = await configureAndroidRevenueCat(userId);
-  const purchase = await Purchases.purchasePackage(pack.revenueCatPackage);
+  let purchase;
+
+  try {
+    if (__DEV__) {
+      console.log("Starting RevenueCat message pack purchase", {
+        messagePackId: pack.id,
+        packageIdentifier: pack.packageIdentifier,
+        storeProductIdentifier: pack.productIdentifier,
+        credits: pack.credits,
+        priceString: pack.priceString,
+      });
+    }
+
+    purchase = await Purchases.purchasePackage(pack.revenueCatPackage);
+  } catch (error) {
+    console.log("RevenueCat message pack purchase error", {
+      messagePackId: pack.id,
+      packageIdentifier: pack.packageIdentifier,
+      storeProductIdentifier: pack.productIdentifier,
+      error,
+    });
+
+    throw error;
+  }
+
   const customerInfo = purchase.customerInfo;
   const productIdentifier = purchase.productIdentifier || pack.productIdentifier;
   const { transaction, transactionId } = buildTransactionId({
@@ -250,6 +438,14 @@ export async function purchaseAndroidMessagePack(
   );
 
   if (error) {
+    console.log("Message pack credit function error", {
+      messagePackId: pack.id,
+      packageIdentifier: pack.packageIdentifier,
+      productIdentifier,
+      transactionId,
+      error,
+    });
+
     throw new Error(error.message || "Unable to add message credits.");
   }
 
