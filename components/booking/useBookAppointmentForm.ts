@@ -881,7 +881,7 @@ export function useBookAppointmentForm() {
 
     const firstAppointment = savedAppointments[0];
 
-    if (firstAppointment?.id && canUseFeature("smsAutomation")) {
+    if (firstAppointment?.id) {
       void sendAppointmentSmsNonBlocking(firstAppointment.id, messageType);
     }
   }

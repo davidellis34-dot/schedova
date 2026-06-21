@@ -263,9 +263,7 @@ export default function AppointmentsList() {
 
     if (data) {
       if (status === "canceled") {
-        if (canUseFeature("smsAutomation")) {
-          void sendAppointmentSmsNonBlocking(id, "cancellation");
-        }
+        void sendAppointmentSmsNonBlocking(id, "cancellation");
         await cancelAppointmentReminder(id);
       }
 
@@ -290,9 +288,7 @@ export default function AppointmentsList() {
         const userId = await getCurrentUserIdOrAlert();
         if (!userId) return;
 
-        if (canUseFeature("smsAutomation")) {
-          void sendAppointmentSmsNonBlocking(id, "cancellation");
-        }
+        void sendAppointmentSmsNonBlocking(id, "cancellation");
 
         const { error } = await supabase
           .from("appointments")
@@ -354,13 +350,11 @@ export default function AppointmentsList() {
         const userId = await getCurrentUserIdOrAlert();
         if (!userId) return;
 
-        if (canUseFeature("smsAutomation")) {
-          await Promise.all(
-            selectedIds.map((appointmentId) =>
-              sendAppointmentSmsNonBlocking(appointmentId, "cancellation"),
-            ),
-          );
-        }
+        await Promise.all(
+          selectedIds.map((appointmentId) =>
+            sendAppointmentSmsNonBlocking(appointmentId, "cancellation"),
+          ),
+        );
 
         const { error } = await supabase
           .from("appointments")

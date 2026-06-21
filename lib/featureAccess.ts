@@ -11,7 +11,6 @@ export const FREE_TIER_LIMITS = {
 } as const;
 
 export const PRO_FEATURE_PREVIEWS = [
-  "Automatic SMS reminders and confirmations",
   "Smart rebooking and follow-up reminders",
   "Revenue dashboard / business insights",
   "Advanced client history timeline",
@@ -256,7 +255,6 @@ export function canUseFeature(feature: FeatureKey) {
     case "fullClientHistory":
     case "unlimitedMessageTemplates":
     case "customTagsStatusesColors":
-    case "smsAutomation":
     case "smartReminders":
     case "waitlist":
     case "noShowTracker":
@@ -265,6 +263,9 @@ export function canUseFeature(feature: FeatureKey) {
     case "serviceFormulas":
     case "customBusinessHours":
       return isPro();
+    case "smsAutomation":
+      // Message sending is account-credit based, not gated by Pro.
+      return true;
     default:
       return false;
   }

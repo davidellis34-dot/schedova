@@ -191,9 +191,7 @@ export default function Dashboard() {
           return;
         }
 
-        if (canUseFeature("smsAutomation")) {
-          await sendAppointmentSmsNonBlocking(id, "cancellation");
-        }
+        await sendAppointmentSmsNonBlocking(id, "cancellation");
 
         const { error } = await supabase
           .from("appointments")
@@ -237,12 +235,10 @@ export default function Dashboard() {
     }
 
     if (status === "canceled") {
-      if (canUseFeature("smsAutomation")) {
-        void sendAppointmentSmsNonBlocking(
-          selectedStatusAppointment.id,
-          "cancellation",
-        );
-      }
+      void sendAppointmentSmsNonBlocking(
+        selectedStatusAppointment.id,
+        "cancellation",
+      );
       await cancelAppointmentReminder(selectedStatusAppointment.id);
     }
 

@@ -56,7 +56,7 @@ export async function sendAppointmentSms(
         typeof errorBody?.code === "string"
           ? errorBody.code
           : context?.status === 402
-            ? "not_paid"
+            ? "message_credits_empty"
             : "function_error",
       message:
         typeof errorBody?.message === "string"
@@ -82,7 +82,7 @@ export async function sendAppointmentSmsNonBlocking(
   try {
     const result = await sendAppointmentSms(appointmentId, messageType);
 
-    if (!result.ok && result.code !== "not_paid") {
+    if (!result.ok && result.code !== "message_credits_empty") {
       console.log("Appointment SMS was not sent", result);
     }
 

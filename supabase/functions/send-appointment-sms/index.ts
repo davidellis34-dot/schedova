@@ -11,14 +11,6 @@ type AppointmentSmsMessageType =
   | "cancellation"
   | "reminder";
 
-type UserSubscription = {
-  status?: string | null;
-  plan?: string | null;
-  current_period_end?: string | null;
-  entitlement?: string | null;
-  entitlement_expires_at?: string | null;
-};
-
 const corsHeaders = {
   "Access-Control-Allow-Origin": "*",
   "Access-Control-Allow-Headers":
@@ -38,37 +30,6 @@ function jsonResponse(body: Record<string, unknown>, status = 200) {
       "Content-Type": "application/json",
     },
   });
-}
-
-function normalize(value: unknown) {
-  return String(value || "")
-    .trim()
-    .toLowerCase();
-}
-
-function isOpenOrFuture(value: string | null | undefined) {
-  if (!value) return true;
-
-  const timestamp = new Date(value).getTime();
-  return Number.isFinite(timestamp) && timestamp > Date.now();
-}
-
-function hasActiveProSubscription(subscription: UserSubscription) {
-  const statusActive = normalize(subscription.status) === "active";
-  const entitlement = normalize(subscription.entitlement);
-  const entitlementPro = statusActive &&
-    ["pro", "schedova_pro", "monthly", "yearly", "lifetime"].includes(
-      entitlement,
-    ) &&
-    isOpenOrFuture(subscription.entitlement_expires_at);
-
-  const paidPlanActive = statusActive &&
-    ["pro", "paid", "monthly", "yearly", "lifetime"].includes(
-      normalize(subscription.plan),
-    ) &&
-    isOpenOrFuture(subscription.current_period_end);
-
-  return entitlementPro || paidPlanActive;
 }
 
 async function getMessageCreditsRemaining(
@@ -226,26 +187,6 @@ Deno.serve(async (req) => {
 
   if (!appointmentId || !validMessageTypes.includes(messageType)) {
     return jsonResponse({ ok: false, message: "Invalid SMS request" }, 400);
-  }
-
-  const { data: subscriptions, error: subscriptionError } = await serviceClient
-    .from("user_subscriptions")
-    .select(
-      "status, plan, current_period_end, entitlement, entitlement_expires_at",
-    )
-    .eq("user_id", user.id);
-
-  if (subscriptionError) {
-    console.error("SMS subscription lookup failed", subscriptionError);
-    return jsonResponse({ ok: false, message: SMS_SEND_FRIENDLY_ERROR }, 500);
-  }
-
-  if (
-    !((subscriptions || []) as UserSubscription[]).some(
-      hasActiveProSubscription,
-    )
-  ) {
-    return jsonResponse({ ok: false, code: "not_paid" }, 402);
   }
 
   const { data: appointment, error: appointmentError } = await serviceClient
