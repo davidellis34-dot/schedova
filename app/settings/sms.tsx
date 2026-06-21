@@ -123,20 +123,23 @@ export default function SmsSettingsScreen() {
     setMessagePackError(null);
 
     try {
-      const [credits, offeringResult] = await Promise.all([
-        fetchMessageCredits(),
-        fetchAndroidMessagePackOfferings(),
-      ]);
+      const offeringResult = await fetchAndroidMessagePackOfferings();
 
-      setMessageCredits(credits);
       setMessagePacks(offeringResult.packs);
       setMessagePackDebug(offeringResult.debug);
+
+      try {
+        const credits = await fetchMessageCredits();
+        setMessageCredits(credits);
+      } catch (creditError) {
+        console.log("Message credit balance load failed", creditError);
+        setMessageCredits(null);
+      }
     } catch (error) {
       console.log("Message credit load failed", {
         error,
         support: getAndroidMessagePackSupportStatus(),
       });
-      setMessagePackError("Message packs are not available right now.");
       setMessagePackDebug(
         createAndroidMessagePackDebug({
           fetchError:
