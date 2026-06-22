@@ -1,7 +1,13 @@
-import Constants from "expo-constants";
 import { Platform } from "react-native";
 import type { CustomerInfo, PurchasesPackage } from "react-native-purchases";
 
+import {
+  configureRevenueCat,
+  getAvailablePackages,
+  getRevenueCatErrorDetails,
+  isRevenueCatSupported,
+  purchasePackage,
+} from "./revenuecat/revenueCatService";
 import { supabase } from "./supabase";
 
 export const MESSAGE_CREDITS_EMPTY_COPY =
@@ -13,15 +19,9 @@ export const MESSAGE_PACK_CREDITS: Record<string, number> = {
   message_pack_500: 500,
 };
 
-const EXPECTED_MESSAGE_PACK_IDS = Object.keys(MESSAGE_PACK_CREDITS);
-const REVENUECAT_ANDROID_API_KEY =
-  process.env.EXPO_PUBLIC_REVENUECAT_ANDROID_API_KEY ||
-  "goog_XvtXUmgyBINZuvwhTvTzefmPClJ";
-const REVENUECAT_DEFAULT_OFFERING_ID = "default";
+export const EXPECTED_MESSAGE_PACK_IDS = Object.keys(MESSAGE_PACK_CREDITS);
 
-type PurchasesModule = typeof import("react-native-purchases");
-
-export type AndroidMessagePack = {
+export type MessagePackOption = {
   id: string;
   packageIdentifier: string;
   productIdentifier: string;
@@ -31,55 +31,28 @@ export type AndroidMessagePack = {
   revenueCatPackage: PurchasesPackage;
 };
 
+export type MessagePackFetchDebug = {
+  defaultOfferingLoaded: boolean;
+  packageCount: number;
+  packageIdentifiers: string[];
+  storeProductIdentifiers: string[];
+  foundMessagePacks: Record<string, boolean>;
+  platform: string;
+  revenueCatSupported: boolean;
+  fetchError: string | null;
+};
+
+export type MessagePackFetchResult = {
+  packs: MessagePackOption[];
+  debug: MessagePackFetchDebug;
+};
+
 export type MessageCreditPurchaseResult = {
+  cancelled: boolean;
   creditsAdded: number;
   creditsRemaining: number;
   purchaseCreated: boolean;
 };
-
-let purchasesModulePromise: Promise<PurchasesModule> | null = null;
-let revenueCatConfigured = false;
-let configuredAppUserId: string | null = null;
-
-function isExpoGo() {
-  return Constants.appOwnership === "expo";
-}
-
-export function getAndroidMessagePackSupportStatus() {
-  if (Platform.OS !== "android") {
-    return {
-      supported: false,
-      reason: "Message packs are available on Android only.",
-      platform: Platform.OS,
-      appOwnership: Constants.appOwnership || "unknown",
-    };
-  }
-
-  if (isExpoGo()) {
-    return {
-      supported: false,
-      reason:
-        "Google Play Billing products cannot load in Expo Go. Use an Android development build or Google Play internal testing build.",
-      platform: Platform.OS,
-      appOwnership: Constants.appOwnership || "unknown",
-    };
-  }
-
-  return {
-    supported: true,
-    reason: null,
-    platform: Platform.OS,
-    appOwnership: Constants.appOwnership || "unknown",
-  };
-}
-
-export function isAndroidMessagePacksSupported() {
-  return getAndroidMessagePackSupportStatus().supported;
-}
-
-export function shouldShowAndroidMessagePackArea() {
-  return Platform.OS === "android";
-}
 
 function normalizeIdentifier(value: unknown) {
   return String(value || "")
@@ -100,7 +73,7 @@ function identifierMatchesMessagePack(identifier: unknown, messagePackId: string
   );
 }
 
-function getMessagePackIdForIdentifiers(
+export function getMessagePackIdForIdentifiers(
   packageIdentifier: string | null | undefined,
   productIdentifier: string | null | undefined,
 ) {
@@ -116,7 +89,7 @@ function getMessagePackIdForIdentifiers(
   return null;
 }
 
-function getMessagePackCreditsForIdentifiers(
+export function getMessagePackCreditsForIdentifiers(
   packageIdentifier: string | null | undefined,
   productIdentifier: string | null | undefined,
 ) {
@@ -125,85 +98,77 @@ function getMessagePackCreditsForIdentifiers(
     productIdentifier,
   );
 
-  if (messagePackId) return MESSAGE_PACK_CREDITS[messagePackId];
-
-  return 0;
+  return messagePackId ? MESSAGE_PACK_CREDITS[messagePackId] : 0;
 }
 
-function getPackageDebugInfo(pkg: PurchasesPackage) {
+function summarizePackage(pkg: PurchasesPackage) {
+  const messagePackId = getMessagePackIdForIdentifiers(
+    pkg.identifier,
+    pkg.product.identifier,
+  );
+
   return {
     packageIdentifier: pkg.identifier,
-    packageType: String(pkg.packageType),
-    offeringIdentifier: pkg.offeringIdentifier,
+    packageType: String(pkg.packageType ?? ""),
     storeProductIdentifier: pkg.product.identifier,
     storeProductTitle: pkg.product.title,
-    storeProductDescription: pkg.product.description,
-    price: pkg.product.price,
     priceString: pkg.product.priceString,
-    currencyCode: pkg.product.currencyCode,
-    productType: String(pkg.product.productType),
-    productCategory: String(pkg.product.productCategory),
-    subscriptionPeriod: pkg.product.subscriptionPeriod,
-    matchedMessagePackId: getMessagePackIdForIdentifiers(
-      pkg.identifier,
-      pkg.product.identifier,
-    ),
+    matchedMessagePackId: messagePackId,
   };
 }
 
-function logRevenueCatPackages(label: string, packages: PurchasesPackage[]) {
-  if (!__DEV__) return;
+function buildDebug(
+  packages: PurchasesPackage[],
+  fetchError: string | null,
+): MessagePackFetchDebug {
+  const packageIdentifiers = packages.map((pkg) => pkg.identifier);
+  const storeProductIdentifiers = packages.map((pkg) => pkg.product.identifier);
 
-  console.log(
-    label,
-    packages.map((pkg) => getPackageDebugInfo(pkg)),
-  );
+  return {
+    defaultOfferingLoaded: packages.length > 0,
+    packageCount: packages.length,
+    packageIdentifiers,
+    storeProductIdentifiers,
+    foundMessagePacks: Object.fromEntries(
+      EXPECTED_MESSAGE_PACK_IDS.map((packId) => [
+        packId,
+        packages.some((pkg) =>
+          Boolean(
+            getMessagePackIdForIdentifiers(
+              pkg.identifier,
+              pkg.product.identifier,
+            ) === packId,
+          ),
+        ),
+      ]),
+    ),
+    platform: Platform.OS,
+    revenueCatSupported: isRevenueCatSupported(),
+    fetchError,
+  };
 }
 
-async function getPurchasesModule() {
-  const support = getAndroidMessagePackSupportStatus();
-
-  if (!support.supported) {
-    if (__DEV__) {
-      console.log("Android message packs unsupported", support);
-    }
-
-    throw new Error(support.reason || "Android message packs are unavailable.");
-  }
-
-  if (!purchasesModulePromise) {
-    purchasesModulePromise = import("react-native-purchases");
-  }
-
-  return purchasesModulePromise;
-}
-
-async function configureAndroidRevenueCat(appUserId: string) {
-  const PurchasesModule = await getPurchasesModule();
-  const Purchases = PurchasesModule.default;
-
-  if (revenueCatConfigured) {
-    if (appUserId !== configuredAppUserId) {
-      await Purchases.logIn(appUserId);
-      configuredAppUserId = appUserId;
-    }
-
-    return Purchases;
-  }
-
-  await Purchases.setLogLevel(
-    __DEV__ ? PurchasesModule.LOG_LEVEL.DEBUG : PurchasesModule.LOG_LEVEL.WARN,
+function toMessagePackOption(pkg: PurchasesPackage) {
+  const credits = getMessagePackCreditsForIdentifiers(
+    pkg.identifier,
+    pkg.product.identifier,
+  );
+  const messagePackId = getMessagePackIdForIdentifiers(
+    pkg.identifier,
+    pkg.product.identifier,
   );
 
-  Purchases.configure({
-    apiKey: REVENUECAT_ANDROID_API_KEY,
-    appUserID: appUserId,
-  });
+  if (!messagePackId || credits <= 0) return null;
 
-  revenueCatConfigured = true;
-  configuredAppUserId = appUserId;
-
-  return Purchases;
+  return {
+    id: messagePackId,
+    packageIdentifier: pkg.identifier,
+    productIdentifier: pkg.product.identifier,
+    credits,
+    title: `${credits} messages`,
+    priceString: pkg.product.priceString || "Price unavailable",
+    revenueCatPackage: pkg,
+  } satisfies MessagePackOption;
 }
 
 async function getSignedInUserId() {
@@ -219,7 +184,7 @@ async function getSignedInUserId() {
   return user.id;
 }
 
-export async function fetchMessageCredits() {
+export async function fetchMessageCreditBalance() {
   const userId = await getSignedInUserId();
   const { data, error } = await supabase
     .from("user_message_credits")
@@ -234,121 +199,82 @@ export async function fetchMessageCredits() {
   return Number(data?.credits_remaining || 0);
 }
 
-export async function fetchAndroidMessagePacks() {
-  const support = getAndroidMessagePackSupportStatus();
+export async function fetchMessagePackOptions(): Promise<MessagePackFetchResult> {
+  if (!isRevenueCatSupported()) {
+    const debug = buildDebug([], "RevenueCat purchases are unavailable here.");
 
-  if (!support.supported) {
     if (__DEV__) {
-      console.log("Skipping RevenueCat message pack fetch", support);
+      console.log("[MessageCredits] RevenueCat unsupported", debug);
     }
 
-    return [] satisfies AndroidMessagePack[];
+    return { packs: [], debug };
   }
 
   const userId = await getSignedInUserId();
-  const Purchases = await configureAndroidRevenueCat(userId);
-  const offerings = await Purchases.getOfferings();
-  const defaultOffering = offerings.all[REVENUECAT_DEFAULT_OFFERING_ID];
 
-  if (!defaultOffering) {
-    if (__DEV__) {
-      console.log("RevenueCat default offering missing", {
-        currentOfferingIdentifier: offerings.current?.identifier || null,
-        allOfferingIdentifiers: Object.keys(offerings.all || {}),
-      });
-    }
+  try {
+    await configureRevenueCat(userId);
 
-    throw new Error("Message packs are not available yet.");
-  }
+    const packages = await getAvailablePackages({ forceRefresh: true });
+    const packs = packages
+      .map(toMessagePackOption)
+      .filter((pack): pack is MessagePackOption => Boolean(pack))
+      .sort((a, b) => a.credits - b.credits);
+    const debug = buildDebug(packages, null);
 
-  const availablePackages = defaultOffering.availablePackages || [];
-
-  logRevenueCatPackages(
-    "RevenueCat default offering packages",
-    availablePackages,
-  );
-
-  if (availablePackages.length === 0 && __DEV__) {
-    console.log("RevenueCat default offering returned no packages", {
-      offeringIdentifier: defaultOffering.identifier,
+    console.log("[MessageCredits] RevenueCat packages returned", {
+      packages: packages.map(summarizePackage),
       expectedMessagePackIds: EXPECTED_MESSAGE_PACK_IDS,
-    });
-  }
-
-  const packs = availablePackages
-    .map((pkg) => {
-      const matchedMessagePackId = getMessagePackIdForIdentifiers(
-        pkg.identifier,
-        pkg.product.identifier,
-      );
-      const credits = getMessagePackCreditsForIdentifiers(
-        pkg.identifier,
-        pkg.product.identifier,
-      );
-
-      if (!matchedMessagePackId && __DEV__) {
-        console.log("RevenueCat package is not a message pack", {
-          packageIdentifier: pkg.identifier,
-          storeProductIdentifier: pkg.product.identifier,
-          packageType: String(pkg.packageType),
-          productType: String(pkg.product.productType),
-        });
-      }
-
-      if (credits <= 0) return null;
-
-      return {
-        id: matchedMessagePackId || pkg.identifier,
-        packageIdentifier: pkg.identifier,
-        productIdentifier: pkg.product.identifier,
-        credits,
-        title: `${credits} message credits`,
-        priceString: pkg.product.priceString || "Price unavailable",
-        revenueCatPackage: pkg,
-      } satisfies AndroidMessagePack;
-    })
-    .filter((pkg): pkg is AndroidMessagePack => Boolean(pkg))
-    .sort((a, b) => a.credits - b.credits);
-
-  if (__DEV__) {
-    const returnedPackIds = new Set(packs.map((pack) => pack.id));
-    const missingPackIds = EXPECTED_MESSAGE_PACK_IDS.filter(
-      (packId) => !returnedPackIds.has(packId),
-    );
-
-    console.log("RevenueCat Android message packs matched", {
-      expectedMessagePackIds: EXPECTED_MESSAGE_PACK_IDS,
-      returnedPackIds: packs.map((pack) => pack.id),
-      missingPackIds,
-      packageIdentifiers: packs.map((pack) => pack.packageIdentifier),
-      storeProductIdentifiers: packs.map((pack) => pack.productIdentifier),
+      matchedMessagePacks: packs.map((pack) => ({
+        id: pack.id,
+        packageIdentifier: pack.packageIdentifier,
+        productIdentifier: pack.productIdentifier,
+        credits: pack.credits,
+        priceString: pack.priceString,
+      })),
+      debug,
     });
 
-    if (missingPackIds.length > 0) {
-      console.log("RevenueCat missing expected message packs", {
-        missingPackIds,
-        hint:
-          "Confirm the products are active in Google Play, attached to the RevenueCat default offering, and available to this Android build/test account.",
-      });
-    }
-  }
+    return { packs, debug };
+  } catch (error) {
+    const details = getRevenueCatErrorDetails(error);
+    const debug = buildDebug([], details.message);
 
-  return packs;
+    console.log("[MessageCredits] RevenueCat message pack fetch failed", {
+      error: details,
+      debug,
+    });
+
+    return { packs: [], debug };
+  }
 }
 
 function getLatestMatchingTransaction(
   customerInfo: CustomerInfo,
   productIdentifier: string,
 ) {
-  return (customerInfo.nonSubscriptionTransactions || [])
-    .filter((transaction) => transaction.productIdentifier === productIdentifier)
-    .sort((a, b) => {
-      const aTime = new Date(a.purchaseDate || "").getTime();
-      const bTime = new Date(b.purchaseDate || "").getTime();
+  const transactions = Array.isArray(
+    (customerInfo as any).nonSubscriptionTransactions,
+  )
+    ? (customerInfo as any).nonSubscriptionTransactions
+    : [];
 
-      return (Number.isFinite(bTime) ? bTime : 0) -
-        (Number.isFinite(aTime) ? aTime : 0);
-    })[0] || null;
+  return (
+    transactions
+      .filter((transaction: any) => {
+        return (
+          normalizeIdentifier(transaction?.productIdentifier) ===
+          normalizeIdentifier(productIdentifier)
+        );
+      })
+      .sort((a: any, b: any) => {
+        const aTime = new Date(String(a?.purchaseDate || "")).getTime();
+        const bTime = new Date(String(b?.purchaseDate || "")).getTime();
+
+        return (Number.isFinite(bTime) ? bTime : 0) -
+          (Number.isFinite(aTime) ? aTime : 0);
+      })[0] || null
+  );
 }
 
 function buildTransactionId({
@@ -373,40 +299,18 @@ function buildTransactionId({
   };
 }
 
-export async function purchaseAndroidMessagePack(
-  pack: AndroidMessagePack,
+export async function purchaseMessagePack(
+  pack: MessagePackOption,
 ): Promise<MessageCreditPurchaseResult> {
-  const support = getAndroidMessagePackSupportStatus();
+  const purchase = await purchasePackage(pack.revenueCatPackage);
 
-  if (!support.supported) {
-    throw new Error(support.reason || "Message packs are unavailable.");
-  }
-
-  const userId = await getSignedInUserId();
-  const Purchases = await configureAndroidRevenueCat(userId);
-  let purchase;
-
-  try {
-    if (__DEV__) {
-      console.log("Starting RevenueCat message pack purchase", {
-        messagePackId: pack.id,
-        packageIdentifier: pack.packageIdentifier,
-        storeProductIdentifier: pack.productIdentifier,
-        credits: pack.credits,
-        priceString: pack.priceString,
-      });
-    }
-
-    purchase = await Purchases.purchasePackage(pack.revenueCatPackage);
-  } catch (error) {
-    console.log("RevenueCat message pack purchase error", {
-      messagePackId: pack.id,
-      packageIdentifier: pack.packageIdentifier,
-      storeProductIdentifier: pack.productIdentifier,
-      error,
-    });
-
-    throw error;
+  if (purchase.cancelled || !purchase.customerInfo) {
+    return {
+      cancelled: true,
+      creditsAdded: 0,
+      creditsRemaining: 0,
+      purchaseCreated: false,
+    };
   }
 
   const customerInfo = purchase.customerInfo;
@@ -416,11 +320,20 @@ export async function purchaseAndroidMessagePack(
     productIdentifier,
   });
 
+  console.log("[MessageCredits] Crediting purchased message pack", {
+    messagePackId: pack.id,
+    packageIdentifier: pack.packageIdentifier,
+    productIdentifier,
+    credits: pack.credits,
+    transactionId,
+    platform: Platform.OS,
+  });
+
   const { data, error } = await supabase.functions.invoke(
     "credit-message-pack",
     {
       body: {
-        platform: "android",
+        platform: Platform.OS,
         product_identifier: productIdentifier,
         package_identifier: pack.packageIdentifier,
         transaction_id: transactionId,
@@ -429,7 +342,7 @@ export async function purchaseAndroidMessagePack(
           allPurchasedProductIdentifiers:
             customerInfo.allPurchasedProductIdentifiers,
           nonSubscriptionTransactions:
-            customerInfo.nonSubscriptionTransactions,
+            (customerInfo as any).nonSubscriptionTransactions || [],
           originalAppUserId: customerInfo.originalAppUserId,
           requestDate: customerInfo.requestDate,
         },
@@ -438,7 +351,7 @@ export async function purchaseAndroidMessagePack(
   );
 
   if (error) {
-    console.log("Message pack credit function error", {
+    console.log("[MessageCredits] credit-message-pack failed", {
       messagePackId: pack.id,
       packageIdentifier: pack.packageIdentifier,
       productIdentifier,
@@ -450,6 +363,7 @@ export async function purchaseAndroidMessagePack(
   }
 
   return {
+    cancelled: false,
     creditsAdded: Number(data?.creditsAdded || pack.credits),
     creditsRemaining: Number(data?.creditsRemaining || 0),
     purchaseCreated: Boolean(data?.purchaseCreated),

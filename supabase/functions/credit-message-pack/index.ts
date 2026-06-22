@@ -70,25 +70,27 @@ function getMatchingNonSubscriptionTransaction(
     ? customerInfo.nonSubscriptionTransactions
     : [];
 
-  return transactions
-    .filter((transaction): transaction is Record<string, unknown> => {
-      return (
-        typeof transaction === "object" &&
-        transaction !== null &&
-        normalize(transaction.productIdentifier) ===
-          normalize(productIdentifier)
-      );
-    })
-    .sort((a, b) => {
-      const aTime = new Date(String(a.purchaseDate || "")).getTime();
-      const bTime = new Date(String(b.purchaseDate || "")).getTime();
+  return (
+    transactions
+      .filter((transaction): transaction is Record<string, unknown> => {
+        return (
+          typeof transaction === "object" &&
+          transaction !== null &&
+          normalize(transaction.productIdentifier) ===
+            normalize(productIdentifier)
+        );
+      })
+      .sort((a, b) => {
+        const aTime = new Date(String(a.purchaseDate || "")).getTime();
+        const bTime = new Date(String(b.purchaseDate || "")).getTime();
 
-      return (Number.isFinite(bTime) ? bTime : 0) -
-        (Number.isFinite(aTime) ? aTime : 0);
-    })[0] || null;
+        return (Number.isFinite(bTime) ? bTime : 0) -
+          (Number.isFinite(aTime) ? aTime : 0);
+      })[0] || null
+  );
 }
 
-Deno.serve(async (req) => {
+Deno.serve(async (req: Request) => {
   if (req.method === "OPTIONS") {
     return new Response("ok", { headers: corsHeaders });
   }
@@ -151,12 +153,12 @@ Deno.serve(async (req) => {
     packageIdentifier,
   });
 
-  if (platform !== "android") {
+  if (!["android", "ios"].includes(platform)) {
     return jsonResponse(
       {
         ok: false,
-        code: "android_only",
-        error: "Message packs are Android-only.",
+        code: "unsupported_platform",
+        error: "Message packs are only available on iOS and Android.",
       },
       400,
     );
@@ -165,6 +167,7 @@ Deno.serve(async (req) => {
   if (!productIdentifier || !packageIdentifier || credits <= 0) {
     console.error("credit-message-pack unknown message pack", {
       userId: user.id,
+      platform,
       productIdentifier,
       packageIdentifier,
       expectedMessagePackIds: EXPECTED_MESSAGE_PACK_IDS,
@@ -195,6 +198,7 @@ Deno.serve(async (req) => {
   if (!hasCustomerInfoProductMatch) {
     console.error("credit-message-pack purchase not present in customer info", {
       userId: user.id,
+      platform,
       productIdentifier,
       packageIdentifier,
       customerInfoProductIds,
@@ -235,6 +239,7 @@ Deno.serve(async (req) => {
   if (error) {
     console.error("credit-message-pack rpc failed", {
       userId: user.id,
+      platform,
       productIdentifier,
       packageIdentifier,
       error,

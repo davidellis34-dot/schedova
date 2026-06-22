@@ -3,21 +3,24 @@ import { useCallback, useState } from "react";
 import {
   ActivityIndicator,
   Alert,
+  Platform,
   Pressable,
   Switch,
   Text,
   View,
 } from "react-native";
 import { AppScreen } from "../../components/layout/AppScreen";
+import { canUseFeature, useFeatureAccess } from "../../lib/featureAccess";
 import {
-  fetchAndroidMessagePacks,
-  fetchMessageCredits,
-  getAndroidMessagePackSupportStatus,
-  isAndroidMessagePacksSupported,
+  EXPECTED_MESSAGE_PACK_IDS,
+  fetchMessageCreditBalance,
+  fetchMessagePackOptions,
   MESSAGE_CREDITS_EMPTY_COPY,
-  purchaseAndroidMessagePack,
-  shouldShowAndroidMessagePackArea,
-  type AndroidMessagePack,
+  purchaseMessagePack,
+} from "../../lib/messageCredits";
+import type {
+  MessagePackFetchDebug,
+  MessagePackOption,
 } from "../../lib/messageCredits";
 import { supabase } from "../../lib/supabase";
 import { useAppTheme } from "../../lib/useAppTheme";
@@ -40,27 +43,40 @@ const DEFAULT_SMS_SETTINGS: SmsSettings = {
   reminder_hours_before: 24,
 };
 
+const REMINDER_TIMING_OPTIONS = [24, 48, 72, 168];
+
 export default function SmsSettingsScreen() {
   const { colors } = useAppTheme();
+  useFeatureAccess();
   const [loading, setLoading] = useState(true);
   const [saving, setSaving] = useState(false);
+  const [isPaid, setIsPaid] = useState(false);
+  const [statusMessage, setStatusMessage] = useState("");
   const [settings, setSettings] = useState<SmsSettings>(DEFAULT_SMS_SETTINGS);
-  const [settingsNotice, setSettingsNotice] = useState<string | null>(null);
-  const [messageCredits, setMessageCredits] = useState<number | null>(null);
-  const [messagePacks, setMessagePacks] = useState<AndroidMessagePack[]>([]);
+  const [messageCreditBalance, setMessageCreditBalance] = useState<
+    number | null
+  >(null);
+  const [messagePacks, setMessagePacks] = useState<MessagePackOption[]>([]);
   const [messagePacksLoading, setMessagePacksLoading] = useState(false);
-  const [messagePackNotice, setMessagePackNotice] = useState<string | null>(
-    null,
-  );
-  const [messagePackError, setMessagePackError] = useState<string | null>(null);
+  const [messagePackStatus, setMessagePackStatus] = useState("");
+  const [messagePackDebug, setMessagePackDebug] =
+    useState<MessagePackFetchDebug | null>(null);
   const [purchasingPackId, setPurchasingPackId] = useState<string | null>(null);
-  const messagePackSupport = getAndroidMessagePackSupportStatus();
+  const smsAvailable = canUseFeature("smsAutomation");
+  const canShowMessageCredits =
+    Platform.OS === "ios" || Platform.OS === "android";
 
   const loadSettings = useCallback(async () => {
     setLoading(true);
-    setSettingsNotice(null);
 
     try {
+      setIsPaid(smsAvailable);
+
+      if (!smsAvailable) {
+        setSettings(DEFAULT_SMS_SETTINGS);
+        return;
+      }
+
       const {
         data: { user },
         error: userError,
@@ -101,52 +117,92 @@ export default function SmsSettingsScreen() {
     } finally {
       setLoading(false);
     }
-  }, []);
+  }, [smsAvailable]);
 
-  const loadMessageCreditData = useCallback(async () => {
-    if (!isAndroidMessagePacksSupported()) {
-      console.log("Message packs unavailable in this build", {
-        ...getAndroidMessagePackSupportStatus(),
-      });
-
-      setMessageCredits(null);
-      setMessagePacks([]);
-      setMessagePackError(null);
-      return;
-    }
+  const loadMessageCredits = useCallback(async () => {
+    if (!canShowMessageCredits) return;
 
     setMessagePacksLoading(true);
-    setMessagePackError(null);
 
     try {
-      const [credits, packs] = await Promise.all([
-        fetchMessageCredits(),
-        fetchAndroidMessagePacks(),
+      const [balanceResult, packResult] = await Promise.allSettled([
+        fetchMessageCreditBalance(),
+        fetchMessagePackOptions(),
       ]);
 
-      setMessageCredits(credits);
-      setMessagePacks(packs);
-    } catch (error) {
-      console.log("Message credit load failed", {
-        error,
-        support: getAndroidMessagePackSupportStatus(),
-      });
-      setMessagePackError("Message packs are not available right now.");
+      if (balanceResult.status === "fulfilled") {
+        setMessageCreditBalance(balanceResult.value);
+      } else {
+        console.log("Message credit balance load failed", balanceResult.reason);
+        setMessageCreditBalance(null);
+      }
+
+      if (packResult.status === "fulfilled") {
+        setMessagePacks(packResult.value.packs);
+        setMessagePackDebug(packResult.value.debug);
+      } else {
+        console.log("Message pack load failed", packResult.reason);
+        setMessagePacks([]);
+        setMessagePackDebug({
+          defaultOfferingLoaded: false,
+          packageCount: 0,
+          packageIdentifiers: [],
+          storeProductIdentifiers: [],
+          foundMessagePacks: Object.fromEntries(
+            EXPECTED_MESSAGE_PACK_IDS.map((packId) => [packId, false]),
+          ),
+          platform: Platform.OS,
+          revenueCatSupported: false,
+          fetchError: String(packResult.reason || "Unknown error"),
+        });
+      }
     } finally {
       setMessagePacksLoading(false);
     }
-  }, []);
+  }, [canShowMessageCredits]);
 
   useFocusEffect(
     useCallback(() => {
       void loadSettings();
-      void loadMessageCreditData();
-    }, [loadMessageCreditData, loadSettings]),
+      void loadMessageCredits();
+    }, [loadMessageCredits, loadSettings]),
   );
 
+  async function buyMessagePack(pack: MessagePackOption) {
+    setMessagePackStatus("");
+    setPurchasingPackId(pack.id);
+
+    try {
+      const result = await purchaseMessagePack(pack);
+
+      if (result.cancelled) {
+        return;
+      }
+
+      setMessageCreditBalance(result.creditsRemaining);
+      setMessagePackStatus(`Added ${result.creditsAdded} message credits.`);
+      void loadMessageCredits();
+    } catch (error) {
+      console.log("Message pack purchase failed", error);
+      Alert.alert(
+        "Message packs",
+        "Message pack purchase could not be completed. Please try again.",
+      );
+    } finally {
+      setPurchasingPackId(null);
+    }
+  }
+
   async function saveSettings() {
+    if (!smsAvailable) {
+      Alert.alert(
+        "SMS settings",
+        "SMS appointment texts are not available yet.",
+      );
+      return;
+    }
+
     setSaving(true);
-    setSettingsNotice(null);
 
     try {
       const {
@@ -166,52 +222,31 @@ export default function SmsSettingsScreen() {
       });
 
       if (error) {
-        Alert.alert("Error", error.message);
+        console.log("SMS settings save failed", error.message);
+        setStatusMessage("");
+        Alert.alert(
+          "SMS settings",
+          "SMS text settings could not be saved. Please try again.",
+        );
         return;
       }
 
-      setSettingsNotice("SMS settings saved.");
+      setStatusMessage("SMS settings saved.");
     } finally {
       setSaving(false);
     }
   }
 
   function updateSetting(key: keyof SmsSettings, value: boolean | number) {
+    setStatusMessage("");
     setSettings((current) => ({
       ...current,
       [key]: value,
     }));
   }
 
-  async function buyMessagePack(pack: AndroidMessagePack) {
-    setPurchasingPackId(pack.id);
-    setMessagePackError(null);
-    setMessagePackNotice(null);
-
-    try {
-      const result = await purchaseAndroidMessagePack(pack);
-
-      setMessageCredits(result.creditsRemaining);
-      setMessagePackNotice(
-        result.purchaseCreated
-          ? `${result.creditsAdded} message credits added.`
-          : "That purchase was already credited.",
-      );
-    } catch (error) {
-      const record = error as { userCancelled?: boolean; message?: string };
-
-      if (record?.userCancelled) {
-        return;
-      }
-
-      console.log("Message pack purchase failed", error);
-      setMessagePackError(
-        record?.message || "Unable to buy message credits right now.",
-      );
-    } finally {
-      setPurchasingPackId(null);
-      void loadMessageCreditData();
-    }
+  function getReminderTimingLabel(hours: number) {
+    return hours === 168 ? "1 week" : `${hours}h`;
   }
 
   function ToggleRow({
@@ -278,12 +313,11 @@ export default function SmsSettingsScreen() {
       <Text
         style={{ color: colors.mutedText, marginBottom: 20, lineHeight: 21 }}
       >
-        Send appointment confirmations, updates, cancellations, and reminders
-        using account message credits. Message packs are available on Android
-        for both Free and Pro accounts.
+        Schedova can help send appointment texts when SMS is enabled and the
+        client has opted in.
       </Text>
 
-      {shouldShowAndroidMessagePackArea() ? (
+      {canShowMessageCredits ? (
         <View
           style={{
             backgroundColor: colors.card,
@@ -295,82 +329,50 @@ export default function SmsSettingsScreen() {
           }}
         >
           <Text style={{ color: colors.text, fontWeight: "900", fontSize: 17 }}>
-            Message Credits
+            Message credits
+          </Text>
+          <Text
+            style={{ color: colors.mutedText, marginTop: 8, lineHeight: 20 }}
+          >
+            {MESSAGE_CREDITS_EMPTY_COPY}
+          </Text>
+          <Text
+            style={{
+              color: colors.text,
+              fontWeight: "900",
+              marginTop: 12,
+              marginBottom: 10,
+            }}
+          >
+            Balance:{" "}
+            {messageCreditBalance === null
+              ? "Not loaded"
+              : `${messageCreditBalance} messages`}
           </Text>
 
-          {!messagePackSupport.supported ? (
-            <Text
-              style={{ color: colors.mutedText, marginTop: 8, lineHeight: 20 }}
-            >
-              {messagePackSupport.reason ||
-                "Message packs are not available in this build."}
-            </Text>
-          ) : (
-            <Text
-              style={{ color: colors.mutedText, marginTop: 8, lineHeight: 20 }}
-            >
-              {messageCredits === null
-                ? "Checking your message credit balance..."
-                : `${messageCredits} message credit${
-                    messageCredits === 1 ? "" : "s"
-                  } remaining.`}
-            </Text>
-          )}
-
-          {messagePackSupport.supported && messageCredits === 0 ? (
-            <Text style={{ color: colors.text, marginTop: 10, lineHeight: 20 }}>
-              {MESSAGE_CREDITS_EMPTY_COPY}
-            </Text>
-          ) : null}
-
-          {messagePackSupport.supported && messagePacksLoading ? (
-            <View style={{ paddingVertical: 18, alignItems: "center" }}>
+          {messagePacksLoading ? (
+            <View style={{ alignItems: "flex-start", paddingVertical: 6 }}>
               <ActivityIndicator color={colors.primary} />
             </View>
-          ) : null}
-
-          {messagePackNotice ? (
-            <Text
-              style={{
-                color: colors.primary,
-                marginTop: 12,
-                fontWeight: "800",
-              }}
-            >
-              {messagePackNotice}
-            </Text>
-          ) : null}
-
-          {messagePackError ? (
-            <Text
-              style={{
-                color: "#B91C1C",
-                marginTop: 12,
-                fontWeight: "700",
-              }}
-            >
-              {messagePackError}
-            </Text>
-          ) : null}
-
-          {messagePackSupport.supported && messagePacks.length > 0 ? (
-            <View style={{ gap: 10, marginTop: 14 }}>
+          ) : messagePacks.length > 0 ? (
+            <View style={{ gap: 10 }}>
               {messagePacks.map((pack) => {
                 const purchasing = purchasingPackId === pack.id;
 
                 return (
                   <Pressable
-                    key={pack.id}
+                    key={`${pack.packageIdentifier}:${pack.productIdentifier}`}
                     disabled={Boolean(purchasingPackId)}
-                    onPress={() => void buyMessagePack(pack)}
+                    onPress={() => {
+                      void buyMessagePack(pack);
+                    }}
                     style={{
                       backgroundColor: purchasing
                         ? colors.mutedText
                         : colors.primary,
-                      borderRadius: 14,
+                      borderRadius: 12,
                       padding: 14,
                       alignItems: "center",
-                      opacity: purchasingPackId && !purchasing ? 0.55 : 1,
                     }}
                   >
                     <Text style={{ color: "#FFFFFF", fontWeight: "900" }}>
@@ -382,93 +384,293 @@ export default function SmsSettingsScreen() {
                 );
               })}
             </View>
-          ) : messagePackSupport.supported && !messagePacksLoading ? (
+          ) : (
             <Text
-              style={{ color: colors.mutedText, marginTop: 12, lineHeight: 20 }}
+              style={{ color: colors.mutedText, lineHeight: 20, marginTop: 4 }}
             >
-              Message packs will appear here when the Android RevenueCat
-              offering is available.
+              Message packs are being set up. Please check back soon.
+            </Text>
+          )}
+
+          {messagePackStatus ? (
+            <Text
+              accessibilityLiveRegion="polite"
+              style={{
+                color: colors.primary,
+                fontSize: 13,
+                fontWeight: "800",
+                marginTop: 10,
+              }}
+            >
+              {messagePackStatus}
+            </Text>
+          ) : null}
+
+          {__DEV__ && messagePackDebug ? (
+            <Text
+              style={{
+                color: colors.mutedText,
+                fontSize: 12,
+                lineHeight: 17,
+                marginTop: 12,
+              }}
+            >
+              {`Debug: default offering loaded ${
+                messagePackDebug.defaultOfferingLoaded ? "yes" : "no"
+              }; packages ${messagePackDebug.packageCount}; package IDs ${
+                messagePackDebug.packageIdentifiers.join(", ") || "none"
+              }; product IDs ${
+                messagePackDebug.storeProductIdentifiers.join(", ") || "none"
+              }; 100 ${
+                messagePackDebug.foundMessagePacks.message_pack_100
+                  ? "yes"
+                  : "no"
+              }; 250 ${
+                messagePackDebug.foundMessagePacks.message_pack_250
+                  ? "yes"
+                  : "no"
+              }; 500 ${
+                messagePackDebug.foundMessagePacks.message_pack_500
+                  ? "yes"
+                  : "no"
+              }; error ${messagePackDebug.fetchError || "none"}`}
             </Text>
           ) : null}
         </View>
       ) : null}
 
-      <View
-        style={{
-          backgroundColor: colors.card,
-          borderWidth: 1,
-          borderColor: colors.border,
-          borderRadius: 16,
-          padding: 16,
-          marginBottom: 18,
-        }}
-      >
-        <ToggleRow
-          label="Enable SMS"
-          description="Master switch for appointment texts."
-          value={settings.enabled}
-          onValueChange={(value) => updateSetting("enabled", value)}
-          disabled={loading}
-        />
-
-        <ToggleRow
-          label="Confirmation texts"
-          description="Send a text when a new appointment is created."
-          value={settings.appointment_confirmations_enabled}
-          onValueChange={(value) =>
-            updateSetting("appointment_confirmations_enabled", value)
-          }
-          disabled={!settings.enabled || loading}
-        />
-
-        <ToggleRow
-          label="Update texts"
-          description="Send a text when an appointment changes."
-          value={settings.appointment_updates_enabled}
-          onValueChange={(value) =>
-            updateSetting("appointment_updates_enabled", value)
-          }
-          disabled={!settings.enabled || loading}
-        />
-
-        <ToggleRow
-          label="Cancellation texts"
-          description="Send a text when an appointment is canceled or deleted."
-          value={settings.appointment_cancellations_enabled}
-          onValueChange={(value) =>
-            updateSetting("appointment_cancellations_enabled", value)
-          }
-          disabled={!settings.enabled || loading}
-        />
-      </View>
-
-      {settingsNotice ? (
-        <Text
+      {!isPaid ? (
+        <View
           style={{
-            color: colors.primary,
-            fontWeight: "800",
-            marginBottom: 12,
+            backgroundColor: colors.card,
+            borderWidth: 1,
+            borderColor: colors.border,
+            borderRadius: 16,
+            padding: 16,
+            marginBottom: 18,
           }}
         >
-          {settingsNotice}
-        </Text>
+          <Text style={{ color: colors.text, fontWeight: "900", fontSize: 17 }}>
+            SMS messaging unavailable
+          </Text>
+          <Text
+            style={{ color: colors.mutedText, marginTop: 8, lineHeight: 20 }}
+          >
+            Appointment texting will be available after messaging approval is
+            complete.
+          </Text>
+        </View>
       ) : null}
 
-      <Pressable
-        disabled={saving || loading}
-        onPress={saveSettings}
-        style={{
-          backgroundColor:
-            saving || loading ? colors.mutedText : colors.primary,
-          padding: 16,
-          borderRadius: 14,
-          alignItems: "center",
-        }}
-      >
-        <Text style={{ color: "#FFFFFF", fontWeight: "900" }}>
-          {saving ? "Saving..." : "Save SMS Settings"}
-        </Text>
-      </Pressable>
+      {isPaid ? (
+        <>
+          <View
+            style={{
+              backgroundColor: colors.card,
+              borderWidth: 1,
+              borderColor: colors.border,
+              borderRadius: 16,
+              padding: 16,
+              marginBottom: 18,
+            }}
+          >
+            <Text
+              style={{
+                color: colors.text,
+                fontSize: 17,
+                fontWeight: "900",
+                marginBottom: 8,
+              }}
+            >
+              Client opt-in requirement
+            </Text>
+            <Text
+              style={{
+                color: colors.mutedText,
+                lineHeight: 20,
+                marginBottom: 14,
+              }}
+            >
+              Only send SMS texts to clients who have agreed to receive
+              appointment messages.
+            </Text>
+            <Text
+              style={{
+                color: colors.mutedText,
+                lineHeight: 20,
+                marginBottom: 14,
+              }}
+            >
+              SMS texts are sent when supported appointment actions happen, such
+              as booking or updating an appointment. Only clients who have opted
+              in and have a phone number will receive texts.
+            </Text>
+
+            <ToggleRow
+              label="Enable SMS appointment texts"
+              description="Master switch for Schedova appointment text messages."
+              value={settings.enabled}
+              onValueChange={(value) => updateSetting("enabled", value)}
+              disabled={loading}
+            />
+
+            <ToggleRow
+              label="Reminder text preference"
+              description="Send automatic appointment reminder texts using your selected timing."
+              value={settings.appointment_reminders_enabled}
+              onValueChange={(value) =>
+                updateSetting("appointment_reminders_enabled", value)
+              }
+              disabled={!settings.enabled || loading}
+            />
+
+            <View
+              style={{
+                borderWidth: 1,
+                borderColor: colors.border,
+                borderRadius: 14,
+                padding: 14,
+                marginBottom: 12,
+                opacity:
+                  !settings.enabled ||
+                  !settings.appointment_reminders_enabled ||
+                  loading
+                    ? 0.55
+                    : 1,
+              }}
+            >
+              <Text
+                style={{ color: colors.text, fontWeight: "800", marginBottom: 8 }}
+              >
+                Reminder timing preference
+              </Text>
+              <Text
+                style={{
+                  color: colors.mutedText,
+                  lineHeight: 19,
+                  marginBottom: 12,
+                }}
+              >
+                Choose when Schedova should send automatic reminder texts.
+              </Text>
+              <View style={{ flexDirection: "row", flexWrap: "wrap", gap: 8 }}>
+                {REMINDER_TIMING_OPTIONS.map((hours) => {
+                  const selected = settings.reminder_hours_before === hours;
+
+                  return (
+                    <Pressable
+                      key={hours}
+                      disabled={
+                        !settings.enabled ||
+                        !settings.appointment_reminders_enabled ||
+                        loading
+                      }
+                      onPress={() =>
+                        updateSetting("reminder_hours_before", hours)
+                      }
+                      style={{
+                        flexGrow: 1,
+                        minWidth: "46%",
+                        backgroundColor: selected
+                          ? colors.primary
+                          : colors.background,
+                        borderColor: selected ? colors.primary : colors.border,
+                        borderWidth: 1,
+                        borderRadius: 12,
+                        paddingVertical: 12,
+                        alignItems: "center",
+                      }}
+                    >
+                      <Text
+                        style={{
+                          color: selected ? "#FFFFFF" : colors.text,
+                          fontWeight: "900",
+                        }}
+                      >
+                        {getReminderTimingLabel(hours)}
+                      </Text>
+                    </Pressable>
+                  );
+                })}
+              </View>
+            </View>
+
+            <ToggleRow
+              label="Confirmation texts"
+              description="Send a text when a new appointment is created and the client has opted in."
+              value={settings.appointment_confirmations_enabled}
+              onValueChange={(value) =>
+                updateSetting("appointment_confirmations_enabled", value)
+              }
+              disabled={!settings.enabled || loading}
+            />
+
+            <ToggleRow
+              label="Update texts"
+              description="Send a text when an appointment changes and the client has opted in."
+              value={settings.appointment_updates_enabled}
+              onValueChange={(value) =>
+                updateSetting("appointment_updates_enabled", value)
+              }
+              disabled={!settings.enabled || loading}
+            />
+
+            <ToggleRow
+              label="Cancellation texts"
+              description="Send a text when an appointment is canceled or deleted and the client has opted in."
+              value={settings.appointment_cancellations_enabled}
+              onValueChange={(value) =>
+                updateSetting("appointment_cancellations_enabled", value)
+              }
+              disabled={!settings.enabled || loading}
+            />
+
+            <Text
+              style={{
+                color: colors.mutedText,
+                fontSize: 13,
+                lineHeight: 19,
+                marginTop: 2,
+              }}
+            >
+              Schedova uses default appointment SMS wording for now. Message
+              delivery depends on your SMS setup and the client carrier.
+            </Text>
+          </View>
+
+          <Pressable
+            disabled={saving || loading}
+            onPress={saveSettings}
+            style={{
+              backgroundColor:
+                saving || loading ? colors.mutedText : colors.primary,
+              padding: 16,
+              borderRadius: 14,
+              alignItems: "center",
+            }}
+          >
+            <Text style={{ color: "#FFFFFF", fontWeight: "900" }}>
+              {saving ? "Saving..." : "Save SMS Settings"}
+            </Text>
+          </Pressable>
+
+          {statusMessage ? (
+            <Text
+              accessibilityLiveRegion="polite"
+              style={{
+                color: colors.mutedText,
+                fontSize: 13,
+                fontWeight: "700",
+                lineHeight: 18,
+                marginTop: 10,
+                textAlign: "center",
+              }}
+            >
+              {statusMessage}
+            </Text>
+          ) : null}
+        </>
+      ) : null}
     </AppScreen>
   );
 }
