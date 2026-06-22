@@ -16,7 +16,7 @@ create table if not exists public.message_credit_purchases (
   revenuecat_transaction_id text not null,
   product_identifier text not null,
   package_identifier text,
-  platform text not null default 'android',
+  platform text not null,
   credits_added integer not null check (credits_added > 0),
   provider_response jsonb not null default '{}'::jsonb,
   created_at timestamptz not null default now(),

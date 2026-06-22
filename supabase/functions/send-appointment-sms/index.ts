@@ -1,4 +1,5 @@
 import { createClient } from "https://esm.sh/@supabase/supabase-js@2";
+
 import {
   DEFAULT_COUNTRY_REGION,
   isCountryRegionCode,
@@ -11,18 +12,74 @@ type AppointmentSmsMessageType =
   | "cancellation"
   | "reminder";
 
-const corsHeaders = {
-  "Access-Control-Allow-Origin": "*",
-  "Access-Control-Allow-Headers":
-    "authorization, x-client-info, apikey, content-type",
+type UserSubscription = {
+  status?: string | null;
+  plan?: string | null;
+  entitlement?: string | null;
+  entitlement_source?: string | null;
+  entitlement_expires_at?: string | null;
 };
 
+type SmsProAccess = {
+  userId: string;
+  userEmail: string | null;
+  subscription: UserSubscription | null;
+  isPaid: boolean;
+};
+
+type AppointmentRecord = {
+  id: string;
+  user_id: string;
+  client_id: string | null;
+  client_name: string | null;
+  appointment_date: string | null;
+  appointment_time: string | null;
+};
+
+type ClientRecord = {
+  id: string;
+  name: string | null;
+  phone: string | null;
+  sms_opt_in: boolean | null;
+};
+
+type SmsSettingsRecord = {
+  enabled?: boolean | null;
+  appointment_confirmations_enabled?: boolean | null;
+  appointment_updates_enabled?: boolean | null;
+  appointment_cancellations_enabled?: boolean | null;
+  appointment_reminders_enabled?: boolean | null;
+};
+
+type UserSettingsRecord = {
+  country_region?: string | null;
+};
+
+type JsonObject = Record<string, unknown>;
+
+const VALID_MESSAGE_TYPES: AppointmentSmsMessageType[] = [
+  "confirmation",
+  "update",
+  "cancellation",
+  "reminder",
+];
+
+const TELNYX_MESSAGES_URL = "https://api.telnyx.com/v2/messages";
+const SMS_PROVIDER = "telnyx";
+const SMS_DIRECTION = "outbound";
 const SMS_SEND_FRIENDLY_ERROR =
   "SMS reminder could not be sent. Please check settings and try again.";
 const MESSAGE_CREDITS_EMPTY_MESSAGE =
   "You've used your included messages. Buy a message pack to keep sending reminders and client updates.";
 
-function jsonResponse(body: Record<string, unknown>, status = 200) {
+const corsHeaders = {
+  "Access-Control-Allow-Origin": "*",
+  "Access-Control-Allow-Headers":
+    "authorization, x-client-info, apikey, content-type",
+  "Access-Control-Allow-Methods": "POST, OPTIONS",
+};
+
+function jsonResponse(body: unknown, status = 200) {
   return new Response(JSON.stringify(body), {
     status,
     headers: {
@@ -32,63 +89,135 @@ function jsonResponse(body: Record<string, unknown>, status = 200) {
   });
 }
 
-async function getMessageCreditsRemaining(
-  serviceClient: any,
-  userId: string,
-) {
-  const { data, error } = await serviceClient
-    .from("user_message_credits")
-    .select("credits_remaining")
-    .eq("user_id", userId)
-    .maybeSingle();
+function getErrorMessage(error: unknown) {
+  if (error instanceof Error) return error.message || error.name || "Unknown error";
 
-  if (error) {
-    console.error("SMS message credit lookup failed", error);
-    throw error;
+  if (error && typeof error === "object" && "message" in error) {
+    const message = (error as { message?: unknown }).message;
+    if (typeof message === "string" && message.trim()) return message;
   }
 
-  return Number((data as any)?.credits_remaining || 0);
+  return String(error || "Unknown error");
 }
 
-async function consumeMessageCredit({
-  serviceClient,
-  userId,
-  appointmentId,
-  smsMessageLogId,
-  providerMessageId,
-  messageType,
-}: {
-  serviceClient: any;
-  userId: string;
-  appointmentId: string;
-  smsMessageLogId: string | null;
-  providerMessageId: string;
-  messageType: AppointmentSmsMessageType;
-}) {
-  const { data, error } = await serviceClient.rpc(
-    "consume_message_credit_for_sms",
-    {
-      p_user_id: userId,
-      p_appointment_id: appointmentId,
-      p_sms_message_log_id: smsMessageLogId,
-      p_provider_message_id: providerMessageId,
-      p_metadata: { message_type: messageType },
-    },
-  );
-
-  if (error) {
-    console.error("SMS message credit deduction failed", {
-      userId,
-      appointmentId,
-      providerMessageId,
-      error,
-    });
-    throw error;
+function serializeDetails(details: unknown): unknown {
+  if (details instanceof Error) {
+    return {
+      name: details.name,
+      message: details.message,
+      stack: details.stack || null,
+    };
   }
 
-  const result = Array.isArray(data) ? data[0] : data;
+  if (details === undefined) return null;
 
-  return Number((result as any)?.credits_remaining || 0);
+  try {
+    return JSON.parse(JSON.stringify(details));
+  } catch {
+    return { value: String(details) };
+  }
+}
+
+function jsonError(
+  error: unknown,
+  status: number,
+  extra: Record<string, unknown> = {},
+) {
+  return jsonResponse(
+    {
+      ok: false,
+      error: getErrorMessage(error),
+      details: serializeDetails(error),
+      ...extra,
+    },
+    status,
+  );
+}
+
+function normalize(value: unknown) {
+  return String(value || "")
+    .trim()
+    .toLowerCase();
+}
+
+function asTrimmedString(value: unknown) {
+  return String(value || "").trim();
+}
+
+function asNullableUuid(value: unknown) {
+  const text = asTrimmedString(value);
+  if (!text) return null;
+
+  return /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i.test(
+    text,
+  )
+    ? text
+    : null;
+}
+
+function isOpenOrFuture(value: string | null | undefined) {
+  if (!value) return true;
+
+  const timestamp = new Date(value).getTime();
+  return Number.isFinite(timestamp) && timestamp > Date.now();
+}
+
+function hasAdminLifetimeSchedovaProAccess(
+  subscription: UserSubscription | null | undefined,
+) {
+  if (!subscription) return false;
+
+  return (
+    normalize(subscription.status) === "active" &&
+    normalize(subscription.plan) === "lifetime" &&
+    normalize(subscription.entitlement) === "schedova_pro" &&
+    ["admin", "manual"].includes(normalize(subscription.entitlement_source)) &&
+    !subscription.entitlement_expires_at
+  );
+}
+
+function hasRevenueCatStyleSchedovaProAccess(
+  subscription: UserSubscription | null | undefined,
+) {
+  if (!subscription) return false;
+
+  return (
+    normalize(subscription.status) === "active" &&
+    normalize(subscription.entitlement) === "schedova_pro" &&
+    isOpenOrFuture(subscription.entitlement_expires_at)
+  );
+}
+
+function hasSchedovaProAccess(
+  subscription: UserSubscription | null | undefined,
+) {
+  if (!subscription) return false;
+
+  return (
+    hasAdminLifetimeSchedovaProAccess(subscription) ||
+    hasRevenueCatStyleSchedovaProAccess(subscription)
+  );
+}
+
+function resolveSmsProAccess(
+  user: { id: string; email?: string | null },
+  subscriptions: UserSubscription[] | null | undefined,
+): SmsProAccess {
+  const rows = Array.isArray(subscriptions) ? subscriptions : [];
+  const activeSubscription = rows.find(hasSchedovaProAccess) || null;
+
+  return {
+    userId: user.id,
+    userEmail: user.email ?? null,
+    subscription: activeSubscription || rows[0] || null,
+    isPaid: Boolean(activeSubscription),
+  };
+}
+
+function isValidMessageType(
+  value: string,
+): value is AppointmentSmsMessageType {
+  return VALID_MESSAGE_TYPES.includes(value as AppointmentSmsMessageType);
 }
 
 function messageEnabledKey(messageType: AppointmentSmsMessageType) {
@@ -105,11 +234,11 @@ function messageEnabledKey(messageType: AppointmentSmsMessageType) {
 }
 
 function formatAppointmentTime(value: string | null | undefined) {
-  const time = String(value || "").slice(0, 5);
+  const time = asTrimmedString(value).slice(0, 5);
   return time || "your appointment time";
 }
 
-function buildMessage({
+function buildSmsBody({
   clientName,
   appointmentDate,
   appointmentTime,
@@ -135,61 +264,472 @@ function buildMessage({
   }
 }
 
+function appointmentSentAtColumn(messageType: AppointmentSmsMessageType) {
+  switch (messageType) {
+    case "confirmation":
+      return "sms_confirmation_sent_at";
+    case "reminder":
+      return "sms_reminder_sent_at";
+    default:
+      return null;
+  }
+}
+
+function safeParseJson(text: string) {
+  if (!text.trim()) return null;
+
+  try {
+    return JSON.parse(text) as JsonObject;
+  } catch {
+    return null;
+  }
+}
+
+function extractTelnyxProviderMessageId(telnyxBody: unknown) {
+  if (!telnyxBody || typeof telnyxBody !== "object") return null;
+
+  const data =
+    "data" in telnyxBody && telnyxBody.data && typeof telnyxBody.data === "object"
+      ? (telnyxBody.data as JsonObject)
+      : null;
+
+  return asTrimmedString(data?.id) || null;
+}
+
+function extractTelnyxMessageStatus(telnyxBody: unknown) {
+  if (!telnyxBody || typeof telnyxBody !== "object") return "sent";
+
+  const data =
+    "data" in telnyxBody && telnyxBody.data && typeof telnyxBody.data === "object"
+      ? (telnyxBody.data as JsonObject)
+      : null;
+  const directStatus = asTrimmedString(data?.status);
+  const toList = Array.isArray(data?.to) ? data.to : [];
+  const firstRecipient =
+    toList[0] && typeof toList[0] === "object"
+      ? (toList[0] as JsonObject)
+      : null;
+  const recipientStatus = asTrimmedString(firstRecipient?.status);
+
+  return recipientStatus || directStatus || "sent";
+}
+
+function extractTelnyxErrorMessage(telnyxBody: unknown, status: number) {
+  if (telnyxBody && typeof telnyxBody === "object") {
+    const body = telnyxBody as JsonObject;
+    const errors = Array.isArray(body.errors) ? body.errors : [];
+
+    for (const item of errors) {
+      if (!item || typeof item !== "object") continue;
+
+      const error = item as JsonObject;
+      const detail = asTrimmedString(error.detail);
+      const title = asTrimmedString(error.title);
+      const code = asTrimmedString(error.code);
+      const message = [code, title, detail].filter(Boolean).join(": ");
+
+      if (message) return message;
+    }
+
+    const topLevelMessage =
+      asTrimmedString(body.message) || asTrimmedString(body.error);
+
+    if (topLevelMessage) return topLevelMessage;
+  }
+
+  return `Telnyx HTTP ${status}`;
+}
+
+function buildSmsLogPayload({
+  userId,
+  appointmentId = null,
+  clientId = null,
+  messageType,
+  toPhone = null,
+  smsBody = null,
+  status,
+  fromNumber = null,
+  providerMessageId = null,
+  providerResponse = null,
+  errorMessage = null,
+}: {
+  userId: string;
+  appointmentId?: string | null;
+  clientId?: string | null;
+  messageType: string;
+  toPhone?: string | null;
+  smsBody?: string | null;
+  status: string;
+  fromNumber?: string | null;
+  providerMessageId?: string | null;
+  providerResponse?: unknown;
+  errorMessage?: string | null;
+}) {
+  return {
+    user_id: userId,
+    appointment_id: asNullableUuid(appointmentId),
+    client_id: asNullableUuid(clientId),
+    message_type: asTrimmedString(messageType) || "unknown",
+    to_phone: toPhone || null,
+    to_number: toPhone || null,
+    body: smsBody || null,
+    message_body: smsBody || null,
+    status,
+    provider: SMS_PROVIDER,
+    direction: SMS_DIRECTION,
+    from_number: fromNumber || null,
+    provider_message_id: providerMessageId,
+    provider_response: serializeDetails(providerResponse),
+    error_message: errorMessage,
+  };
+}
+
+async function tryInsertSmsLog(
+  serviceClient: any,
+  payload: Record<string, unknown>,
+  step: string,
+) {
+  const { data, error } = await serviceClient
+    .from("sms_message_logs")
+    .insert(payload)
+    .select("id")
+    .maybeSingle();
+
+  if (error) {
+    console.error("sms_message_logs insert error", {
+      step,
+      error,
+      payload,
+    });
+    return null;
+  }
+
+  return data?.id ? String(data.id) : null;
+}
+
+async function tryUpdateSmsLog(
+  serviceClient: any,
+  logId: string,
+  payload: Record<string, unknown>,
+  step: string,
+) {
+  const { error } = await serviceClient
+    .from("sms_message_logs")
+    .update(payload)
+    .eq("id", logId);
+
+  if (error) {
+    console.error("sms_message_logs update error", {
+      step,
+      logId,
+      error,
+      payload,
+    });
+  }
+}
+
+function missingKeys(
+  entries: Array<[string, string | undefined]>,
+) {
+  return entries.filter(([, value]) => !value).map(([name]) => name);
+}
+
+async function getMessageCreditsRemaining(
+  serviceClient: any,
+  userId: string,
+) {
+  const { data, error } = await serviceClient
+    .from("user_message_credits")
+    .select("credits_remaining")
+    .eq("user_id", userId)
+    .maybeSingle();
+
+  if (error) {
+    console.error("message credit lookup failed", {
+      userId,
+      error,
+    });
+    throw error;
+  }
+
+  return Number(data?.credits_remaining || 0);
+}
+
+async function consumeMessageCreditForSms({
+  serviceClient,
+  userId,
+  appointmentId,
+  smsMessageLogId,
+  providerMessageId,
+  messageType,
+}: {
+  serviceClient: any;
+  userId: string;
+  appointmentId: string;
+  smsMessageLogId: string | null;
+  providerMessageId: string | null;
+  messageType: AppointmentSmsMessageType;
+}) {
+  const { data, error } = await serviceClient.rpc(
+    "consume_message_credit_for_sms",
+    {
+      p_user_id: userId,
+      p_appointment_id: appointmentId,
+      p_sms_message_log_id: smsMessageLogId,
+      p_provider_message_id: providerMessageId,
+      p_metadata: { message_type: messageType },
+    },
+  );
+
+  if (error) {
+    console.error("message credit deduction failed", {
+      userId,
+      appointmentId,
+      smsMessageLogId,
+      providerMessageId,
+      messageType,
+      error,
+    });
+    throw error;
+  }
+
+  const result = Array.isArray(data) ? data[0] : data;
+
+  return Number(result?.credits_remaining || 0);
+}
+
 Deno.serve(async (req) => {
   if (req.method === "OPTIONS") {
     return new Response("ok", { headers: corsHeaders });
   }
 
   if (req.method !== "POST") {
-    return jsonResponse({ ok: false, message: "Method not allowed" }, 405);
+    return jsonResponse({ ok: false, error: "Method not allowed" }, 405);
   }
 
   const supabaseUrl = Deno.env.get("SUPABASE_URL");
   const supabaseAnonKey = Deno.env.get("SUPABASE_ANON_KEY");
   const serviceRoleKey = Deno.env.get("SUPABASE_SERVICE_ROLE_KEY");
-  const twilioAccountSid = Deno.env.get("TWILIO_ACCOUNT_SID");
-  const twilioAuthToken = Deno.env.get("TWILIO_AUTH_TOKEN");
-  const twilioMessagingServiceSid = Deno.env.get(
-    "TWILIO_MESSAGING_SERVICE_SID",
+  const telnyxApiKey = Deno.env.get("TELNYX_API_KEY");
+  const telnyxFromNumber = Deno.env.get("TELNYX_FROM_NUMBER");
+  const telnyxMessagingProfileId = Deno.env.get(
+    "TELNYX_MESSAGING_PROFILE_ID",
   );
-  const twilioFromPhone = Deno.env.get("TWILIO_FROM_PHONE");
 
-  if (!supabaseUrl || !supabaseAnonKey || !serviceRoleKey) {
-    return jsonResponse({ ok: false, message: "Supabase env missing" }, 500);
+  const missingSupabaseEnv = missingKeys([
+    ["SUPABASE_URL", supabaseUrl],
+    ["SUPABASE_ANON_KEY", supabaseAnonKey],
+    ["SUPABASE_SERVICE_ROLE_KEY", serviceRoleKey],
+  ]);
+
+  if (missingSupabaseEnv.length > 0) {
+    console.error("missing env vars", {
+      step: "supabase_env",
+      missing: missingSupabaseEnv,
+    });
+    return jsonError(
+      { message: "Supabase env missing", missing: missingSupabaseEnv },
+      500,
+      { step: "supabase_env" },
+    );
   }
 
   const authHeader = req.headers.get("Authorization") || "";
-  const userClient = createClient(supabaseUrl, supabaseAnonKey, {
+  const userClient = createClient(supabaseUrl!, supabaseAnonKey!, {
     global: { headers: { Authorization: authHeader } },
   });
-  const serviceClient = createClient(supabaseUrl, serviceRoleKey);
+  const serviceClient = createClient(supabaseUrl!, serviceRoleKey!);
 
   const {
     data: { user },
-    error: userError,
+    error: authError,
   } = await userClient.auth.getUser();
 
-  if (userError || !user) {
-    return jsonResponse({ ok: false, message: "Unauthorized" }, 401);
+  if (authError || !user) {
+    console.error("auth failure", {
+      error: authError,
+      hasUser: Boolean(user),
+    });
+    return jsonError(authError || { message: "Unauthorized" }, 401, {
+      step: "auth",
+    });
   }
 
-  const body = await req.json().catch(() => ({}));
-  const appointmentId = String(body.appointmentId || "").trim();
-  const messageType = String(
-    body.messageType || "",
-  ) as AppointmentSmsMessageType;
-  const validMessageTypes = [
-    "confirmation",
-    "update",
-    "cancellation",
-    "reminder",
-  ];
+  let requestBody: JsonObject = {};
 
-  if (!appointmentId || !validMessageTypes.includes(messageType)) {
-    return jsonResponse({ ok: false, message: "Invalid SMS request" }, 400);
+  try {
+    const parsed = await req.json();
+    requestBody =
+      parsed && typeof parsed === "object" ? (parsed as JsonObject) : {};
+  } catch (error) {
+    await tryInsertSmsLog(
+      serviceClient,
+      buildSmsLogPayload({
+        userId: user.id,
+        messageType: "unknown",
+        status: "failed",
+        fromNumber: telnyxFromNumber || null,
+        errorMessage: "Invalid JSON request body",
+      }),
+      "request_json",
+    );
+    return jsonError(error, 400, {
+      step: "request_json",
+      message: "Invalid JSON request body",
+    });
   }
 
-  const { data: appointment, error: appointmentError } = await serviceClient
+  const appointmentId = asTrimmedString(
+    requestBody.appointment_id || requestBody.appointmentId,
+  );
+  const requestedClientId = asTrimmedString(
+    requestBody.client_id || requestBody.clientId,
+  );
+  const rawMessageType = asTrimmedString(
+    requestBody.message_type || requestBody.messageType,
+  );
+
+  if (!appointmentId || !isValidMessageType(rawMessageType)) {
+    await tryInsertSmsLog(
+      serviceClient,
+      buildSmsLogPayload({
+        userId: user.id,
+        appointmentId,
+        clientId: requestedClientId,
+        messageType: rawMessageType || "unknown",
+        status: "failed",
+        fromNumber: telnyxFromNumber || null,
+        providerResponse: requestBody,
+        errorMessage: "Invalid SMS request",
+      }),
+      "request_validation",
+    );
+    return jsonError(
+      {
+        message: "Invalid SMS request",
+        appointment_id: appointmentId,
+        client_id: requestedClientId,
+        message_type: rawMessageType,
+      },
+      400,
+      { step: "request_validation" },
+    );
+  }
+
+  const messageType = rawMessageType as AppointmentSmsMessageType;
+
+  const { data: subscriptionRows, error: subscriptionError } = await serviceClient
+    .from("user_subscriptions")
+    .select("status, plan, entitlement, entitlement_source, entitlement_expires_at")
+    .eq("user_id", user.id);
+
+  if (subscriptionError) {
+    await tryInsertSmsLog(
+      serviceClient,
+      buildSmsLogPayload({
+        userId: user.id,
+        appointmentId,
+        clientId: requestedClientId,
+        messageType,
+        status: "failed",
+        fromNumber: telnyxFromNumber || null,
+        providerResponse: subscriptionError,
+        errorMessage: getErrorMessage(subscriptionError),
+      }),
+      "subscription_lookup",
+    );
+    return jsonError(subscriptionError, 500, {
+      step: "subscription_lookup",
+      code: "subscription_lookup_failed",
+      message: SMS_SEND_FRIENDLY_ERROR,
+    });
+  }
+
+  const proAccess = resolveSmsProAccess(
+    user,
+    (subscriptionRows || []) as UserSubscription[],
+  );
+  let messageCreditsRemaining = 0;
+  let messageCreditLookupError: unknown = null;
+
+  try {
+    messageCreditsRemaining = await getMessageCreditsRemaining(
+      serviceClient,
+      user.id,
+    );
+  } catch (error) {
+    messageCreditLookupError = error;
+  }
+
+  if (!proAccess.isPaid && messageCreditLookupError) {
+    await tryInsertSmsLog(
+      serviceClient,
+      buildSmsLogPayload({
+        userId: proAccess.userId,
+        appointmentId,
+        clientId: requestedClientId,
+        messageType,
+        status: "failed",
+        fromNumber: telnyxFromNumber || null,
+        providerResponse: serializeDetails(messageCreditLookupError),
+        errorMessage: getErrorMessage(messageCreditLookupError),
+      }),
+      "message_credit_lookup",
+    );
+
+    return jsonError(messageCreditLookupError, 500, {
+      step: "message_credit_lookup",
+      code: "message_credit_lookup_failed",
+      message: SMS_SEND_FRIENDLY_ERROR,
+    });
+  }
+
+  const canSendWithMessageCredits = messageCreditsRemaining > 0;
+
+  if (!proAccess.isPaid && !canSendWithMessageCredits) {
+    await tryInsertSmsLog(
+      serviceClient,
+      buildSmsLogPayload({
+        userId: proAccess.userId,
+        appointmentId,
+        clientId: requestedClientId,
+        messageType,
+        status: "failed",
+        fromNumber: telnyxFromNumber || null,
+        providerResponse: {
+          subscription: proAccess.subscription,
+          messageCreditsRemaining,
+        },
+        errorMessage: "Active Pro subscription or message credits required",
+      }),
+      "message_credit_check",
+    );
+
+    return jsonResponse(
+      {
+        ok: false,
+        code: "message_credits_empty",
+        step: "message_credit_check",
+        error: MESSAGE_CREDITS_EMPTY_MESSAGE,
+        details: {
+          subscription: proAccess.subscription,
+          isPaid: proAccess.isPaid,
+          messageCreditsRemaining,
+        },
+        userId: proAccess.userId,
+        userEmail: proAccess.userEmail,
+        subscription: proAccess.subscription,
+        isPaid: proAccess.isPaid,
+        messageCreditsRemaining,
+      },
+      402,
+    );
+  }
+
+  const {
+    data: appointmentData,
+    error: appointmentError,
+  } = await serviceClient
     .from("appointments")
     .select(
       "id, user_id, client_id, client_name, appointment_date, appointment_time",
@@ -197,225 +737,529 @@ Deno.serve(async (req) => {
     .eq("id", appointmentId)
     .eq("user_id", user.id)
     .maybeSingle();
+  const appointment = (appointmentData || null) as AppointmentRecord | null;
 
   if (appointmentError) {
-    console.error("SMS appointment lookup failed", appointmentError);
-    return jsonResponse({ ok: false, message: SMS_SEND_FRIENDLY_ERROR }, 500);
-  }
-
-  if (!appointment) {
-    return jsonResponse({
-      ok: false,
-      skipped: true,
-      code: "missing_appointment",
+    console.error("appointment lookup failure", {
+      error: appointmentError,
+      userId: user.id,
+      appointmentId,
+    });
+    await tryInsertSmsLog(
+      serviceClient,
+      buildSmsLogPayload({
+        userId: user.id,
+        appointmentId,
+        clientId: requestedClientId,
+        messageType,
+        status: "failed",
+        fromNumber: telnyxFromNumber || null,
+        providerResponse: appointmentError,
+        errorMessage: getErrorMessage(appointmentError),
+      }),
+      "appointment_lookup",
+    );
+    return jsonError(appointmentError, 500, {
+      step: "appointment_lookup",
+      code: "appointment_lookup_failed",
+      message: SMS_SEND_FRIENDLY_ERROR,
     });
   }
 
-  const { data: settings } = await serviceClient
-    .from("sms_settings")
-    .select("*")
-    .eq("user_id", user.id)
-    .maybeSingle();
-
-  if (!settings?.enabled || !settings?.[messageEnabledKey(messageType)]) {
-    return jsonResponse({ ok: true, skipped: true, code: "sms_disabled" });
+  if (!appointment) {
+    console.error("appointment lookup failure", {
+      reason: "not_found",
+      userId: user.id,
+      appointmentId,
+    });
+    await tryInsertSmsLog(
+      serviceClient,
+      buildSmsLogPayload({
+        userId: user.id,
+        appointmentId,
+        clientId: requestedClientId,
+        messageType,
+        status: "failed",
+        fromNumber: telnyxFromNumber || null,
+        errorMessage: "Appointment not found",
+      }),
+      "appointment_lookup",
+    );
+    return jsonError(
+      { message: "Appointment not found", appointment_id: appointmentId },
+      404,
+      {
+        step: "appointment_lookup",
+        code: "missing_appointment",
+      },
+    );
   }
 
-  const { data: userSettings } = await serviceClient
+  const { data: smsSettingsData, error: smsSettingsError } = await serviceClient
+    .from("sms_settings")
+    .select(
+      "enabled, appointment_confirmations_enabled, appointment_updates_enabled, appointment_cancellations_enabled, appointment_reminders_enabled",
+    )
+    .eq("user_id", user.id)
+    .maybeSingle();
+  const smsSettings = (smsSettingsData || null) as SmsSettingsRecord | null;
+
+  if (smsSettingsError) {
+    await tryInsertSmsLog(
+      serviceClient,
+      buildSmsLogPayload({
+        userId: user.id,
+        appointmentId: appointment.id,
+        clientId: appointment.client_id,
+        messageType,
+        status: "failed",
+        fromNumber: telnyxFromNumber || null,
+        providerResponse: smsSettingsError,
+        errorMessage: getErrorMessage(smsSettingsError),
+      }),
+      "sms_settings",
+    );
+    return jsonError(smsSettingsError, 500, {
+      step: "sms_settings",
+      code: "sms_settings_lookup_failed",
+      message: SMS_SEND_FRIENDLY_ERROR,
+    });
+  }
+
+  if (
+    !smsSettings?.enabled ||
+    !smsSettings?.[messageEnabledKey(messageType)]
+  ) {
+    await tryInsertSmsLog(
+      serviceClient,
+      buildSmsLogPayload({
+        userId: user.id,
+        appointmentId: appointment.id,
+        clientId: appointment.client_id,
+        messageType,
+        status: "skipped",
+        fromNumber: telnyxFromNumber || null,
+        errorMessage: "SMS settings disabled for this message type",
+      }),
+      "sms_settings",
+    );
+    return jsonResponse({
+      ok: true,
+      skipped: true,
+      step: "sms_settings",
+      code: "sms_disabled",
+    });
+  }
+
+  const { data: userSettingsData, error: userSettingsError } = await serviceClient
     .from("user_settings")
     .select("country_region")
     .eq("user_id", user.id)
     .maybeSingle();
+  const userSettings = (userSettingsData || null) as UserSettingsRecord | null;
+
+  if (userSettingsError) {
+    console.error("user settings lookup failure", {
+      error: userSettingsError,
+      userId: user.id,
+    });
+  }
+
   const countryRegion = isCountryRegionCode(userSettings?.country_region)
     ? userSettings.country_region
     : DEFAULT_COUNTRY_REGION;
 
   if (!appointment.client_id) {
-    return jsonResponse({ ok: true, skipped: true, code: "missing_client" });
+    await tryInsertSmsLog(
+      serviceClient,
+      buildSmsLogPayload({
+        userId: user.id,
+        appointmentId: appointment.id,
+        messageType,
+        status: "skipped",
+        fromNumber: telnyxFromNumber || null,
+        errorMessage: "Appointment missing client_id",
+      }),
+      "appointment_client",
+    );
+    return jsonResponse({
+      ok: true,
+      skipped: true,
+      step: "appointment_client",
+      code: "missing_client",
+    });
   }
 
-  const { data: client, error: clientError } = await serviceClient
+  const { data: clientData, error: clientError } = await serviceClient
     .from("clients")
     .select("id, name, phone, sms_opt_in")
     .eq("id", appointment.client_id)
     .eq("user_id", user.id)
     .maybeSingle();
+  const client = (clientData || null) as ClientRecord | null;
 
   if (clientError) {
-    console.error("SMS client lookup failed", clientError);
-    return jsonResponse({ ok: false, message: SMS_SEND_FRIENDLY_ERROR }, 500);
+    console.error("client lookup failure", {
+      error: clientError,
+      userId: user.id,
+      appointmentId: appointment.id,
+      clientId: appointment.client_id,
+    });
+    await tryInsertSmsLog(
+      serviceClient,
+      buildSmsLogPayload({
+        userId: user.id,
+        appointmentId: appointment.id,
+        clientId: appointment.client_id,
+        messageType,
+        status: "failed",
+        fromNumber: telnyxFromNumber || null,
+        providerResponse: clientError,
+        errorMessage: getErrorMessage(clientError),
+      }),
+      "client_lookup",
+    );
+    return jsonError(clientError, 500, {
+      step: "client_lookup",
+      code: "client_lookup_failed",
+      message: SMS_SEND_FRIENDLY_ERROR,
+    });
   }
 
   if (!client) {
-    return jsonResponse({ ok: true, skipped: true, code: "missing_client" });
-  }
-
-  const toPhone = normalizePhoneForSms(
-    String(client?.phone || ""),
-    countryRegion,
-  );
-
-  if (!toPhone) {
-    return jsonResponse({ ok: true, skipped: true, code: "missing_phone" });
-  }
-
-  if (!client.sms_opt_in) {
+    console.error("client lookup failure", {
+      reason: "not_found",
+      userId: user.id,
+      appointmentId: appointment.id,
+      clientId: appointment.client_id,
+    });
+    await tryInsertSmsLog(
+      serviceClient,
+      buildSmsLogPayload({
+        userId: user.id,
+        appointmentId: appointment.id,
+        clientId: appointment.client_id,
+        messageType,
+        status: "skipped",
+        fromNumber: telnyxFromNumber || null,
+        errorMessage: "Client not found",
+      }),
+      "client_lookup",
+    );
     return jsonResponse({
       ok: true,
       skipped: true,
+      step: "client_lookup",
+      code: "missing_client",
+    });
+  }
+
+  const toPhone = normalizePhoneForSms(client.phone, countryRegion);
+
+  if (!toPhone) {
+    await tryInsertSmsLog(
+      serviceClient,
+      buildSmsLogPayload({
+        userId: user.id,
+        appointmentId: appointment.id,
+        clientId: client.id,
+        messageType,
+        status: "skipped",
+        fromNumber: telnyxFromNumber || null,
+        errorMessage: "Client phone missing or invalid",
+      }),
+      "phone_normalization",
+    );
+    return jsonResponse({
+      ok: true,
+      skipped: true,
+      step: "phone_normalization",
+      code: "missing_phone",
+    });
+  }
+
+  if (!client.sms_opt_in) {
+    console.error("sms_opt_in skipped", {
+      userId: user.id,
+      appointmentId: appointment.id,
+      clientId: client.id,
+      toPhone,
+    });
+    await tryInsertSmsLog(
+      serviceClient,
+      buildSmsLogPayload({
+        userId: user.id,
+        appointmentId: appointment.id,
+        clientId: client.id,
+        messageType,
+        toPhone,
+        status: "skipped",
+        fromNumber: telnyxFromNumber || null,
+        errorMessage: "Client has not opted in to SMS",
+      }),
+      "sms_opt_in",
+    );
+    return jsonResponse({
+      ok: true,
+      skipped: true,
+      step: "sms_opt_in",
       code: "client_not_opted_in",
     });
   }
 
-  const smsBody = buildMessage({
-    clientName: String(client.name || appointment.client_name || "there"),
-    appointmentDate: String(appointment.appointment_date || ""),
-    appointmentTime: String(appointment.appointment_time || ""),
+  const smsBody = buildSmsBody({
+    clientName: asTrimmedString(client.name || appointment.client_name) || "there",
+    appointmentDate: asTrimmedString(appointment.appointment_date),
+    appointmentTime: asTrimmedString(appointment.appointment_time),
     messageType,
   });
 
-  const logPayload = {
-    user_id: user.id,
-    appointment_id: appointment.id,
-    client_id: client.id,
-    message_type: messageType,
-    to_phone: toPhone,
-    body: smsBody,
-  };
+  const logPayloadFor = ({
+    status,
+    providerMessageId = null,
+    providerResponse = null,
+    errorMessage = null,
+  }: {
+    status: string;
+    providerMessageId?: string | null;
+    providerResponse?: unknown;
+    errorMessage?: string | null;
+  }) =>
+    buildSmsLogPayload({
+      userId: user.id,
+      appointmentId: appointment.id,
+      clientId: client.id,
+      messageType,
+      toPhone,
+      smsBody,
+      status,
+      fromNumber: telnyxFromNumber || null,
+      providerMessageId,
+      providerResponse,
+      errorMessage,
+    });
 
-  let creditsRemaining = 0;
+  const missingProviderEnv = missingKeys([
+    ["TELNYX_API_KEY", telnyxApiKey],
+    ["TELNYX_FROM_NUMBER", telnyxFromNumber],
+    ["TELNYX_MESSAGING_PROFILE_ID", telnyxMessagingProfileId],
+  ]);
 
-  try {
-    creditsRemaining = await getMessageCreditsRemaining(serviceClient, user.id);
-  } catch {
-    return jsonResponse(
-      {
-        ok: false,
-        code: "message_credits_lookup_failed",
-        message: SMS_SEND_FRIENDLY_ERROR,
-      },
+  if (missingProviderEnv.length > 0) {
+    console.error("missing env vars", {
+      step: "provider_env",
+      missing: missingProviderEnv,
+      userId: user.id,
+      appointmentId: appointment.id,
+      clientId: client.id,
+    });
+    await tryInsertSmsLog(
+      serviceClient,
+      logPayloadFor({
+        status: "failed",
+        errorMessage: "Telnyx env missing",
+      }),
+      "provider_env",
+    );
+    return jsonError(
+      { message: "Telnyx env missing", missing: missingProviderEnv },
       500,
-    );
-  }
-
-  if (creditsRemaining <= 0) {
-    await serviceClient.from("sms_message_logs").insert({
-      ...logPayload,
-      status: "failed",
-      error_message: "message_credits_empty",
-    });
-
-    return jsonResponse(
       {
-        ok: false,
-        code: "message_credits_empty",
-        message: MESSAGE_CREDITS_EMPTY_MESSAGE,
-        creditsRemaining: 0,
-      },
-      402,
-    );
-  }
-
-  if (
-    !twilioAccountSid ||
-    !twilioAuthToken ||
-    (!twilioMessagingServiceSid && !twilioFromPhone)
-  ) {
-    await serviceClient.from("sms_message_logs").insert({
-      ...logPayload,
-      status: "failed",
-      error_message: "Twilio env missing",
-    });
-
-    console.error("SMS provider env missing");
-    return jsonResponse(
-      {
-        ok: false,
+        step: "provider_env",
         code: "sms_provider_not_configured",
         message: SMS_SEND_FRIENDLY_ERROR,
       },
-      500,
     );
   }
 
-  const form = new URLSearchParams();
-  form.set("To", toPhone);
-  form.set("Body", smsBody);
+  const queuedLogPayload = logPayloadFor({ status: "queued" });
+  const queuedLogId = await tryInsertSmsLog(
+    serviceClient,
+    queuedLogPayload,
+    "sms_message_logs_insert",
+  );
 
-  if (twilioMessagingServiceSid) {
-    form.set("MessagingServiceSid", twilioMessagingServiceSid);
-  } else if (twilioFromPhone) {
-    form.set("From", twilioFromPhone);
+  if (!queuedLogId) {
+    return jsonError(
+      {
+        message: "SMS log insert failed",
+        payload: queuedLogPayload,
+      },
+      500,
+      {
+        step: "sms_message_logs_insert",
+        code: "sms_log_insert_failed",
+        message: SMS_SEND_FRIENDLY_ERROR,
+      },
+    );
   }
 
-  const twilioResponse = await fetch(
-    `https://api.twilio.com/2010-04-01/Accounts/${twilioAccountSid}/Messages.json`,
-    {
+  const telnyxRequestBody = {
+    from: telnyxFromNumber,
+    to: toPhone,
+    text: smsBody,
+    messaging_profile_id: telnyxMessagingProfileId,
+  };
+
+  try {
+    const telnyxResponse = await fetch(TELNYX_MESSAGES_URL, {
       method: "POST",
       headers: {
-        Authorization: `Basic ${
-          btoa(`${twilioAccountSid}:${twilioAuthToken}`)
-        }`,
-        "Content-Type": "application/x-www-form-urlencoded",
+        Authorization: `Bearer ${telnyxApiKey}`,
+        "Content-Type": "application/json",
       },
-      body: form,
-    },
-  );
-  const twilioResult = await twilioResponse.json().catch(() => ({}));
-
-  if (!twilioResponse.ok) {
-    await serviceClient.from("sms_message_logs").insert({
-      ...logPayload,
-      status: "failed",
-      error_message:
-        String(twilioResult.message || twilioResult.error_message || "") ||
-        `Twilio HTTP ${twilioResponse.status}`,
+      body: JSON.stringify(telnyxRequestBody),
     });
 
-    return jsonResponse(
+    const telnyxResponseText = await telnyxResponse.text();
+    const telnyxResponseBody =
+      safeParseJson(telnyxResponseText) || { raw: telnyxResponseText };
+
+    console.error("Telnyx response status/body", {
+      status: telnyxResponse.status,
+      body: telnyxResponseBody,
+      appointmentId: appointment.id,
+      clientId: client.id,
+      userId: user.id,
+    });
+
+    if (!telnyxResponse.ok) {
+      const telnyxErrorMessage = extractTelnyxErrorMessage(
+        telnyxResponseBody,
+        telnyxResponse.status,
+      );
+      const providerMessageId = extractTelnyxProviderMessageId(telnyxResponseBody);
+
+      await tryUpdateSmsLog(
+        serviceClient,
+        queuedLogId,
+        logPayloadFor({
+          status: "failed",
+          providerMessageId,
+          providerResponse: telnyxResponseBody,
+          errorMessage: telnyxErrorMessage,
+        }),
+        "telnyx_send_failed",
+      );
+
+      return jsonError(
+        {
+          message: telnyxErrorMessage,
+          status: telnyxResponse.status,
+          provider_message_id: providerMessageId,
+          provider_response: telnyxResponseBody,
+          request_body: telnyxRequestBody,
+        },
+        502,
+        {
+          step: "telnyx_send",
+          code: "sms_provider_failed",
+          message: SMS_SEND_FRIENDLY_ERROR,
+        },
+      );
+    }
+
+    const providerMessageId = extractTelnyxProviderMessageId(telnyxResponseBody);
+    const providerStatus = extractTelnyxMessageStatus(telnyxResponseBody);
+    const sentAtColumn = appointmentSentAtColumn(messageType);
+    let appointmentUpdateWarning: string | null = null;
+    let creditsRemainingAfterSend: number | null = null;
+
+    if (sentAtColumn) {
+      const { error: appointmentUpdateError } = await serviceClient
+        .from("appointments")
+        .update({
+          [sentAtColumn]: new Date().toISOString(),
+        })
+        .eq("id", appointment.id)
+        .eq("user_id", user.id);
+
+      if (appointmentUpdateError) {
+        appointmentUpdateWarning =
+          `SMS sent but ${sentAtColumn} could not be updated.`;
+        console.error("appointment update error", {
+          error: appointmentUpdateError,
+          sentAtColumn,
+          appointmentId: appointment.id,
+          clientId: client.id,
+          userId: user.id,
+        });
+      }
+    }
+
+    await tryUpdateSmsLog(
+      serviceClient,
+      queuedLogId,
+      logPayloadFor({
+        status: providerStatus,
+        providerMessageId,
+        providerResponse: telnyxResponseBody,
+        errorMessage: appointmentUpdateWarning,
+      }),
+      "telnyx_send_success",
+    );
+
+    if (messageCreditsRemaining > 0) {
+      try {
+        creditsRemainingAfterSend = await consumeMessageCreditForSms({
+          serviceClient,
+          userId: user.id,
+          appointmentId: appointment.id,
+          smsMessageLogId: queuedLogId,
+          providerMessageId,
+          messageType,
+        });
+      } catch (error) {
+        appointmentUpdateWarning = appointmentUpdateWarning
+          ? `${appointmentUpdateWarning} Message credit could not be deducted.`
+          : "SMS sent but message credit could not be deducted.";
+        console.error("message credit deduction warning", {
+          error: serializeDetails(error),
+          userId: user.id,
+          appointmentId: appointment.id,
+          smsMessageLogId: queuedLogId,
+          providerMessageId,
+          messageType,
+        });
+      }
+    }
+
+    return jsonResponse({
+      ok: true,
+      step: "telnyx_send",
+      providerMessageId,
+      providerStatus,
+      warning: appointmentUpdateWarning,
+      creditsRemaining: creditsRemainingAfterSend,
+    });
+  } catch (error) {
+    const errorMessage = getErrorMessage(error);
+    console.error("Telnyx request exception", {
+      error: serializeDetails(error),
+      appointmentId: appointment.id,
+      clientId: client.id,
+      userId: user.id,
+    });
+
+    await tryUpdateSmsLog(
+      serviceClient,
+      queuedLogId,
+      logPayloadFor({
+        status: "failed",
+        providerResponse: serializeDetails(error),
+        errorMessage,
+      }),
+      "telnyx_send_exception",
+    );
+
+    return jsonError(
+      { message: errorMessage, request_body: telnyxRequestBody, error },
+      502,
       {
-        ok: false,
+        step: "telnyx_send",
         code: "sms_provider_failed",
         message: SMS_SEND_FRIENDLY_ERROR,
       },
-      502,
     );
   }
-
-  const providerMessageId = String(twilioResult.sid || "");
-  const { data: sentLog, error: sentLogError } = await serviceClient
-    .from("sms_message_logs")
-    .insert({
-      ...logPayload,
-      status: "sent",
-      provider_message_id: providerMessageId,
-    })
-    .select("id")
-    .maybeSingle();
-
-  if (sentLogError) {
-    console.error("SMS sent log insert failed", sentLogError);
-  }
-
-  let nextCreditsRemaining: number | null = null;
-
-  try {
-    nextCreditsRemaining = await consumeMessageCredit({
-      serviceClient,
-      userId: user.id,
-      appointmentId: appointment.id,
-      smsMessageLogId: sentLog?.id || null,
-      providerMessageId,
-      messageType,
-    });
-  } catch {
-    // The provider already accepted the send, so do not report the SMS itself as failed.
-    nextCreditsRemaining = null;
-  }
-
-  return jsonResponse({
-    ok: true,
-    providerMessageId: providerMessageId || null,
-    creditsRemaining: nextCreditsRemaining,
-  });
 });
