@@ -1,9 +1,22 @@
 import { useRouter } from "expo-router";
 import { useEffect, useMemo, useState } from "react";
-import { Alert, Pressable, Switch, Text, View } from "react-native";
-import { Dropdown } from "react-native-element-dropdown";
-import { AppScreen } from "../components/layout/AppScreen";
+import { Alert, Switch, Text, View } from "react-native";
+import { AppSelectField } from "../components/AppSelectField";
+import {
+  AppButton,
+  AppCard,
+  AppScreen,
+  ProPreviewCard,
+  ScreenHeader,
+  createSchedovaUiTheme,
+} from "../components/ui";
 import { canUseFeature, useFeatureAccess } from "../lib/featureAccess";
+import { ENABLE_PRO } from "../lib/proFeatureFlag";
+import {
+  openSchedovaProScreen,
+  PRO_UPSELL_COPY,
+  showProUpgradePrompt,
+} from "../lib/proUpsell";
 import { supabase } from "../lib/supabase";
 import { useAppTheme } from "../lib/useAppTheme";
 
@@ -54,6 +67,8 @@ function defaultRules(): AvailabilityRule[] {
 export default function AvailabilitySettingsScreen() {
   const router = useRouter();
   const { colors } = useAppTheme();
+  const theme = createSchedovaUiTheme(colors);
+  const { spacing, radii, typography } = theme;
   useFeatureAccess();
   const customHoursAvailable = canUseFeature("customBusinessHours");
 
@@ -62,6 +77,24 @@ export default function AvailabilitySettingsScreen() {
   const [saving, setSaving] = useState(false);
 
   const timeOptions = useMemo(() => TIME_OPTIONS, []);
+  const selectColors = useMemo(
+    () => ({
+      background: colors.background,
+      card: colors.card,
+      text: colors.text,
+      mutedText: colors.mutedText,
+      border: colors.border,
+      primary: colors.primary,
+    }),
+    [
+      colors.background,
+      colors.border,
+      colors.card,
+      colors.mutedText,
+      colors.primary,
+      colors.text,
+    ],
+  );
 
   useEffect(() => {
     if (!customHoursAvailable) {
@@ -139,10 +172,14 @@ export default function AvailabilitySettingsScreen() {
     if (saving) return;
 
     if (!customHoursAvailable) {
-      Alert.alert(
-        "Schedova Pro",
-        "Custom business hours are a Pro feature.",
-      );
+      if (ENABLE_PRO) {
+        showProUpgradePrompt(PRO_UPSELL_COPY.customBusinessHours);
+      } else {
+        Alert.alert(
+          "Availability",
+          "Custom availability is not available in this version of Schedova.",
+        );
+      }
       return;
     }
 
@@ -194,7 +231,6 @@ export default function AvailabilitySettingsScreen() {
         }
       }
 
-      Alert.alert("Saved", "Availability updated.");
       router.push("/settings");
     } catch (error: any) {
       console.log("SAVE AVAILABILITY ERROR:", error?.message || error);
@@ -207,92 +243,73 @@ export default function AvailabilitySettingsScreen() {
   if (!customHoursAvailable) {
     return (
       <AppScreen scroll backgroundColor={colors.background}>
-        <Text
-          style={{
-            fontSize: 30,
-            fontWeight: "bold",
-            marginBottom: 16,
-            color: colors.text,
-          }}
-        >
-          Availability Settings
-        </Text>
+        <ScreenHeader
+          title="Availability"
+          subtitle="Set the days and hours your business is open."
+          showBack
+          onBackPress={() => router.push("/settings")}
+        />
 
-        <View
-          style={{
-            backgroundColor: colors.card,
-            borderWidth: 1,
-            borderColor: colors.border,
-            borderRadius: 16,
-            padding: 18,
-            marginBottom: 16,
-          }}
-        >
-          <Text style={{ color: colors.text, fontSize: 20, fontWeight: "900" }}>
-            Schedova Pro
-          </Text>
-          <Text style={{ color: colors.mutedText, marginTop: 8 }}>
-            Custom business hours and blocked time are locked on Free.
-          </Text>
-        </View>
+        {ENABLE_PRO ? (
+          <ProPreviewCard
+            message={PRO_UPSELL_COPY.customBusinessHours}
+            features={[
+              "Set custom hours for each day",
+              "Keep closed days clear on your calendar",
+              "Control when clients can be booked",
+            ]}
+            onPress={openSchedovaProScreen}
+          />
+        ) : (
+          <AppCard>
+            <Text
+              style={{
+                color: colors.text,
+                fontSize: typography.sizes.body,
+                fontWeight: typography.weights.heavy,
+              }}
+            >
+              Custom availability unavailable
+            </Text>
+            <Text
+              style={{
+                color: colors.mutedText,
+                lineHeight: 20,
+                marginTop: spacing.sm,
+              }}
+            >
+              Custom availability is not available in this version of Schedova.
+            </Text>
+          </AppCard>
+        )}
 
-        <Pressable
+        <AppButton
+          title="Back"
+          variant="ghost"
           onPress={() => router.push("/settings")}
-          style={{
-            backgroundColor: colors.primary,
-            padding: 14,
-            borderRadius: 999,
-            alignItems: "center",
-          }}
-        >
-          <Text style={{ color: "#FFFFFF", fontWeight: "900" }}>Back</Text>
-        </Pressable>
+          style={{ marginTop: spacing.md }}
+        />
       </AppScreen>
     );
   }
 
   function TimeDropdown({
+    label,
     value,
     onChange,
   }: {
+    label: string;
     value: string;
     onChange: (value: string) => void;
   }) {
     return (
-      <Dropdown
-        maxHeight={300}
-        showsVerticalScrollIndicator={false}
-        data={timeOptions}
-        labelField="label"
-        valueField="value"
+      <AppSelectField
+        label={label}
         value={value}
-        onChange={(item) => onChange(item.value)}
-        style={{
-          borderWidth: 1,
-          borderColor: colors.border,
-          borderRadius: 12,
-          paddingHorizontal: 12,
-          backgroundColor: colors.card,
-          minHeight: 52,
-          flex: 1,
-          width: "100%",
-        }}
-        containerStyle={{
-          backgroundColor: colors.card,
-          borderColor: colors.border,
-          borderRadius: 12,
-          overflow: "hidden",
-          zIndex: 999,
-          elevation: 10,
-        }}
-        itemTextStyle={{ color: colors.text }}
-        selectedTextStyle={{
-          color: colors.text,
-          fontSize: 15,
-          fontWeight: "700",
-        }}
-        placeholderStyle={{ color: colors.mutedText }}
-        activeColor={colors.background}
+        options={timeOptions}
+        onChange={onChange}
+        colors={selectColors}
+        title={label}
       />
     );
   }
@@ -304,106 +321,127 @@ export default function AvailabilitySettingsScreen() {
       keyboardShouldPersistTaps="handled"
       nestedScrollEnabled
     >
-      <Text
-        style={{
-          fontSize: 30,
-          fontWeight: "bold",
-          marginBottom: 8,
-          color: colors.text,
-        }}
-      >
-        Availability Settings
-      </Text>
-
-      <Text
-        style={{
-          fontSize: 15,
-          color: colors.mutedText,
-          marginBottom: 20,
-          lineHeight: 22,
-        }}
-      >
-        Choose which days your business accepts appointments.
-      </Text>
+      <ScreenHeader
+        title="Availability"
+        subtitle="Set the days and hours your business is open."
+        showBack
+      />
 
       {loading ? (
-        <Text style={{ color: colors.mutedText }}>Loading availability...</Text>
+        <AppCard>
+          <Text style={{ color: colors.mutedText }}>Loading availability...</Text>
+        </AppCard>
       ) : (
-        rules.map((rule) => (
-          <View
-            key={rule.day_of_week}
-            style={{
-              backgroundColor: colors.card,
-              borderRadius: 16,
-              padding: 16,
-              marginBottom: 14,
-              borderWidth: 1,
-              borderColor: colors.border,
-            }}
-          >
-            <View
+        <View style={{ gap: spacing.md }}>
+          {rules.map((rule) => (
+            <AppCard
+              key={rule.day_of_week}
               style={{
-                flexDirection: "row",
-                justifyContent: "space-between",
-                alignItems: "center",
-                marginBottom: rule.is_available ? 14 : 0,
+                opacity: rule.is_available ? 1 : 0.82,
               }}
             >
-              <Text
+              <View
                 style={{
-                  fontSize: 18,
-                  fontWeight: "700",
-                  color: colors.text,
+                  flexDirection: "row",
+                  justifyContent: "space-between",
+                  alignItems: "center",
+                  gap: spacing.md,
+                  marginBottom: rule.is_available ? spacing.md : 0,
                 }}
               >
-                {DAYS[rule.day_of_week]}
-              </Text>
+                <View style={{ flex: 1 }}>
+                  <Text
+                    style={{
+                      fontSize: typography.sizes.cardTitle,
+                      fontWeight: typography.weights.heavy,
+                      color: colors.text,
+                    }}
+                  >
+                    {DAYS[rule.day_of_week]}
+                  </Text>
 
-              <Switch
-                value={rule.is_available}
-                onValueChange={(value) =>
-                  updateRule(rule.day_of_week, "is_available", value)
-                }
-              />
-            </View>
+                  <Text
+                    style={{
+                      color: rule.is_available
+                        ? colors.mutedText
+                        : theme.colors.disabled,
+                      marginTop: spacing.xs,
+                    }}
+                  >
+                    {rule.is_available
+                      ? `${rule.start_time} - ${rule.end_time}`
+                      : "Closed"}
+                  </Text>
+                </View>
 
-            {rule.is_available && (
-              <View style={{ flexDirection: "row", gap: 10 }}>
-                <TimeDropdown
-                  value={rule.start_time}
-                  onChange={(value) =>
-                    updateRule(rule.day_of_week, "start_time", value)
-                  }
-                />
+                <View
+                  style={{
+                    borderWidth: 1,
+                    borderColor: rule.is_available
+                      ? colors.primary
+                      : colors.border,
+                    borderRadius: radii.pill,
+                    paddingHorizontal: spacing.md,
+                    paddingVertical: spacing.xs,
+                    backgroundColor: rule.is_available
+                      ? "rgba(15, 118, 110, 0.18)"
+                      : "rgba(100, 116, 139, 0.14)",
+                  }}
+                >
+                  <Text
+                    style={{
+                      color: rule.is_available ? colors.text : colors.mutedText,
+                      fontSize: typography.sizes.caption,
+                      fontWeight: typography.weights.heavy,
+                    }}
+                  >
+                    {rule.is_available ? "Open" : "Closed"}
+                  </Text>
+                </View>
 
-                <TimeDropdown
-                  value={rule.end_time}
-                  onChange={(value) =>
-                    updateRule(rule.day_of_week, "end_time", value)
+                <Switch
+                  value={rule.is_available}
+                  onValueChange={(value) =>
+                    updateRule(rule.day_of_week, "is_available", value)
                   }
                 />
               </View>
-            )}
-          </View>
-        ))
+
+              {rule.is_available && (
+                <View style={{ flexDirection: "row", gap: spacing.sm }}>
+                  <View style={{ flex: 1 }}>
+                    <TimeDropdown
+                      label="Start"
+                      value={rule.start_time}
+                      onChange={(value) =>
+                        updateRule(rule.day_of_week, "start_time", value)
+                      }
+                    />
+                  </View>
+
+                  <View style={{ flex: 1 }}>
+                    <TimeDropdown
+                      label="End"
+                      value={rule.end_time}
+                      onChange={(value) =>
+                        updateRule(rule.day_of_week, "end_time", value)
+                      }
+                    />
+                  </View>
+                </View>
+              )}
+            </AppCard>
+          ))}
+        </View>
       )}
 
-      <Pressable
+      <AppButton
+        title={saving ? "Saving..." : "Save Availability"}
         onPress={saveAvailability}
         disabled={saving}
-        style={{
-          backgroundColor: colors.primary,
-          padding: 16,
-          borderRadius: 14,
-          alignItems: "center",
-          marginTop: 10,
-          opacity: saving ? 0.6 : 1,
-        }}
-      >
-        <Text style={{ color: "#FFFFFF", fontWeight: "bold", fontSize: 16 }}>
-          {saving ? "Saving..." : "Save Availability"}
-        </Text>
-      </Pressable>
+        loading={saving}
+        style={{ marginTop: spacing.lg }}
+      />
     </AppScreen>
   );
 }

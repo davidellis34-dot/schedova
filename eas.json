@@ -3,7 +3,41 @@
     "version": ">= 16.0.0"
   },
   "build": {
+    "development": {
+      "developmentClient": true,
+      "distribution": "internal",
+      "env": {
+        "EXPO_PUBLIC_SCHEDOVA_DEMO_MODE": "true"
+      },
+      "android": {
+        "buildType": "apk"
+      }
+    },
+    "development-apk": {
+      "extends": "development",
+      "developmentClient": true,
+      "distribution": "internal",
+      "android": {
+        "buildType": "apk"
+      }
+    },
+    "screenshot": {
+      "distribution": "internal",
+      "env": {
+        "EXPO_PUBLIC_SCHEDOVA_DEMO_MODE": "true"
+      },
+      "android": {
+        "buildType": "apk"
+      }
+    },
     "preview": {
+      "android": {
+        "buildType": "apk"
+      }
+    },
+    "preview-apk": {
+      "extends": "preview",
+      "distribution": "internal",
       "android": {
         "buildType": "apk"
       }

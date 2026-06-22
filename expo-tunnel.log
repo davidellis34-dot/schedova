@@ -1,0 +1,12 @@
+Starting project at C:\Users\David\Documents\Codex\2026-05-21\test-this-expo-react-native-app\zip-run-20260521-171818\service-booking-app
+Starting Metro Bundler
+warning: Bundler cache is empty, rebuilding (this may take a minute)
+Tunnel connected.
+Tunnel ready.
+Waiting on http://localhost:8081
+Logs for your project will appear below.
+iOS node_modules\expo-router\entry.js ░░░░░░░░░░░░░░░░  0.0% (0/1)
+iOS node_modules\expo-router\entry.js ▓▓▓▓▓▓▓▓▓▓▓▓░░░░ 75.7% (1119/1286)
+iOS Bundled 5282ms node_modules\expo-router\entry.js (1995 modules)
+iOS node_modules\expo-router\entry.js ░░░░░░░░░░░░░░░░  0.0% (0/1)
+iOS Bundled 56ms node_modules\expo-router\entry.js (1 module)

@@ -48,12 +48,18 @@ export default function AppointmentFields({
         colors={theme}
         marginTop={16}
         use24Hour={false}
+        intervalMinutes={intervalMinutes}
       />
 
       <PickerBox label="End Time" colors={theme}>
-        <Text style={{ color: theme.text, fontSize: 16 }}>
-          {endTime || "--:--"}
-        </Text>
+        <View style={{ minHeight: 56, justifyContent: "center", padding: 14 }}>
+          <Text style={{ color: theme.text, fontSize: 16 }}>
+            {endTime || "--:--"}
+          </Text>
+          <Text style={{ color: theme.mutedText, fontSize: 12, marginTop: 6 }}>
+            Auto-calculated from duration
+          </Text>
+        </View>
       </PickerBox>
     </View>
   );

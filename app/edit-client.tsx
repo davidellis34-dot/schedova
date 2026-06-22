@@ -1,19 +1,45 @@
+import { Ionicons } from "@expo/vector-icons";
 import { useLocalSearchParams, useRouter } from "expo-router";
 import { useCallback, useEffect, useRef, useState } from "react";
 import {
+  ActivityIndicator,
   Alert,
-  Pressable,
   ScrollView,
   Switch,
   Text,
-  TextInput,
   View,
 } from "react-native";
 import { ClientTagPicker } from "../components/ClientTagPicker";
-import { AppScreen } from "../components/layout/AppScreen";
+import {
+  AppButton,
+  AppCard,
+  AppScreen,
+  AppTextInput,
+  ScreenHeader,
+} from "../components/ui";
 import { normalizeClientTag, type ClientTag } from "../lib/clientTags";
+import { normalizePhoneForSmsWithUserDefault } from "../lib/countrySettings";
 import { supabase } from "../lib/supabase";
 import { useAppTheme } from "../lib/useAppTheme";
+
+const EMAIL_PATTERN = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
+
+function isValidOptionalEmail(value: string) {
+  return !value || EMAIL_PATTERN.test(value);
+}
+
+function formatBirthdayInput(text: string) {
+  const numbers = text.replace(/\D/g, "").slice(0, 4);
+
+  if (numbers.length <= 2) return numbers;
+
+  return `${numbers.slice(0, 2)}/${numbers.slice(2, 4)}`;
+}
+
+function parseRebookingWeeks(value: string) {
+  const weeks = Number(value);
+  return Number.isFinite(weeks) && weeks > 0 ? weeks : 6;
+}
 
 export default function EditClientScreen() {
   const router = useRouter();
@@ -28,99 +54,176 @@ export default function EditClientScreen() {
   const [rebookingWeeks, setRebookingWeeks] = useState("6");
   const [smsOptIn, setSmsOptIn] = useState(false);
   const [clientTag, setClientTag] = useState<ClientTag>("New");
+  const [loadingClient, setLoadingClient] = useState(Boolean(clientIdValue));
+  const [saving, setSaving] = useState(false);
   const [deleting, setDeleting] = useState(false);
-  const { colors } = useAppTheme();
+  const [errorMessage, setErrorMessage] = useState("");
+  const { colors, themeName } = useAppTheme();
+  const isDarkTheme = themeName === "dark" || themeName === "black";
+  const infoAccent = isDarkTheme ? "#60A5FA" : "#2563EB";
+  const infoAccentSoft = isDarkTheme
+    ? "rgba(96, 165, 250, 0.16)"
+    : "rgba(37, 99, 235, 0.10)";
+  const infoAccentBorder = isDarkTheme
+    ? "rgba(96, 165, 250, 0.34)"
+    : "rgba(37, 99, 235, 0.24)";
+  const greenAccentSoft = isDarkTheme
+    ? "rgba(15, 118, 110, 0.26)"
+    : "rgba(15, 118, 110, 0.12)";
+  const polishedBorder = isDarkTheme
+    ? "rgba(148, 163, 184, 0.28)"
+    : "rgba(15, 23, 42, 0.12)";
+  const destructiveSoft = isDarkTheme
+    ? "rgba(220, 38, 38, 0.18)"
+    : "rgba(220, 38, 38, 0.10)";
+  const destructiveBorder = isDarkTheme
+    ? "rgba(248, 113, 113, 0.36)"
+    : "rgba(220, 38, 38, 0.22)";
 
   const fetchClient = useCallback(async () => {
-    if (!clientIdValue) return;
-
-    const {
-      data: { user },
-      error: userError,
-    } = await supabase.auth.getUser();
-
-    if (userError || !user) {
-      Alert.alert("Not signed in", "Please sign in again.");
+    if (!clientIdValue) {
+      setLoadingClient(false);
       return;
     }
 
-    const { data, error } = await supabase
-      .from("clients")
-      .select("*")
-      .eq("id", clientIdValue)
-      .eq("user_id", user.id)
-      .single();
+    setLoadingClient(true);
+    setErrorMessage("");
 
-    if (error) {
-      Alert.alert("Error", error.message);
-      return;
-    }
+    try {
+      const {
+        data: { user },
+        error: userError,
+      } = await supabase.auth.getUser();
 
-    if (data) {
-      setName(data.name || "");
-      setPhone(data.phone || "");
-      setEmail(data.email || "");
-      setNotes(data.notes || "");
-      setBirthday(data.birthday || "");
-      setRebookingWeeks(String(data.rebooking_weeks || 6));
-      setSmsOptIn(Boolean(data.sms_opt_in));
-      setClientTag(normalizeClientTag(data.client_tag));
+      if (userError || !user) {
+        const message = "Please sign in again.";
+        setErrorMessage(message);
+        Alert.alert("Not signed in", message);
+        return;
+      }
+
+      const { data, error } = await supabase
+        .from("clients")
+        .select("*")
+        .eq("id", clientIdValue)
+        .eq("user_id", user.id)
+        .single();
+
+      if (error) {
+        setErrorMessage(error.message);
+        Alert.alert("Error", error.message);
+        return;
+      }
+
+      if (data) {
+        setName(String(data.name || ""));
+        setPhone(String(data.phone || ""));
+        setEmail(String(data.email || ""));
+        setNotes(String(data.notes || ""));
+        setBirthday(String(data.birthday || ""));
+        setRebookingWeeks(String(data.rebooking_weeks || 6));
+        setSmsOptIn(Boolean(data.sms_opt_in));
+        setClientTag(normalizeClientTag(data.client_tag));
+        return;
+      }
+
+      const message = "Client could not be found.";
+      setErrorMessage(message);
+      Alert.alert("Client not found", message);
+    } catch (error) {
+      console.log("Edit client load failed", error);
+      const message = "Client could not be loaded. Please try again.";
+      setErrorMessage(message);
+      Alert.alert("Error", message);
+    } finally {
+      setLoadingClient(false);
     }
   }, [clientIdValue]);
 
   useEffect(() => {
-    fetchClient();
+    void fetchClient();
   }, [fetchClient]);
 
   if (!clientIdValue) return null;
 
   async function saveClient() {
-    if (!clientIdValue) {
-      Alert.alert("Error", "Missing client ID.");
-      return;
+    if (saving || loadingClient) return;
+
+    setSaving(true);
+    setErrorMessage("");
+
+    try {
+      if (!clientIdValue) {
+        setErrorMessage("Missing client ID.");
+        Alert.alert("Error", "Missing client ID.");
+        return;
+      }
+
+      const trimmedName = name.trim();
+      const trimmedPhoneInput = phone.trim();
+      const trimmedPhone =
+        await normalizePhoneForSmsWithUserDefault(trimmedPhoneInput);
+      const trimmedEmail = email.trim();
+      const trimmedNotes = notes.trim();
+      const trimmedBirthday = birthday.trim();
+      const displayName = trimmedName || trimmedPhone || trimmedEmail;
+
+      if (!displayName) {
+        const message = "Enter a name, phone number, or email.";
+        setErrorMessage(message);
+        Alert.alert("Missing Contact", message);
+        return;
+      }
+
+      if (!isValidOptionalEmail(trimmedEmail)) {
+        const message = "Enter a valid email address or leave email blank.";
+        setErrorMessage(message);
+        Alert.alert("Invalid Email", message);
+        return;
+      }
+
+      const {
+        data: { user },
+        error: userError,
+      } = await supabase.auth.getUser();
+
+      if (userError || !user) {
+        const message = "Please sign in again.";
+        setErrorMessage(message);
+        Alert.alert("Not signed in", message);
+        return;
+      }
+
+      const { error } = await supabase
+        .from("clients")
+        .update({
+          name: displayName,
+          phone: trimmedPhone || null,
+          email: trimmedEmail || null,
+          notes: trimmedNotes || null,
+          birthday: trimmedBirthday || null,
+          rebooking_weeks: parseRebookingWeeks(rebookingWeeks),
+          client_tag: clientTag,
+          sms_opt_in: smsOptIn,
+        })
+        .eq("id", clientIdValue)
+        .eq("user_id", user.id);
+
+      if (error) {
+        setErrorMessage(error.message);
+        Alert.alert("Error", error.message);
+        return;
+      }
+
+      router.replace("/clients" as any);
+    } catch (error) {
+      console.log("Edit client save failed", error);
+      const message = "Client could not be saved. Please try again.";
+      setErrorMessage(message);
+      Alert.alert("Error", message);
+    } finally {
+      setSaving(false);
     }
-
-    const trimmedName = name.trim();
-    const trimmedPhone = phone.trim();
-    const trimmedEmail = email.trim();
-    const displayName = trimmedName || trimmedPhone || trimmedEmail;
-
-    if (!displayName) {
-      Alert.alert("Missing Contact", "Enter a name, phone number, or email.");
-      return;
-    }
-
-    const {
-      data: { user },
-      error: userError,
-    } = await supabase.auth.getUser();
-
-    if (userError || !user) {
-      Alert.alert("Not signed in", "Please sign in again.");
-      return;
-    }
-
-    const { error } = await supabase
-      .from("clients")
-      .update({
-        name: displayName,
-        phone: trimmedPhone || null,
-        email: trimmedEmail || null,
-        notes: notes.trim() || null,
-        birthday: birthday || null,
-        rebooking_weeks: Number(rebookingWeeks || 6),
-        client_tag: clientTag,
-        sms_opt_in: smsOptIn,
-      })
-      .eq("id", clientIdValue)
-      .eq("user_id", user.id);
-
-    if (error) {
-      Alert.alert("Error", error.message);
-      return;
-    }
-
-    router.replace("/clients" as any);
   }
 
   async function archiveClient() {
@@ -128,32 +231,35 @@ export default function EditClientScreen() {
 
     setDeleting(true);
 
-    const {
-      data: { user },
-      error: userError,
-    } = await supabase.auth.getUser();
+    try {
+      const {
+        data: { user },
+        error: userError,
+      } = await supabase.auth.getUser();
 
-    if (userError || !user) {
+      if (userError || !user) {
+        Alert.alert("Not signed in", "Please sign in again.");
+        return;
+      }
+
+      const { error } = await supabase
+        .from("clients")
+        .update({ archived_at: new Date().toISOString() })
+        .eq("id", clientIdValue)
+        .eq("user_id", user.id);
+
+      if (error) {
+        Alert.alert("Error", error.message);
+        return;
+      }
+
+      router.replace("/clients" as any);
+    } catch (error) {
+      console.log("Archive client failed", error);
+      Alert.alert("Error", "Client could not be deleted. Please try again.");
+    } finally {
       setDeleting(false);
-      Alert.alert("Not signed in", "Please sign in again.");
-      return;
     }
-
-    const { error } = await supabase
-      .from("clients")
-      .update({ archived_at: new Date().toISOString() })
-      .eq("id", clientIdValue)
-      .eq("user_id", user.id);
-
-    setDeleting(false);
-
-    if (error) {
-      Alert.alert("Error", error.message);
-      return;
-    }
-
-    Alert.alert("Client deleted", "Client removed from your active list.");
-    router.replace("/clients" as any);
   }
 
   function confirmDeleteClient() {
@@ -178,151 +284,158 @@ export default function EditClientScreen() {
       ref={scrollRef}
       backgroundColor={colors.background}
       keyboardShouldPersistTaps="handled"
+      bottomPadding={64}
     >
-        <Text
+      <ScreenHeader
+        title="Edit Client"
+        subtitle="Update client details and preferences."
+      />
+
+      <AppCard
+        style={{
+          borderColor: polishedBorder,
+          borderTopColor: colors.primary,
+          borderTopWidth: 4,
+          borderWidth: 1,
+          marginBottom: 18,
+        }}
+      >
+        <View
           style={{
-            fontSize: 30,
-            fontWeight: "bold",
-            marginBottom: 24,
-            color: colors.text,
+            flexDirection: "row",
+            alignItems: "flex-start",
+            gap: 12,
+            marginBottom: 14,
           }}
         >
-          Edit Client
-        </Text>
+          <View
+            style={{
+              width: 38,
+              height: 38,
+              borderRadius: 19,
+              alignItems: "center",
+              justifyContent: "center",
+              backgroundColor: greenAccentSoft,
+              borderWidth: 1,
+              borderColor: colors.primary,
+            }}
+          >
+            <Ionicons name="create-outline" size={19} color={colors.primary} />
+          </View>
+          <View style={{ flex: 1 }}>
+            <Text
+              style={{
+                color: colors.text,
+                fontSize: 20,
+                fontWeight: "900",
+                marginBottom: 6,
+              }}
+            >
+              Client details
+            </Text>
+            <Text
+              style={{
+                color: colors.mutedText,
+                lineHeight: 20,
+              }}
+            >
+              Name, phone, or email is enough to save. Everything else is
+              optional.
+            </Text>
+          </View>
+        </View>
 
-        <Text
+        <View
           style={{
-            color: colors.text,
-            marginBottom: 6,
+            height: 1,
+            backgroundColor: colors.border,
+            marginBottom: 18,
           }}
-        >
-          Client Name
-        </Text>
+        />
 
-        <TextInput
+        {loadingClient ? (
+          <View
+            style={{
+              alignItems: "center",
+              paddingVertical: 18,
+              marginBottom: 12,
+            }}
+          >
+            <ActivityIndicator color={colors.primary} />
+            <Text style={{ color: colors.mutedText, marginTop: 10 }}>
+              Loading client...
+            </Text>
+          </View>
+        ) : null}
+
+        {errorMessage ? (
+          <View
+            style={{
+              borderWidth: 1,
+              borderColor: destructiveBorder,
+              backgroundColor: destructiveSoft,
+              borderRadius: 14,
+              padding: 12,
+              marginBottom: 16,
+            }}
+          >
+            <Text
+              style={{ color: colors.text, fontWeight: "800", lineHeight: 20 }}
+            >
+              {errorMessage}
+            </Text>
+          </View>
+        ) : null}
+
+        <AppTextInput
+          label="Client name (optional)"
           value={name}
           onChangeText={setName}
           placeholder="Client name"
-          placeholderTextColor="#888888"
-          style={{
-            borderWidth: 1,
-            borderColor: colors.border,
-            borderRadius: 12,
-            padding: 14,
-            marginBottom: 16,
-            color: colors.text,
-          }}
+          helperText="Use at least one contact field: name, phone, or email."
         />
 
-        <Text
-          style={{
-            color: colors.text,
-            marginBottom: 6,
-          }}
-        >
-          Phone Number
-        </Text>
-
-        <TextInput
+        <AppTextInput
+          label="Phone number (optional)"
           value={phone}
           onChangeText={setPhone}
+          onBlur={() => {
+            void normalizePhoneForSmsWithUserDefault(phone.trim())
+              .then(setPhone)
+              .catch((error) => {
+                console.log("Phone normalization failed", error);
+              });
+          }}
           keyboardType="phone-pad"
           placeholder="Phone number"
-          placeholderTextColor={colors.mutedText}
-          style={{
-            borderWidth: 1,
-            borderColor: colors.border,
-            borderRadius: 12,
-            padding: 14,
-            marginBottom: 16,
-            color: colors.text,
-          }}
         />
 
-        <Text
-          style={{
-            color: colors.text,
-            marginBottom: 6,
-          }}
-        >
-          Email
-        </Text>
-
-        <TextInput
+        <AppTextInput
+          label="Email (optional)"
           value={email}
           onChangeText={setEmail}
           keyboardType="email-address"
+          autoCapitalize="none"
+          autoCorrect={false}
           placeholder="Email"
-          placeholderTextColor={colors.mutedText}
-          style={{
-            borderWidth: 1,
-            borderColor: colors.border,
-            borderRadius: 12,
-            padding: 14,
-            marginBottom: 16,
-            color: colors.text,
-          }}
         />
 
-        <Text
-          style={{
-            color: colors.text,
-            marginBottom: 6,
-          }}
-        >
-          Birthday
-        </Text>
-
-        <TextInput
+        <AppTextInput
+          label="Birthday (optional)"
           value={birthday}
-          onChangeText={(text) => {
-            const numbers = text.replace(/\D/g, "");
-
-            if (numbers.length <= 2) {
-              setBirthday(numbers);
-            } else {
-              setBirthday(`${numbers.slice(0, 2)}/${numbers.slice(2, 4)}`);
-            }
-          }}
+          onChangeText={(text) => setBirthday(formatBirthdayInput(text))}
           placeholder="MM/DD"
           maxLength={5}
           keyboardType="number-pad"
-          placeholderTextColor={colors.mutedText}
-          style={{
-            borderWidth: 1,
-            borderColor: colors.border,
-            borderRadius: 12,
-            padding: 14,
-            marginBottom: 16,
-            color: colors.text,
-          }}
         />
 
-        <Text
-          style={{
-            color: colors.text,
-            marginBottom: 6,
-          }}
-        >
-          Rebooking Weeks
-        </Text>
-
-        <TextInput
+        <AppTextInput
+          label="Rebooking interval (weeks)"
           value={rebookingWeeks}
           onChangeText={setRebookingWeeks}
           keyboardType="numeric"
           placeholder="6"
-          placeholderTextColor={colors.mutedText}
-          style={{
-            borderWidth: 1,
-            borderColor: colors.border,
-            borderRadius: 12,
-            padding: 14,
-            marginBottom: 16,
-            color: colors.text,
-          }}
         />
-
 
         <ClientTagPicker
           value={clientTag}
@@ -333,10 +446,13 @@ export default function EditClientScreen() {
         <View
           style={{
             borderWidth: 1,
-            borderColor: colors.border,
-            borderRadius: 12,
+            borderColor: infoAccentBorder,
+            borderLeftColor: infoAccent,
+            borderLeftWidth: 4,
+            borderRadius: 14,
             padding: 14,
-            marginBottom: 16,
+            marginBottom: 18,
+            backgroundColor: infoAccentSoft,
           }}
         >
           <View
@@ -344,96 +460,64 @@ export default function EditClientScreen() {
               flexDirection: "row",
               alignItems: "center",
               justifyContent: "space-between",
+              gap: 12,
             }}
           >
-            <Text style={{ color: colors.text, fontWeight: "700", flex: 1 }}>
-              SMS appointment reminders
+            <Text style={{ color: colors.text, fontWeight: "800", flex: 1 }}>
+              Client agreed to receive appointment texts.
             </Text>
-            <Switch value={smsOptIn} onValueChange={setSmsOptIn} />
+            <Switch
+              value={smsOptIn}
+              onValueChange={setSmsOptIn}
+              thumbColor={smsOptIn ? colors.primary : undefined}
+            />
           </View>
 
-          <Text style={{ color: colors.mutedText, marginTop: 8, fontSize: 12 }}>
-            Turn this on only if the client agreed to receive appointment text
-            messages. They can opt out at any time.
+          <Text
+            style={{
+              color: colors.mutedText,
+              marginTop: 8,
+              fontSize: 12,
+              lineHeight: 18,
+            }}
+          >
+            Only enable this if the client has agreed to receive appointment
+            text messages.
           </Text>
         </View>
 
-        <Text
-          style={{
-            color: colors.text,
-            marginBottom: 6,
-          }}
-        >
-          Client Notes
-        </Text>
-
-        <TextInput
+        <AppTextInput
+          label="Client notes (optional)"
           value={notes}
           onChangeText={setNotes}
           multiline
           placeholder="Client preferences..."
-          placeholderTextColor={colors.mutedText}
           onFocus={() => {
             setTimeout(() => {
               scrollRef.current?.scrollToEnd({ animated: true });
             }, 250);
           }}
-          style={{
-            borderWidth: 1,
-            borderColor: colors.border,
-            borderRadius: 12,
-            padding: 14,
-            minHeight: 120,
-            textAlignVertical: "top",
-            marginBottom: 24,
-            color: colors.text,
-            backgroundColor: colors.background,
-          }}
+          containerStyle={{ marginBottom: 0 }}
         />
+      </AppCard>
 
-        <Pressable
-          onPress={saveClient}
-          style={{
-            backgroundColor: "#0F766E",
-            padding: 16,
-            borderRadius: 14,
-            alignItems: "center",
-            marginBottom: 14,
-          }}
-        >
-          <Text
-            style={{
-              color: "#ffffff",
-              fontWeight: "bold",
-              fontSize: 16,
-            }}
-          >
-            Save Client
-          </Text>
-        </Pressable>
+      <AppButton
+        title="Save Changes"
+        loading={saving}
+        disabled={saving || deleting || loadingClient}
+        onPress={() => {
+          void saveClient();
+        }}
+        style={{ marginBottom: 14 }}
+      />
 
-        <Pressable
-          onPress={confirmDeleteClient}
-          disabled={deleting}
-          style={{
-            backgroundColor: "#B91C1C",
-            padding: 16,
-            borderRadius: 14,
-            alignItems: "center",
-            marginBottom: 40,
-            opacity: deleting ? 0.7 : 1,
-          }}
-        >
-          <Text
-            style={{
-              color: "#ffffff",
-              fontWeight: "bold",
-              fontSize: 16,
-            }}
-          >
-            Delete Client
-          </Text>
-        </Pressable>
+      <AppButton
+        title={deleting ? "Deleting..." : "Delete Client"}
+        variant="destructive"
+        loading={deleting}
+        disabled={saving || deleting || loadingClient}
+        onPress={confirmDeleteClient}
+      />
     </AppScreen>
   );
 }

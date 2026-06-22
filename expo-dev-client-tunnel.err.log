@@ -1,0 +1,21 @@
+C:\Users\David\Documents\Codex\2026-05-21\test-this-expo-react-native-app\zip-run-20260521-171818\service-booking-app\node_modules\expo\node_modules\@expo\cli\build\src\utils\errors.js:130
+    throw error;
+    ^
+
+Error: ENOENT: no such file or directory, watch 'C:\Users\David\Documents\Codex\2026-05-21\test-this-expo-react-native-app\zip-run-20260521-171818\service-booking-app\node_modules\react-native-reanimated\android\.cxx\Debug\5l2w2c2v\armeabi-v7a\CMakeFiles\CMakeTmp\CMakeFiles\cmTC_49141.dir'
+    at FSWatcher.<computed> (node:internal/fs/watchers:316:19)
+    at Object.watch (node:fs:2538:36)
+    at FallbackWatcher._watchdir (C:\Users\David\Documents\Codex\2026-05-21\test-this-expo-react-native-app\zip-run-20260521-171818\service-booking-app\node_modules\metro-file-map\src\watchers\FallbackWatcher.js:119:33)
+    at C:\Users\David\Documents\Codex\2026-05-21\test-this-expo-react-native-app\zip-run-20260521-171818\service-booking-app\node_modules\metro-file-map\src\watchers\FallbackWatcher.js:219:22
+    at Walker.<anonymous> (C:\Users\David\Documents\Codex\2026-05-21\test-this-expo-react-native-app\zip-run-20260521-171818\service-booking-app\node_modules\metro-file-map\src\watchers\FallbackWatcher.js:358:5)
+    at Walker.emit (node:events:509:28)
+    at C:\Users\David\Documents\Codex\2026-05-21\test-this-expo-react-native-app\zip-run-20260521-171818\service-booking-app\node_modules\walker\lib\walker.js:69:16
+    at FSReqCallback.oncomplete (node:fs:185:23) {
+  errno: -4058,
+  syscall: 'watch',
+  code: 'ENOENT',
+  path: 'C:\\Users\\David\\Documents\\Codex\\2026-05-21\\test-this-expo-react-native-app\\zip-run-20260521-171818\\service-booking-app\\node_modules\\react-native-reanimated\\android\\.cxx\\Debug\\5l2w2c2v\\armeabi-v7a\\CMakeFiles\\CMakeTmp\\CMakeFiles\\cmTC_49141.dir',
+  filename: 'C:\\Users\\David\\Documents\\Codex\\2026-05-21\\test-this-expo-react-native-app\\zip-run-20260521-171818\\service-booking-app\\node_modules\\react-native-reanimated\\android\\.cxx\\Debug\\5l2w2c2v\\armeabi-v7a\\CMakeFiles\\CMakeTmp\\CMakeFiles\\cmTC_49141.dir'
+}
+
+Node.js v24.15.0

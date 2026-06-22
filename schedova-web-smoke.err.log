@@ -1,0 +1,1 @@
+  --non-interactive is not supported, use $CI=1 instead

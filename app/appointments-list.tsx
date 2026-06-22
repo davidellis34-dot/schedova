@@ -19,6 +19,8 @@ import { formatClockTime, getCalendarPreferences } from "../lib/calendarPreferen
 import { confirmDestructiveAction } from "../lib/confirmDestructiveAction";
 import { canUseFeature, useFeatureAccess } from "../lib/featureAccess";
 import { cancelAppointmentReminder } from "../lib/localNotifications";
+import { ENABLE_PRO } from "../lib/proFeatureFlag";
+import { showProUpgradePrompt } from "../lib/proUpsell";
 import { supabase } from "../lib/supabase";
 import { useAppTheme } from "../lib/useAppTheme";
 
@@ -26,18 +28,20 @@ type AppointmentTab = "upcoming" | "completed" | "canceled";
 
 type Appointment = {
   id: string;
-  client_name?: string;
+  client_name?: string | null;
   service_id?: string;
-  appointment_date: string;
-  appointment_time: string;
-  status?: string;
+  appointment_date?: string | null;
+  appointment_time?: string | null;
+  end_time?: string | null;
+  duration_minutes?: number | null;
+  status?: string | null;
   archived?: boolean;
-  appointment_notes?: string;
-  tip_amount?: number;
+  appointment_notes?: string | null;
+  tip_amount?: number | null;
 };
 export default function AppointmentsList() {
   const router = useRouter();
-  const { colors } = useAppTheme();
+  const { colors, themeName } = useAppTheme();
   useFeatureAccess();
   const insets = useSafeAreaInsets();
   const [activeTab, setActiveTab] = useState<AppointmentTab>("upcoming");
@@ -54,6 +58,37 @@ export default function AppointmentsList() {
   const [tipAmount, setTipAmount] = useState("");
   const [appointmentNotes, setAppointmentNotes] = useState("");
   const [use24Hour, setUse24Hour] = useState(false);
+
+  function canUseProFeature(feature: Parameters<typeof canUseFeature>[0]) {
+    return canUseFeature(feature);
+  }
+
+  const isDarkTheme = themeName === "dark" || themeName === "black";
+  const infoAccent = isDarkTheme ? "#60A5FA" : "#2563EB";
+  const infoAccentSoft = isDarkTheme
+    ? "rgba(96, 165, 250, 0.16)"
+    : "rgba(37, 99, 235, 0.10)";
+  const infoAccentBorder = isDarkTheme
+    ? "rgba(96, 165, 250, 0.32)"
+    : "rgba(37, 99, 235, 0.24)";
+  const polishedBorder = isDarkTheme
+    ? "rgba(148, 163, 184, 0.28)"
+    : "rgba(15, 23, 42, 0.12)";
+
+  function getStatusAccent(status?: string | null) {
+    switch (status) {
+      case "completed":
+        return "#16A34A";
+      case "canceled":
+      case "customer_canceled":
+      case "business_canceled":
+        return "#DC2626";
+      case "no_show":
+        return "#D97706";
+      default:
+        return infoAccent;
+    }
+  }
 
   useEffect(() => {
     fetchData();
@@ -81,6 +116,66 @@ export default function AppointmentsList() {
 
   function formatTime(timeString?: string | null) {
     return formatClockTime(timeString, use24Hour);
+  }
+
+  function timeToMinutes(timeString?: string | null) {
+    const [hours, minutes] = String(timeString || "00:00")
+      .slice(0, 5)
+      .split(":")
+      .map(Number);
+
+    return (
+      (Number.isFinite(hours) ? hours : 0) * 60 +
+      (Number.isFinite(minutes) ? minutes : 0)
+    );
+  }
+
+  function minutesToTime(minutes: number) {
+    const safeMinutes = ((Math.round(minutes) % 1440) + 1440) % 1440;
+    const hours = Math.floor(safeMinutes / 60);
+    const remainingMinutes = safeMinutes % 60;
+
+    return `${String(hours).padStart(2, "0")}:${String(
+      remainingMinutes,
+    ).padStart(2, "0")}`;
+  }
+
+  function getAppointmentDurationMinutes(appointment: any) {
+    const savedDuration = Number(appointment?.duration_minutes);
+
+    if (Number.isFinite(savedDuration) && savedDuration > 0) {
+      return Math.round(savedDuration);
+    }
+
+    const startMinutes = timeToMinutes(appointment?.appointment_time);
+    const endMinutes = appointment?.end_time
+      ? timeToMinutes(appointment.end_time)
+      : Number.NaN;
+
+    if (Number.isFinite(endMinutes) && endMinutes > startMinutes) {
+      return endMinutes - startMinutes;
+    }
+
+    return getAppointmentServices(appointment).reduce(
+      (sum: number, service: any) => sum + Number(service?.duration_minutes || 0),
+      0,
+    );
+  }
+
+  function getAppointmentEndTime(appointment: any) {
+    const duration = getAppointmentDurationMinutes(appointment);
+    if (duration && appointment?.appointment_time) {
+      return minutesToTime(timeToMinutes(appointment.appointment_time) + duration);
+    }
+
+    return appointment?.end_time || "";
+  }
+
+  function formatAppointmentTimeRange(appointment: any) {
+    const start = formatTime(appointment?.appointment_time);
+    const end = formatTime(getAppointmentEndTime(appointment));
+
+    return end ? `${start} - ${end}` : start;
   }
 
   async function fetchData() {
@@ -111,13 +206,13 @@ export default function AppointmentsList() {
       return;
     }
 
-    setAppointments(appointmentsResult.data || []);
-    setServices(servicesResult.data || []);
-    setClients(clientsResult.data || []);
+    setAppointments(((appointmentsResult.data || []).filter(Boolean)) as Appointment[]);
+    setServices((servicesResult.data || []).filter(Boolean));
+    setClients((clientsResult.data || []).filter(Boolean));
   }
 
-  function getClientByName(name: string) {
-    return clients.find((client) => client.name === name);
+  function getClientByName(name?: string | null) {
+    return clients.find((client) => client?.name === name);
   }
 
   function formatLocalDate(date: Date) {
@@ -129,12 +224,13 @@ export default function AppointmentsList() {
   }
 
   function getRebookDate(appointment: any) {
-    const client = getClientByName(appointment.client_name);
-    const weeks = Number(client?.rebooking_weeks || 6);
+    const dateText = String(appointment?.appointment_date || "");
+    const [year, month, day] = dateText.split("-").map(Number);
 
-    const [year, month, day] = appointment.appointment_date
-      .split("-")
-      .map(Number);
+    if (!year || !month || !day) return null;
+
+    const client = getClientByName(appointment?.client_name);
+    const weeks = Number(client?.rebooking_weeks || 6);
     const date = new Date(year, month - 1, day);
 
     date.setDate(date.getDate() + weeks * 7);
@@ -145,18 +241,19 @@ export default function AppointmentsList() {
   function filteredAppointments() {
     if (activeTab === "upcoming") {
       return appointments.filter(
-        (a) => (a.status === "scheduled" || !a.status) && !a.archived,
+        (a) => a && (a.status === "scheduled" || !a.status) && !a.archived,
       );
     }
 
     if (activeTab === "completed") {
       return appointments.filter(
-        (a) => a.status === "completed" && !a.archived,
+        (a) => a && a.status === "completed" && !a.archived,
       );
     }
 
     return appointments.filter(
       (a) =>
+        a &&
         !a.archived &&
         (a.status === "canceled" ||
           a.status === "customer_canceled" ||
@@ -166,6 +263,11 @@ export default function AppointmentsList() {
   }
 
   function openAppointment(appointment: any) {
+    if (!appointment?.id) {
+      Alert.alert("Error", "No appointment ID found.");
+      return;
+    }
+
     setSelectedAppointment(appointment);
     setTipAmount(String(appointment.tip_amount ?? ""));
     setAppointmentNotes(appointment.appointment_notes ?? "");
@@ -245,6 +347,11 @@ export default function AppointmentsList() {
   }
 
   async function updateAppointmentStatus(id: string, status: string) {
+    if (!id) {
+      Alert.alert("Error", "No appointment ID found.");
+      return;
+    }
+
     const userId = await getCurrentUserIdOrAlert();
     if (!userId) return;
 
@@ -263,7 +370,7 @@ export default function AppointmentsList() {
 
     if (data) {
       if (status === "canceled") {
-        if (canUseFeature("smsAutomation")) {
+        if (canUseProFeature("smsAutomation")) {
           void sendAppointmentSmsNonBlocking(id, "cancellation");
         }
         await cancelAppointmentReminder(id);
@@ -282,6 +389,11 @@ export default function AppointmentsList() {
   }
 
   async function deleteAppointment(id: string) {
+    if (!id) {
+      Alert.alert("Error", "No appointment ID found.");
+      return;
+    }
+
     await confirmDestructiveAction({
       title: "Delete Appointment",
       message: "Are you sure you want to delete this appointment?",
@@ -290,7 +402,7 @@ export default function AppointmentsList() {
         const userId = await getCurrentUserIdOrAlert();
         if (!userId) return;
 
-        if (canUseFeature("smsAutomation")) {
+        if (canUseProFeature("smsAutomation")) {
           void sendAppointmentSmsNonBlocking(id, "cancellation");
         }
 
@@ -354,7 +466,7 @@ export default function AppointmentsList() {
         const userId = await getCurrentUserIdOrAlert();
         if (!userId) return;
 
-        if (canUseFeature("smsAutomation")) {
+        if (canUseProFeature("smsAutomation")) {
           await Promise.all(
             selectedIds.map((appointmentId) =>
               sendAppointmentSmsNonBlocking(appointmentId, "cancellation"),
@@ -390,25 +502,36 @@ export default function AppointmentsList() {
   }
 
   function bulkReschedule() {
-    Alert.alert(
-      "Schedova Pro",
-      "Smart rescheduling and follow-up tools are Pro features.",
+    if (!ENABLE_PRO) return;
+
+    showProUpgradePrompt(
+      "Smart rescheduling and follow-up tools are included with Schedova Pro.",
     );
   }
 
   function StatusBadge({ appointment }: { appointment: any }) {
     const status = appointment.status || "scheduled";
+    const statusAccent = getStatusAccent(status);
+    const scheduled = status === "scheduled";
 
     return (
       <View
         style={{
-          backgroundColor: colors.background,
+          backgroundColor: scheduled ? statusAccent : `${statusAccent}18`,
+          borderColor: statusAccent,
+          borderWidth: 1,
           paddingHorizontal: 12,
           paddingVertical: 5,
           borderRadius: 999,
         }}
       >
-        <Text style={{ color: colors.text, fontSize: 12, fontWeight: "bold" }}>
+        <Text
+          style={{
+            color: scheduled ? "#FFFFFF" : statusAccent,
+            fontSize: 12,
+            fontWeight: "900",
+          }}
+        >
           {status}
         </Text>
       </View>
@@ -423,26 +546,32 @@ export default function AppointmentsList() {
         onPress={() => setActiveTab(tab)}
         style={{
           flex: 1,
-          backgroundColor: active ? colors.primary : colors.card,
+          backgroundColor: active ? infoAccent : colors.card,
+          borderColor: active ? infoAccent : polishedBorder,
+          borderWidth: 1,
           padding: 12,
           borderRadius: 999,
           alignItems: "center",
         }}
       >
-        <Text style={{ color: colors.text, fontWeight: "bold" }}>{label}</Text>
+        <Text
+          style={{ color: active ? "#FFFFFF" : colors.text, fontWeight: "900" }}
+        >
+          {label}
+        </Text>
       </Pressable>
     );
   }
   function getAppointmentServices(appointment: any) {
     return getSavedAppointmentServices(appointment, services);
   }
-  const shownAppointments = filteredAppointments().slice(0, 50);
+  const shownAppointments = filteredAppointments()
+    .filter((appointment) => Boolean(appointment?.id))
+    .slice(0, 50);
 
   const selectedAppointmentServices = selectedAppointment
     ? getAppointmentServices(selectedAppointment)
     : [];
-
-  const selectedService = selectedAppointmentServices[0] || null;
 
   const selectedClient = selectedAppointment
     ? getClientByName(selectedAppointment.client_name)
@@ -455,16 +584,32 @@ export default function AppointmentsList() {
 
   return (
     <AppScreen scroll backgroundColor={colors.background}>
-      <Text
+      <View
         style={{
-          fontSize: 28,
-          fontWeight: "bold",
+          flexDirection: "row",
+          alignItems: "center",
+          gap: 10,
           marginBottom: 20,
-          color: colors.text,
         }}
       >
-        Appointments
-      </Text>
+        <View
+          style={{
+            width: 4,
+            height: 24,
+            borderRadius: 999,
+            backgroundColor: infoAccent,
+          }}
+        />
+        <Text
+          style={{
+            fontSize: 28,
+            fontWeight: "bold",
+            color: colors.text,
+          }}
+        >
+          Appointments
+        </Text>
+      </View>
 
       <View style={{ flexDirection: "row", marginBottom: 20 }}>
         <TabButton label="Upcoming" tab="upcoming" />
@@ -483,6 +628,8 @@ export default function AppointmentsList() {
           style={{
             backgroundColor: colors.card,
             paddingVertical: 12,
+            borderColor: infoAccentBorder,
+            borderWidth: 1,
             borderRadius: 999,
             alignItems: "center",
             marginBottom: 16,
@@ -501,21 +648,31 @@ export default function AppointmentsList() {
       {shownAppointments.map((appointment) => {
         const appointmentServices = getAppointmentServices(appointment);
         const service = appointmentServices[0];
+        const statusAccent = getStatusAccent(appointment.status);
 
         return (
           <View
             key={appointment.id}
             style={{
               backgroundColor: colors.card,
-              borderLeftWidth: 8,
-              borderLeftColor: service?.color_hex || colors.border,
+              borderLeftWidth: 5,
+              borderLeftColor: statusAccent,
               padding: 18,
               borderRadius: 18,
               marginBottom: 16,
               borderWidth: 1,
-              borderColor: colors.border,
+              borderColor: polishedBorder,
             }}
           >
+            <View
+              style={{
+                width: 36,
+                height: 4,
+                borderRadius: 999,
+                backgroundColor: service?.color_hex || infoAccent,
+                marginBottom: 12,
+              }}
+            />
             <Text
               style={{ fontSize: 20, fontWeight: "bold", color: colors.text }}
             >
@@ -534,7 +691,8 @@ export default function AppointmentsList() {
             </Text>
 
             <Text style={{ marginTop: 6, color: colors.text }}>
-              {appointment.appointment_date} at {formatTime(appointment.appointment_time)}
+              {appointment.appointment_date || "Date not set"} at{" "}
+              {formatAppointmentTimeRange(appointment)}
             </Text>
 
             {Number(appointment.tip_amount || 0) > 0 && (
@@ -570,10 +728,10 @@ export default function AppointmentsList() {
                   height: 28,
                   borderRadius: 999,
                   borderWidth: 2,
-                  borderColor: "#0F766E",
+                  borderColor: colors.primary,
                   backgroundColor: selectedIds.includes(appointment.id)
-                    ? "#0F766E"
-                    : "#ffffff",
+                    ? colors.primary
+                    : colors.card,
                   justifyContent: "center",
                   alignItems: "center",
                   zIndex: 10,
@@ -583,11 +741,11 @@ export default function AppointmentsList() {
                   style={{
                     color: selectedIds.includes(appointment.id)
                       ? "#ffffff"
-                      : "#0F766E",
+                      : colors.primary,
                     fontWeight: "bold",
                   }}
                 >
-                  ✓
+                  {"\u2713"}
                 </Text>
               </Pressable>
             )}
@@ -602,11 +760,11 @@ export default function AppointmentsList() {
               <StatusBadge appointment={appointment} />
 
               {appointment.status === "completed" &&
-                canUseFeature("smartReminders") && (
+                canUseProFeature("smartReminders") && (
                 <Text
                   style={{
                     marginLeft: 14,
-                    color: "#0F766E",
+                    color: infoAccent,
                     fontWeight: "bold",
                     fontSize: 13,
                   }}
@@ -619,7 +777,7 @@ export default function AppointmentsList() {
             <Pressable
               onPress={() => openAppointment(appointment)}
               style={{
-                backgroundColor: "#0F766E",
+                backgroundColor: colors.primary,
                 paddingVertical: 13,
                 borderRadius: 999,
                 alignItems: "center",
@@ -655,6 +813,8 @@ export default function AppointmentsList() {
                 paddingBottom: insets.bottom + 24,
                 borderTopLeftRadius: 24,
                 borderTopRightRadius: 24,
+                borderColor: infoAccentBorder,
+                borderTopWidth: 1,
                 maxHeight: "88%",
               }}
             >
@@ -700,7 +860,7 @@ export default function AppointmentsList() {
                   });
                 }}
                 style={{
-                  backgroundColor: "#3B82F6",
+                  backgroundColor: colors.primary,
                   padding: 14,
                   borderRadius: 12,
                   alignItems: "center",
@@ -726,8 +886,10 @@ export default function AppointmentsList() {
               <View
                 style={{
                   backgroundColor: colors.card,
-                  borderLeftWidth: 10,
-                  borderLeftColor: selectedService?.color_hex || "#0F766E",
+                  borderLeftWidth: 5,
+                  borderLeftColor: getStatusAccent(selectedAppointment?.status),
+                  borderColor: polishedBorder,
+                  borderWidth: 1,
                   padding: 18,
                   borderRadius: 14,
                   marginBottom: 18,
@@ -758,7 +920,11 @@ export default function AppointmentsList() {
                 </Text>
 
                 <Text style={{ color: colors.text }}>
-                  Time: {formatTime(selectedAppointment?.appointment_time)}
+                  Time: {formatAppointmentTimeRange(selectedAppointment)}
+                </Text>
+
+                <Text style={{ color: colors.text }}>
+                  Duration: {getAppointmentDurationMinutes(selectedAppointment)} min
                 </Text>
 
                 <Text style={{ color: colors.text }}>
@@ -779,16 +945,30 @@ export default function AppointmentsList() {
                         updateAppointmentStatus(selectedAppointment.id, status);
                       }}
                       style={{
-                        backgroundColor: colors.card,
+                        backgroundColor:
+                          selectedAppointment?.status === status
+                            ? infoAccentSoft
+                            : colors.card,
                         padding: 12,
                         borderRadius: 12,
                         marginTop: 10,
                         borderWidth: 1,
-                        borderColor: colors.border,
+                        borderColor:
+                          selectedAppointment?.status === status
+                            ? infoAccent
+                            : polishedBorder,
                         alignItems: "center",
                       }}
                     >
-                      <Text style={{ color: colors.text, fontWeight: "bold" }}>
+                      <Text
+                        style={{
+                          color:
+                            selectedAppointment?.status === status
+                              ? infoAccent
+                              : colors.text,
+                          fontWeight: "bold",
+                        }}
+                      >
                         {status}
                       </Text>
                     </Pressable>
@@ -796,11 +976,11 @@ export default function AppointmentsList() {
                 )}
 
                 {selectedAppointment?.status === "completed" &&
-                  canUseFeature("smartReminders") && (
+                  canUseProFeature("smartReminders") && (
                   <View
                     style={{
                       backgroundColor: colors.card,
-                      borderColor: colors.border,
+                      borderColor: infoAccentBorder,
                       borderWidth: 1,
                       padding: 16,
                       borderRadius: 12,
@@ -824,7 +1004,7 @@ export default function AppointmentsList() {
 
                     {!!selectedRebookDate && (
                       <Text
-                        style={{ color: colors.primary, fontWeight: "bold" }}
+                        style={{ color: infoAccent, fontWeight: "bold" }}
                       >
                         Suggested Rebook: {selectedRebookDate}
                       </Text>
@@ -852,7 +1032,7 @@ export default function AppointmentsList() {
                 style={{
                   backgroundColor: colors.background,
                   borderWidth: 1,
-                  borderColor: "#D1D5DB",
+                  borderColor: polishedBorder,
                   padding: 14,
                   borderRadius: 12,
                   marginBottom: 10,
@@ -879,7 +1059,7 @@ export default function AppointmentsList() {
                 style={{
                   backgroundColor: colors.background,
                   borderWidth: 1,
-                  borderColor: "#D1D5DB",
+                  borderColor: polishedBorder,
                   borderRadius: 12,
                   padding: 14,
                   minHeight: 110,
@@ -890,7 +1070,16 @@ export default function AppointmentsList() {
               />
 
               <Pressable
-                onPress={() => deleteAppointment(selectedAppointment.id)}
+                onPress={() => {
+                  const appointmentId = selectedAppointment?.id;
+
+                  if (!appointmentId) {
+                    Alert.alert("Error", "No appointment ID found.");
+                    return;
+                  }
+
+                  void deleteAppointment(appointmentId);
+                }}
                 style={{
                   backgroundColor: "#DC2626",
                   padding: 14,
@@ -932,20 +1121,22 @@ export default function AppointmentsList() {
         <View style={{ flexDirection: "row", gap: 12, marginTop: 16 }}>
           {activeTab === "upcoming" ? (
             <>
-              <Pressable
-                onPress={bulkReschedule}
-                style={{
-                  flex: 1,
-                  backgroundColor: "#2563EB",
-                  padding: 14,
-                  borderRadius: 999,
-                  alignItems: "center",
-                }}
-              >
-                <Text style={{ color: "#fff", fontWeight: "bold" }}>
-                  Reschedule ({selectedIds.length})
-                </Text>
-              </Pressable>
+              {ENABLE_PRO ? (
+                <Pressable
+                  onPress={bulkReschedule}
+                  style={{
+                    flex: 1,
+                    backgroundColor: "#2563EB",
+                    padding: 14,
+                    borderRadius: 999,
+                    alignItems: "center",
+                  }}
+                >
+                  <Text style={{ color: "#fff", fontWeight: "bold" }}>
+                    Reschedule ({selectedIds.length})
+                  </Text>
+                </Pressable>
+              ) : null}
 
               <Pressable
                 onPress={deleteSelectedAppointments}
@@ -968,7 +1159,7 @@ export default function AppointmentsList() {
                 onPress={archiveSelectedAppointments}
                 style={{
                   flex: 1,
-                  backgroundColor: "#0F766E",
+                  backgroundColor: colors.primary,
                   padding: 14,
                   borderRadius: 999,
                   alignItems: "center",

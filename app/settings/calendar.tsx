@@ -1,6 +1,6 @@
 import AsyncStorage from "@react-native-async-storage/async-storage";
 import { useEffect, useState } from "react";
-import { Alert, Pressable, Text, View } from "react-native";
+import { Pressable, Text, View } from "react-native";
 import { AppSelectField } from "../../components/AppSelectField";
 import { AppScreen } from "../../components/layout/AppScreen";
 import { useAppTheme } from "../../lib/useAppTheme";
@@ -35,7 +35,6 @@ export default function CalendarSettingsScreen() {
     await AsyncStorage.setItem("calendar_interval", interval);
     await AsyncStorage.setItem("time_format", timeFormat);
 
-    Alert.alert("Saved", "Calendar settings updated.");
   }
 
   const hourOptions = [

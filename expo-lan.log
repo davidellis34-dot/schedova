@@ -1,0 +1,56 @@
+Starting project at C:\Users\David\Documents\Codex\2026-05-21\test-this-expo-react-native-app\zip-run-20260521-171818\service-booking-app
+Starting Metro Bundler
+warning: Bundler cache is empty, rebuilding (this may take a minute)
+Waiting on http://localhost:8081
+Logs for your project will appear below.
+iOS node_modules\expo-router\entry.js ░░░░░░░░░░░░░░░░  0.0% (0/1)
+iOS node_modules\expo-router\entry.js ▓▓▓▓▓▓▓▓▓▓▓▓▓▓░░ 90.5% (1282/1391)
+iOS Bundled 4604ms node_modules\expo-router\entry.js (1850 modules)
+ LOG  Schedova Pro gate {"error": null, "isPro": false, "source": "auth:SIGNED_OUT", "subscription": null, "userId": null}
+ ERROR  [AuthApiError: Invalid Refresh Token: Refresh Token Not Found] 
+
+Call Stack
+  construct (<native>)
+  apply (<native>)
+  _construct (node_modules\@babel\runtime\helpers\construct.js)
+  Wrapper (node_modules\@babel\runtime\helpers\wrapNativeSuper.js)
+  construct (<native>)
+  _callSuper (node_modules\@babel\runtime\helpers\callSuper.js)
+  AuthError#constructor (node_modules\@supabase\auth-js\dist\main\lib\errors.js)
+  construct (<native>)
+  _callSuper (node_modules\@babel\runtime\helpers\callSuper.js)
+  AuthApiError#constructor (node_modules\@supabase\auth-js\dist\main\lib\errors.js)
+  handleError (node_modules\@supabase\auth-js\dist\main\lib\fetch.js)
+  next (<native>)
+  asyncGeneratorStep (node_modules\@babel\runtime\helpers\asyncToGenerator.js)
+  _next (node_modules\@babel\runtime\helpers\asyncToGenerator.js)
+  tryCallOne (address at (InternalBytecode.js:1:1180)
+  anonymous (address at (InternalBytecode.js:1:1874)
+ LOG  Schedova Pro gate {"error": null, "isPro": false, "source": "auth:SIGNED_OUT", "subscription": null, "userId": null}
+ LOG  Schedova Pro gate {"error": null, "isPro": false, "source": "app-start", "subscription": null, "userId": null}
+ LOG  Schedova Pro gate {"error": null, "isPro": false, "source": "auth:INITIAL_SESSION", "subscription": null, "userId": null}
+ LOG  Schedova Pro gate {"error": null, "isPro": false, "source": "auth:SIGNED_IN", "subscription": null, "userId": null}
+ LOG  Schedova Pro gate {"error": null, "isPro": false, "source": "login", "subscription": null, "userId": null}
+ LOG  Schedova Pro gate {"error": null, "isPro": true, "source": "login", "subscription": {"current_period_end": null, "entitlement": "pro", "entitlement_expires_at": null, "entitlement_source": "manual", "plan": "pro", "status": "active"}, "userId": "2782e286-553e-4ba7-89e0-e78910e20469"}
+ LOG  Schedova Pro gate {"error": null, "isPro": true, "source": "app-active", "subscription": {"current_period_end": null, "entitlement": "pro", "entitlement_expires_at": null, "entitlement_source": "manual", "plan": "pro", "status": "active"}, "userId": "2782e286-553e-4ba7-89e0-e78910e20469"}
+ LOG  Schedova Pro gate {"error": null, "isPro": true, "source": "app-active", "subscription": {"current_period_end": null, "entitlement": "pro", "entitlement_expires_at": null, "entitlement_source": "manual", "plan": "pro", "status": "active"}, "userId": "2782e286-553e-4ba7-89e0-e78910e20469"}
+ LOG  Schedova Pro gate {"error": null, "isPro": true, "source": "app-active", "subscription": {"current_period_end": null, "entitlement": "pro", "entitlement_expires_at": null, "entitlement_source": "manual", "plan": "pro", "status": "active"}, "userId": "2782e286-553e-4ba7-89e0-e78910e20469"}
+ LOG  Schedova Pro gate {"error": null, "isPro": true, "source": "app-active", "subscription": {"current_period_end": null, "entitlement": "pro", "entitlement_expires_at": null, "entitlement_source": "manual", "plan": "pro", "status": "active"}, "userId": "2782e286-553e-4ba7-89e0-e78910e20469"}
+ LOG  Schedova Pro gate {"error": null, "isPro": true, "source": "app-active", "subscription": {"current_period_end": null, "entitlement": "pro", "entitlement_expires_at": null, "entitlement_source": "manual", "plan": "pro", "status": "active"}, "userId": "2782e286-553e-4ba7-89e0-e78910e20469"}
+ LOG  Schedova Pro gate {"error": null, "isPro": true, "source": "app-active", "subscription": {"current_period_end": null, "entitlement": "pro", "entitlement_expires_at": null, "entitlement_source": "manual", "plan": "pro", "status": "active"}, "userId": "2782e286-553e-4ba7-89e0-e78910e20469"}
+ LOG  Schedova Pro gate {"error": null, "isPro": true, "source": "feature-hook", "subscription": {"current_period_end": null, "entitlement": "pro", "entitlement_expires_at": null, "entitlement_source": "manual", "plan": "pro", "status": "active"}, "userId": "2782e286-553e-4ba7-89e0-e78910e20469"}
+ LOG  Schedova Pro gate {"error": null, "isPro": true, "source": "feature-hook", "subscription": {"current_period_end": null, "entitlement": "pro", "entitlement_expires_at": null, "entitlement_source": "manual", "plan": "pro", "status": "active"}, "userId": "2782e286-553e-4ba7-89e0-e78910e20469"}
+ LOG  Schedova Pro gate {"error": null, "isPro": true, "source": "feature-hook", "subscription": {"current_period_end": null, "entitlement": "pro", "entitlement_expires_at": null, "entitlement_source": "manual", "plan": "pro", "status": "active"}, "userId": "2782e286-553e-4ba7-89e0-e78910e20469"}
+ LOG  Schedova Pro gate {"error": null, "isPro": true, "source": "feature-hook", "subscription": {"current_period_end": null, "entitlement": "pro", "entitlement_expires_at": null, "entitlement_source": "manual", "plan": "pro", "status": "active"}, "userId": "2782e286-553e-4ba7-89e0-e78910e20469"}
+ LOG  Schedova Pro gate {"error": null, "isPro": true, "source": "feature-hook", "subscription": {"current_period_end": null, "entitlement": "pro", "entitlement_expires_at": null, "entitlement_source": "manual", "plan": "pro", "status": "active"}, "userId": "2782e286-553e-4ba7-89e0-e78910e20469"}
+ LOG  Schedova Pro gate {"error": null, "isPro": true, "source": "feature-hook", "subscription": {"current_period_end": null, "entitlement": "pro", "entitlement_expires_at": null, "entitlement_source": "manual", "plan": "pro", "status": "active"}, "userId": "2782e286-553e-4ba7-89e0-e78910e20469"}
+ LOG  Schedova Pro gate {"error": null, "isPro": true, "source": "feature-hook", "subscription": {"current_period_end": null, "entitlement": "pro", "entitlement_expires_at": null, "entitlement_source": "manual", "plan": "pro", "status": "active"}, "userId": "2782e286-553e-4ba7-89e0-e78910e20469"}
+ LOG  Schedova Pro gate {"error": null, "isPro": true, "source": "feature-hook", "subscription": {"current_period_end": null, "entitlement": "pro", "entitlement_expires_at": null, "entitlement_source": "manual", "plan": "pro", "status": "active"}, "userId": "2782e286-553e-4ba7-89e0-e78910e20469"}
+ LOG  Schedova Pro gate {"error": null, "isPro": true, "source": "feature-hook", "subscription": {"current_period_end": null, "entitlement": "pro", "entitlement_expires_at": null, "entitlement_source": "manual", "plan": "pro", "status": "active"}, "userId": "2782e286-553e-4ba7-89e0-e78910e20469"}
+ LOG  Schedova Pro gate {"error": null, "isPro": true, "source": "feature-hook", "subscription": {"current_period_end": null, "entitlement": "pro", "entitlement_expires_at": null, "entitlement_source": "manual", "plan": "pro", "status": "active"}, "userId": "2782e286-553e-4ba7-89e0-e78910e20469"}
+ LOG  Schedova Pro gate {"error": null, "isPro": true, "source": "feature-hook", "subscription": {"current_period_end": null, "entitlement": "pro", "entitlement_expires_at": null, "entitlement_source": "manual", "plan": "pro", "status": "active"}, "userId": "2782e286-553e-4ba7-89e0-e78910e20469"}
+ LOG  Schedova Pro gate {"error": null, "isPro": true, "source": "feature-hook", "subscription": {"current_period_end": null, "entitlement": "pro", "entitlement_expires_at": null, "entitlement_source": "manual", "plan": "pro", "status": "active"}, "userId": "2782e286-553e-4ba7-89e0-e78910e20469"}
+ LOG  Schedova Pro gate {"error": null, "isPro": true, "source": "feature-hook", "subscription": {"current_period_end": null, "entitlement": "pro", "entitlement_expires_at": null, "entitlement_source": "manual", "plan": "pro", "status": "active"}, "userId": "2782e286-553e-4ba7-89e0-e78910e20469"}
+ LOG  Schedova Pro gate {"error": null, "isPro": true, "source": "feature-hook", "subscription": {"current_period_end": null, "entitlement": "pro", "entitlement_expires_at": null, "entitlement_source": "manual", "plan": "pro", "status": "active"}, "userId": "2782e286-553e-4ba7-89e0-e78910e20469"}
+ LOG  Schedova Pro gate {"error": null, "isPro": true, "source": "app-active", "subscription": {"current_period_end": null, "entitlement": "pro", "entitlement_expires_at": null, "entitlement_source": "manual", "plan": "pro", "status": "active"}, "userId": "2782e286-553e-4ba7-89e0-e78910e20469"}
+ LOG  Schedova Pro gate {"error": null, "isPro": true, "source": "app-active", "subscription": {"current_period_end": null, "entitlement": "pro", "entitlement_expires_at": null, "entitlement_source": "manual", "plan": "pro", "status": "active"}, "userId": "2782e286-553e-4ba7-89e0-e78910e20469"}

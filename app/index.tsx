@@ -1,26 +1,49 @@
 import { useRouter } from "expo-router";
 import { useCallback, useEffect, useState } from "react";
-import { ActivityIndicator, Pressable, Text } from "react-native";
+import { ActivityIndicator, Pressable, Text, View } from "react-native";
 import { AppScreen } from "../components/layout/AppScreen";
+import { useAuthSession } from "../lib/authSession";
+import { hasSelectedUserCountryRegion } from "../lib/countrySettings";
 import { refreshFeatureAccess } from "../lib/featureAccess";
-import { supabase } from "../lib/supabase";
+import {
+  PRIVACY_POLICY_URL,
+  SUPPORT_EMAIL,
+  TERMS_OF_USE_URL,
+  openExternalWebsite,
+  openSupportEmail,
+} from "../lib/legalLinks";
+import { hasCompletedOnboarding } from "../lib/onboarding";
 
 export default function SplashScreen() {
   const router = useRouter();
+  const { isHydrated, userId } = useAuthSession();
   const [loading, setLoading] = useState(true);
 
   const checkSession = useCallback(async () => {
-    const response = await supabase.auth.getSession();
+    if (!isHydrated) {
+      setLoading(true);
+      return;
+    }
 
-    const session = response.data.session;
+    if (userId) {
+      await refreshFeatureAccess(userId, "splash-session");
+      const nextRoute = (await hasCompletedOnboarding()
+        ? "/dashboard"
+        : "/onboarding") as "/dashboard" | "/onboarding";
 
-    if (session) {
-      await refreshFeatureAccess(session.user.id, "splash-session");
-      router.replace("/dashboard" as any);
+      if (!(await hasSelectedUserCountryRegion())) {
+        router.replace({
+          pathname: "/country-region",
+          params: { next: nextRoute },
+        } as any);
+        return;
+      }
+
+      router.replace(nextRoute as any);
     } else {
       setLoading(false);
     }
-  }, [router]);
+  }, [isHydrated, router, userId]);
 
   useEffect(() => {
     void checkSession();
@@ -108,6 +131,83 @@ export default function SplashScreen() {
           Login / Create Account
         </Text>
       </Pressable>
+
+      <Pressable
+        onPress={() => router.push("/preview" as any)}
+        style={{
+          backgroundColor: "#ECFDF5",
+          borderColor: "#0F766E",
+          borderWidth: 1,
+          paddingVertical: 16,
+          borderRadius: 18,
+          alignItems: "center",
+          marginBottom: 10,
+        }}
+      >
+        <Text
+          style={{
+            color: "#0F766E",
+            fontSize: 17,
+            fontWeight: "900",
+          }}
+        >
+          Preview Schedova
+        </Text>
+      </Pressable>
+
+      <View
+        style={{
+          flexDirection: "row",
+          justifyContent: "center",
+          flexWrap: "wrap",
+          gap: 16,
+          marginTop: 14,
+        }}
+      >
+        <Pressable
+          onPress={() => {
+            void openExternalWebsite("Privacy Policy", PRIVACY_POLICY_URL);
+          }}
+          hitSlop={8}
+        >
+          <Text style={{ color: "#0F766E", fontWeight: "800" }}>
+            Privacy Policy
+          </Text>
+        </Pressable>
+
+        <Pressable
+          onPress={() => {
+            void openExternalWebsite("Terms of Use", TERMS_OF_USE_URL);
+          }}
+          hitSlop={8}
+        >
+          <Text style={{ color: "#0F766E", fontWeight: "800" }}>
+            Terms of Use
+          </Text>
+        </Pressable>
+
+        <Pressable
+          onPress={() => {
+            void openSupportEmail();
+          }}
+          hitSlop={8}
+        >
+          <Text style={{ color: "#0F766E", fontWeight: "800" }}>
+            Contact Support
+          </Text>
+        </Pressable>
+      </View>
+
+      <Text
+        style={{
+          color: "#6B7280",
+          textAlign: "center",
+          fontSize: 12,
+          marginTop: 10,
+        }}
+      >
+        {SUPPORT_EMAIL}
+      </Text>
     </AppScreen>
   );
 }

@@ -6,14 +6,20 @@ import {
   createServiceSnapshots,
   getAppointmentServices,
 } from "../../lib/appointmentServices";
-import { sendAppointmentSmsNonBlocking } from "../../lib/appointmentSms";
+import {
+  sendAppointmentSms,
+  sendAppointmentSmsNonBlocking,
+} from "../../lib/appointmentSms";
 import { getCalendarPreferences } from "../../lib/calendarPreferences";
+import { normalizePhoneForSmsWithUserDefault } from "../../lib/countrySettings";
 import {
   canUseFeature,
   FREE_TIER_LIMITS,
   useFeatureAccess,
 } from "../../lib/featureAccess";
+import { resolveClientReply } from "../../lib/clientReplies";
 import { scheduleAppointmentReminder } from "../../lib/localNotifications";
+import { PRO_UPSELL_COPY, showProUpgradePrompt } from "../../lib/proUpsell";
 import { supabase } from "../../lib/supabase";
 import {
   blockTitleFor,
@@ -22,9 +28,9 @@ import {
   getTotalDuration,
   getTotalPrice,
   normalizeId,
+  todayIso,
   toDisplayTime,
   toSqlTime,
-  todayIso,
 } from "./bookingUtils";
 import { cleanDateOnly, isValidDateOnly } from "./dateUtils";
 import type { Client, EntryType, Service } from "./types";
@@ -33,6 +39,7 @@ type RepeatType = "none" | "daily" | "weekly" | "biweekly" | "monthly";
 
 type SavedAppointmentForSideEffects = {
   id: string;
+  client_id?: string | null;
   appointment_date: string;
   appointment_time: string;
   client_name?: string | null;
@@ -57,8 +64,7 @@ function addMinutesToTime(time: string, minutesToAdd: number) {
 
   date.setHours(
     Number(hourText),
-    Number(minuteText) +
-      (Number.isFinite(minutesToAdd) ? minutesToAdd : 30),
+    Number(minuteText) + (Number.isFinite(minutesToAdd) ? minutesToAdd : 30),
     0,
     0,
   );
@@ -77,6 +83,60 @@ function timeToMinutes(time: string) {
   if (!Number.isFinite(hours) || !Number.isFinite(minutes)) return Number.NaN;
 
   return hours * 60 + minutes;
+}
+
+function positiveDurationMinutes(value: unknown) {
+  const numberValue = Number(value);
+  if (!Number.isFinite(numberValue) || numberValue <= 0) return null;
+
+  return Math.max(5, Math.round(numberValue / 5) * 5);
+}
+
+function durationWithFallback(value: unknown, fallback: unknown) {
+  return (
+    positiveDurationMinutes(value) ?? positiveDurationMinutes(fallback) ?? 30
+  );
+}
+
+function getDurationBetweenTimes(startTime: string, endTime: string) {
+  const startMinutes = timeToMinutes(startTime);
+  const endMinutes = timeToMinutes(endTime);
+  const duration = endMinutes - startMinutes;
+
+  return positiveDurationMinutes(duration);
+}
+
+function getAppointmentEndMinutes(
+  appointment:
+    | {
+        appointment_time?: unknown;
+        end_time?: unknown;
+        duration_minutes?: unknown;
+      }
+    | null
+    | undefined,
+) {
+  const startMinutes = timeToMinutes(
+    String(appointment?.appointment_time || ""),
+  );
+  const explicitEnd = appointment?.end_time
+    ? timeToMinutes(String(appointment.end_time))
+    : Number.NaN;
+  const savedDuration = positiveDurationMinutes(appointment?.duration_minutes);
+
+  if (Number.isFinite(startMinutes) && savedDuration) {
+    return startMinutes + savedDuration;
+  }
+
+  if (
+    Number.isFinite(startMinutes) &&
+    Number.isFinite(explicitEnd) &&
+    explicitEnd > startMinutes
+  ) {
+    return explicitEnd;
+  }
+
+  return Number.NaN;
 }
 
 function parseTimeParts(value: unknown) {
@@ -283,22 +343,61 @@ function routeParam(value: string | string[] | undefined) {
   if (Array.isArray(value)) return value[0] || "";
   return typeof value === "string" ? value : "";
 }
-export function useBookAppointmentForm() {
+
+function routeParamList(value: string | string[] | undefined) {
+  return routeParam(value)
+    .split(",")
+    .map((item) => normalizeId(item))
+    .filter(Boolean);
+}
+
+function sanitizePostSaveDestination(value: string) {
+  return value === "/messages" ? "/messages" : "/dashboard";
+}
+type UseBookAppointmentFormOptions = {
+  requestProAccess?: (message?: string) => Promise<boolean>;
+};
+
+export function useBookAppointmentForm({
+  requestProAccess,
+}: UseBookAppointmentFormOptions = {}) {
   const router = useRouter();
   const params = useLocalSearchParams();
   useFeatureAccess();
+
+  function canUseProFeature(feature: Parameters<typeof canUseFeature>[0]) {
+    return canUseFeature(feature);
+  }
 
   const appointmentId = routeParam(params.appointmentId);
   const blockId = routeParam(params.blockId);
   const routeMode = routeParam(params.mode);
 
-  const appointmentDateParam = routeParam(params.appointmentDate);
+  const appointmentDateParam =
+    routeParam(params.appointmentDate) || routeParam(params.date);
   const appointmentTimeParam = toDisplayTime(
-    routeParam(params.appointmentTime),
+    routeParam(params.appointmentTime) || routeParam(params.time),
     "09:00",
   );
+  const endTimeParam = toDisplayTime(routeParam(params.endTime), "");
+  const titleParam = routeParam(params.title);
+  const notesParam =
+    routeParam(params.notes) || routeParam(params.description) || "";
+  const clientIdParam = normalizeId(routeParam(params.clientId));
+  const serviceIdParam = normalizeId(routeParam(params.serviceId));
+  const serviceIdsParam = routeParamList(params.serviceIds);
+  const replyIdParam = normalizeId(routeParam(params.replyId));
+  const replyClientIdParam = normalizeId(routeParam(params.replyClientId));
+  const replyAppointmentIdParam = normalizeId(routeParam(params.replyAppointmentId));
+  const postSaveDestination = sanitizePostSaveDestination(
+    routeParam(params.returnTo),
+  );
 
-  const isEditMode = routeMode === "edit" || routeParam(params.editMode) === "true";
+  const isRescheduleMode = routeMode === "reschedule";
+  const isEditMode =
+    routeMode === "edit" ||
+    isRescheduleMode ||
+    routeParam(params.editMode) === "true";
 
   const [use24Hour, setUse24Hour] = useState(false);
   const [calendarIntervalMinutes, setCalendarIntervalMinutes] = useState(30);
@@ -321,6 +420,9 @@ export function useBookAppointmentForm() {
   const [existingAppointmentClientName, setExistingAppointmentClientName] =
     useState("");
   const [selectedServices, setSelectedServices] = useState<Service[]>([]);
+  const [appointmentDurationMinutes, setAppointmentDurationMinutesState] =
+    useState(30);
+  const [durationEdited, setDurationEdited] = useState(false);
   const [appointmentNotes, setAppointmentNotes] = useState("");
   const [finalPrice, setFinalPrice] = useState("");
   const [title, setTitle] = useState("");
@@ -334,7 +436,6 @@ export function useBookAppointmentForm() {
   const [allDay, setAllDay] = useState(false);
   const [repeatType, setRepeatType] = useState<RepeatType>("none");
   const [repeatUntil, setRepeatUntil] = useState(todayIso());
-  const [endTimeManuallyChanged, setEndTimeManuallyChanged] = useState(false);
 
   const [showQuickClient, setShowQuickClient] = useState(false);
   const [newClientName, setNewClientName] = useState("");
@@ -351,18 +452,37 @@ export function useBookAppointmentForm() {
     [selectedServices],
   );
 
+  const defaultAppointmentDurationMinutes = useMemo(
+    () => durationWithFallback(totalDuration, calendarIntervalMinutes),
+    [totalDuration, calendarIntervalMinutes],
+  );
+
+  const effectiveAppointmentDurationMinutes = durationEdited
+    ? appointmentDurationMinutes
+    : defaultAppointmentDurationMinutes;
+
   const totalPrice = useMemo(
     () => getTotalPrice(selectedServices),
     [selectedServices],
   );
 
+  const calculatedAppointmentEndTime = useMemo(
+    () => calculateEndTime(startTime, effectiveAppointmentDurationMinutes),
+    [startTime, effectiveAppointmentDurationMinutes],
+  );
+
+  const displayEndTime =
+    entryType === "appointment" ? calculatedAppointmentEndTime : endTime;
+
   const clientDropdownData = useMemo(
     () => [
       { label: "+ New Client", value: "new_client" },
-      ...clients.map((client) => ({
-        label: getClientDisplayName(client),
-        value: normalizeId(client.id),
-      })),
+      ...clients
+        .filter((client) => client && normalizeId(client.id))
+        .map((client) => ({
+          label: getClientDisplayName(client),
+          value: normalizeId(client.id),
+        })),
     ],
     [clients],
   );
@@ -370,15 +490,41 @@ export function useBookAppointmentForm() {
   const serviceDropdownData = useMemo(
     () => [
       { label: "+ New Service", value: "new_service" },
-      ...services.map((service) => ({
-        label: `${service.name || "Unnamed Service"} • ${Number(
-          service.duration_minutes || 0,
-        )} min • ${formatMoney(Number(service.price || 0))}`,
-        value: normalizeId(service.id),
-      })),
+      ...services
+        .filter((service) => service && normalizeId(service.id))
+        .map((service) => ({
+          label: `${service.name || "Unnamed Service"} • ${Number(
+            service.duration_minutes || 0,
+          )} min • ${formatMoney(Number(service.price || 0))}`,
+          value: normalizeId(service.id),
+        })),
     ],
     [services],
   );
+
+  function setAppointmentDurationMinutes(nextDuration: number) {
+    const safeDuration = durationWithFallback(
+      nextDuration,
+      defaultAppointmentDurationMinutes,
+    );
+    setAppointmentDurationMinutesState(safeDuration);
+    setDurationEdited(safeDuration !== defaultAppointmentDurationMinutes);
+  }
+
+  function setEndTimeFromPicker(nextEndTime: string) {
+    const cleanEndTime = toDisplayTime(nextEndTime, displayEndTime);
+    const nextDuration = getDurationBetweenTimes(startTime, cleanEndTime);
+
+    if (entryType !== "appointment") {
+      setEndTime(cleanEndTime);
+      return;
+    }
+
+    if (nextDuration) {
+      setAppointmentDurationMinutesState(nextDuration);
+      setDurationEdited(nextDuration !== defaultAppointmentDurationMinutes);
+    }
+  }
 
   async function loadCalendarPreferences() {
     const preferences = await getCalendarPreferences();
@@ -416,14 +562,14 @@ export function useBookAppointmentForm() {
       ]);
 
       setClients(
-        (clientsResult.data || []).map((client: any) => ({
+        (clientsResult.data || []).filter(Boolean).map((client: any) => ({
           ...client,
           id: normalizeId(client.id),
         })),
       );
 
       setServices(
-        (servicesResult.data || []).map((service: any) => ({
+        (servicesResult.data || []).filter(Boolean).map((service: any) => ({
           ...service,
           id: normalizeId(service.id),
         })),
@@ -442,16 +588,11 @@ export function useBookAppointmentForm() {
 
   useEffect(() => {
     if (entryType !== "appointment") return;
-    if (endTimeManuallyChanged) return;
 
-    setEndTime(calculateEndTime(startTime, totalDuration || calendarIntervalMinutes));
-  }, [
-    entryType,
-    startTime,
-    totalDuration,
-    endTimeManuallyChanged,
-    calendarIntervalMinutes,
-  ]);
+    if (!durationEdited) {
+      setAppointmentDurationMinutesState(defaultAppointmentDurationMinutes);
+    }
+  }, [entryType, defaultAppointmentDurationMinutes, durationEdited]);
 
   useEffect(() => {
     if (repeatType === "none") return;
@@ -500,45 +641,62 @@ export function useBookAppointmentForm() {
     setAllDay(isAllDayBlock);
   }, []);
 
-  const loadAppointmentForEdit = useCallback(async (id: string) => {
-    const { data, error } = await supabase
-      .from("appointments")
-      .select("*")
-      .eq("id", id)
-      .single();
+  const loadAppointmentForEdit = useCallback(
+    async (id: string) => {
+      const { data, error } = await supabase
+        .from("appointments")
+        .select("*")
+        .eq("id", id)
+        .single();
 
-    if (error || !data) {
-      Alert.alert("Error", error?.message || "Appointment not found.");
-      return;
-    }
+      if (error || !data) {
+        Alert.alert("Error", error?.message || "Appointment not found.");
+        return;
+      }
 
-    const matchedServices = getAppointmentServices(data, services);
+      const matchedServices = getAppointmentServices(data, services);
+      const defaultLoadedDuration = durationWithFallback(
+        getTotalDuration(matchedServices),
+        calendarIntervalMinutes,
+      );
 
-    const clientId = normalizeId(data.client_id);
-    const matchedClient = clients.find(
-      (client) => normalizeId(client.id) === clientId,
-    );
+      const clientId = normalizeId(data.client_id);
+      const matchedClient = clients.find(
+        (client) => normalizeId(client.id) === clientId,
+      );
+      const loadedStartTime = toDisplayTime(data.appointment_time, "09:00");
+      const loadedEndTime = toDisplayTime(
+        data.end_time || data.appointment_time,
+        "09:30",
+      );
+      const loadedDuration = durationWithFallback(
+        data.duration_minutes,
+        getDurationBetweenTimes(loadedStartTime, loadedEndTime) ||
+          defaultLoadedDuration,
+      );
 
-    setEntryType("appointment");
-    setSelectedClient(matchedClient ? normalizeId(matchedClient.id) : "");
-    setExistingAppointmentClientId(clientId);
-    setExistingAppointmentClientName(data.client_name || "");
-    setSelectedServices(matchedServices);
-    setTitle("");
-    setAppointmentDate(cleanDateOnly(data.appointment_date));
-    setStartTime(toDisplayTime(data.appointment_time, "09:00"));
-    setEndTime(toDisplayTime(data.end_time || data.appointment_time, "09:30"));
-    setEndTimeManuallyChanged(true);
-    setAllDay(false);
-    setRepeatType("none");
-    setRepeatUntil(cleanDateOnly(data.appointment_date));
-    setAppointmentNotes(data.appointment_notes || "");
-    setFinalPrice(
-      data.final_price !== null && data.final_price !== undefined
-        ? String(data.final_price)
-        : "",
-    );
-  }, [clients, services]);
+      setEntryType("appointment");
+      setSelectedClient(matchedClient ? normalizeId(matchedClient.id) : "");
+      setExistingAppointmentClientId(clientId);
+      setExistingAppointmentClientName(data.client_name || "");
+      setSelectedServices(matchedServices);
+      setAppointmentDurationMinutesState(loadedDuration);
+      setDurationEdited(loadedDuration !== defaultLoadedDuration);
+      setTitle("");
+      setAppointmentDate(cleanDateOnly(data.appointment_date));
+      setStartTime(loadedStartTime);
+      setAllDay(false);
+      setRepeatType("none");
+      setRepeatUntil(cleanDateOnly(data.appointment_date));
+      setAppointmentNotes(data.appointment_notes || "");
+      setFinalPrice(
+        data.final_price !== null && data.final_price !== undefined
+          ? String(data.final_price)
+          : "",
+      );
+    },
+    [calendarIntervalMinutes, clients, services],
+  );
 
   useEffect(() => {
     if (loading || editLoaded) return;
@@ -554,19 +712,43 @@ export function useBookAppointmentForm() {
     }
 
     const defaultStartTime = appointmentTimeParam || "09:00";
+    const defaultEndTime =
+      endTimeParam ||
+      addMinutesToTime(defaultStartTime, calendarIntervalMinutes);
+    const routeDuration = endTimeParam
+      ? getDurationBetweenTimes(defaultStartTime, endTimeParam)
+      : 0;
+    const matchedServiceIds = new Set(serviceIdsParam);
 
     setEntryType("appointment");
     setAppointmentDate(cleanDateOnly(appointmentDateParam || todayIso()));
     setStartTime(defaultStartTime);
-    setEndTime(addMinutesToTime(defaultStartTime, calendarIntervalMinutes));
-    setEndTimeManuallyChanged(false);
-    setSelectedClient("");
+    setAppointmentDurationMinutesState(
+      durationWithFallback(routeDuration, calendarIntervalMinutes),
+    );
+    setDurationEdited(Boolean(endTimeParam));
+    const matchedClientId =
+      clientIdParam &&
+      clients.some((client) => normalizeId(client?.id) === clientIdParam)
+        ? clientIdParam
+        : "";
+    const matchedServices = services.filter((service) =>
+      matchedServiceIds.has(normalizeId(service.id)),
+    );
+    const matchedService = serviceIdParam
+      ? services.find((service) => normalizeId(service.id) === serviceIdParam)
+      : null;
+
+    setSelectedClient(matchedClientId);
     setExistingAppointmentClientId("");
     setExistingAppointmentClientName("");
-    setSelectedServices([]);
-    setAppointmentNotes("");
+    setSelectedServices(
+      matchedServices.length > 0 ? matchedServices : matchedService ? [matchedService] : [],
+    );
+    setEndTime(defaultEndTime);
+    setAppointmentNotes(notesParam || titleParam || "");
     setFinalPrice("");
-    setTitle("");
+    setTitle(titleParam);
     setAllDay(false);
     setRepeatType("none");
     setRepeatUntil(cleanDateOnly(appointmentDateParam || todayIso()));
@@ -578,9 +760,17 @@ export function useBookAppointmentForm() {
     blockId,
     appointmentDateParam,
     appointmentTimeParam,
+    endTimeParam,
+    titleParam,
+    notesParam,
+    clientIdParam,
+    serviceIdsParam,
+    clients,
     calendarIntervalMinutes,
     loadAppointmentForEdit,
     loadBlockForEdit,
+    serviceIdParam,
+    services,
   ]);
 
   function addServiceToAppointment(service: Service) {
@@ -591,16 +781,20 @@ export function useBookAppointmentForm() {
       return;
     }
 
+    setDurationEdited(false);
     setSelectedServices((current) => [...current, safeService]);
   }
 
   function removeSelectedService(indexToRemove: number) {
+    setDurationEdited(false);
     setSelectedServices((current) =>
       current.filter((_, index) => index !== indexToRemove),
     );
   }
 
   async function saveQuickClient() {
+    const normalizedPhone =
+      await normalizePhoneForSmsWithUserDefault(newClientPhone);
     const { data: userData } = await supabase.auth.getUser();
     const currentUserId = userData.user?.id;
 
@@ -609,24 +803,24 @@ export function useBookAppointmentForm() {
       return;
     }
 
-    if (
-      !newClientName.trim() &&
-      !newClientPhone.trim() &&
-      !newClientEmail.trim()
-    ) {
+    if (!newClientName.trim() && !normalizedPhone && !newClientEmail.trim()) {
       Alert.alert("Missing Info", "Add a name, phone, or email.");
       return;
     }
 
     if (
-      !canUseFeature("moreClients") &&
+      !canUseProFeature("moreClients") &&
       clients.length >= FREE_TIER_LIMITS.clients
     ) {
-      Alert.alert(
-        "Schedova Pro",
-        `Free includes up to ${FREE_TIER_LIMITS.clients} clients. Upgrade to add more.`,
-      );
-      return;
+      if (requestProAccess) {
+        const unlocked = await requestProAccess(PRO_UPSELL_COPY.freeLimit);
+        if (!unlocked) return;
+      }
+
+      if (!canUseProFeature("moreClients")) {
+        showProUpgradePrompt(PRO_UPSELL_COPY.freeLimit);
+        return;
+      }
     }
 
     const { data, error } = await supabase
@@ -635,10 +829,10 @@ export function useBookAppointmentForm() {
         user_id: currentUserId,
         name:
           newClientName.trim() ||
-          newClientPhone.trim() ||
+          normalizedPhone ||
           newClientEmail.trim() ||
           "New Client",
-        phone: newClientPhone.trim() || null,
+        phone: normalizedPhone || null,
         email: newClientEmail.trim() || null,
       })
       .select("*")
@@ -679,14 +873,18 @@ export function useBookAppointmentForm() {
     }
 
     if (
-      !canUseFeature("moreServices") &&
+      !canUseProFeature("moreServices") &&
       services.length >= FREE_TIER_LIMITS.services
     ) {
-      Alert.alert(
-        "Schedova Pro",
-        `Free includes up to ${FREE_TIER_LIMITS.services} services. Upgrade to add more.`,
-      );
-      return;
+      if (requestProAccess) {
+        const unlocked = await requestProAccess(PRO_UPSELL_COPY.freeLimit);
+        if (!unlocked) return;
+      }
+
+      if (!canUseProFeature("moreServices")) {
+        showProUpgradePrompt(PRO_UPSELL_COPY.freeLimit);
+        return;
+      }
     }
 
     const priceNumber = Number(newServicePrice);
@@ -734,27 +932,32 @@ export function useBookAppointmentForm() {
   }
 
   function navigateAfterSave() {
+    console.log(
+      "navigation/refresh after save:",
+      getSaveDebugContext({ destination: postSaveDestination }),
+    );
+
     try {
       const navigation = router as typeof router & {
         dismissTo?: (href: string) => void;
       };
 
       if (typeof navigation.dismissTo === "function") {
-        navigation.dismissTo("/dashboard");
+        navigation.dismissTo(postSaveDestination);
         return;
       }
 
-      router.replace("/dashboard" as any);
+      router.replace(postSaveDestination as any);
     } catch (error) {
       console.log("BOOKING NAVIGATION FALLBACK:", error);
 
       try {
-        router.replace("/dashboard" as any);
+        router.replace(postSaveDestination as any);
       } catch (fallbackError) {
         console.log("BOOKING NAVIGATION FALLBACK FAILED:", fallbackError);
         Alert.alert(
           "Appointment Saved",
-          "Your appointment was saved. Return to Dashboard to view it.",
+          "Your appointment was saved. Return to Client Replies or Dashboard to view it.",
         );
       }
     }
@@ -772,7 +975,9 @@ export function useBookAppointmentForm() {
       safeSelectedServicesCount: safeServices.length,
       date: appointmentDate,
       startTime,
-      endTime,
+      endTime: displayEndTime,
+      appointmentDurationMinutes: effectiveAppointmentDurationMinutes,
+      defaultAppointmentDurationMinutes,
       serviceIds: safeServices.map((service) => service.id),
       serviceNames: safeServices.map((service) => service.name),
       ...extra,
@@ -785,8 +990,23 @@ export function useBookAppointmentForm() {
     console.log(`BOOKING SAVE ${label}:`, getSaveDebugContext(extra));
   }
 
+  function logAppointmentSaveCheckpoint(
+    label:
+      | "appointment save start"
+      | "appointment save success"
+      | "appointment save error",
+    extra: Record<string, unknown> = {},
+  ) {
+    console.log(`${label}:`, getSaveDebugContext(extra));
+  }
+
   function logSupabaseSaveError(operation: string, error: unknown) {
     logSaveContext("SUPABASE ERROR", {
+      operation,
+      supabaseErrorMessage: getUnknownErrorMessage(error),
+      supabaseErrorCode: getUnknownErrorCode(error),
+    });
+    logAppointmentSaveCheckpoint("appointment save error", {
       operation,
       supabaseErrorMessage: getUnknownErrorMessage(error),
       supabaseErrorCode: getUnknownErrorCode(error),
@@ -802,9 +1022,11 @@ export function useBookAppointmentForm() {
     savingRef.current = true;
     setSaving(true);
     logSaveContext("START");
+    logAppointmentSaveCheckpoint("appointment save start");
 
     try {
-      const { data: userData, error: userError } = await supabase.auth.getUser();
+      const { data: userData, error: userError } =
+        await supabase.auth.getUser();
 
       if (userError) {
         logSupabaseSaveError("auth.getUser", userError);
@@ -833,12 +1055,22 @@ export function useBookAppointmentForm() {
           ? await saveAppointment(currentUserId, safeDate)
           : await saveCalendarBlock(currentUserId, safeDate);
 
-      if (!saved) return false;
+      if (!saved) {
+        logAppointmentSaveCheckpoint("appointment save error", {
+          reason: "save returned false",
+        });
+        return false;
+      }
 
+      logAppointmentSaveCheckpoint("appointment save success");
       navigateAfterSave();
       return true;
     } catch (error) {
       logSaveContext("CRASH", {
+        errorMessage: getUnknownErrorMessage(error),
+        errorCode: getUnknownErrorCode(error),
+      });
+      logAppointmentSaveCheckpoint("appointment save error", {
         errorMessage: getUnknownErrorMessage(error),
         errorCode: getUnknownErrorCode(error),
       });
@@ -851,22 +1083,70 @@ export function useBookAppointmentForm() {
     }
   }
 
+  async function getSavedReminderMinutesBefore(currentUserId: string) {
+    const fallbackHours = 72;
+    const allowedHours = [24, 48, 72, 168];
+
+    try {
+      const { data, error } = await supabase
+        .from("sms_settings")
+        .select("reminder_hours_before")
+        .eq("user_id", currentUserId)
+        .maybeSingle();
+
+      if (error) {
+        logSaveContext("SIDE EFFECT ERROR", {
+          sideEffect: "loadReminderTiming",
+          supabaseErrorMessage: error.message,
+        });
+        return fallbackHours * 60;
+      }
+
+      const savedHours = Number(data?.reminder_hours_before);
+      const reminderHours = allowedHours.includes(savedHours)
+        ? savedHours
+        : fallbackHours;
+
+      return reminderHours * 60;
+    } catch (error) {
+      logSaveContext("SIDE EFFECT ERROR", {
+        sideEffect: "loadReminderTiming",
+        errorMessage: getUnknownErrorMessage(error),
+      });
+      return fallbackHours * 60;
+    }
+  }
 
   async function scheduleAppointmentSideEffects(
     savedAppointments: SavedAppointmentForSideEffects[],
     messageType: "confirmation" | "update",
   ) {
-    if (!savedAppointments.length) return;
+    const safeSavedAppointments = savedAppointments.filter(
+      (appointment) =>
+        appointment?.id &&
+        appointment?.appointment_date &&
+        appointment?.appointment_time,
+    );
+
+    if (!safeSavedAppointments.length) return;
 
     try {
-      if (canUseFeature("smartReminders")) {
+      if (canUseProFeature("smartReminders")) {
+        const {
+          data: { user },
+        } = await supabase.auth.getUser();
+        const reminderMinutesBefore = user?.id
+          ? await getSavedReminderMinutesBefore(user.id)
+          : 72 * 60;
+
         await Promise.all(
-          savedAppointments.map((appointment) =>
+          safeSavedAppointments.map((appointment) =>
             scheduleAppointmentReminder({
               appointmentId: appointment.id,
               clientName: appointment.client_name,
               appointmentDate: appointment.appointment_date,
               appointmentTime: appointment.appointment_time,
+              reminderMinutesBefore,
             }),
           ),
         );
@@ -879,10 +1159,77 @@ export function useBookAppointmentForm() {
       });
     }
 
-    const firstAppointment = savedAppointments[0];
+    const firstAppointment = safeSavedAppointments[0];
 
-    if (firstAppointment?.id && canUseFeature("smsAutomation")) {
+    if (
+      messageType === "update" &&
+      firstAppointment?.id &&
+      canUseProFeature("smsAutomation")
+    ) {
       void sendAppointmentSmsNonBlocking(firstAppointment.id, messageType);
+    }
+  }
+
+  async function sendAppointmentConfirmationAfterCreate(
+    newAppointment: SavedAppointmentForSideEffects | null | undefined,
+  ) {
+    // Free users should never hit the SMS function from the app; the backend
+    // still enforces the same Pro check as a safety net.
+    if (!canUseProFeature("smsAutomation")) {
+      return;
+    }
+
+    if (!newAppointment?.id) {
+      console.log("SMS function error", "Missing saved appointment ID");
+      return;
+    }
+
+    const payload = {
+      appointment_id: newAppointment.id,
+      client_id: newAppointment.client_id || null,
+      message_type: "confirmation" as const,
+    };
+
+    console.log("Appointment created", newAppointment);
+    console.log("Calling send-appointment-sms");
+    console.log("SMS payload", payload);
+
+    try {
+      const data = await sendAppointmentSms(newAppointment.id, "confirmation");
+      console.log("SMS function data", data);
+
+      if (!data.ok && !data.skipped) {
+        console.log("SMS function error", data.message || data.code);
+      }
+    } catch (exception) {
+      console.log("SMS exception", exception);
+    }
+  }
+
+  async function resolveReplyAfterAppointmentSave(currentUserId: string) {
+    if (!replyIdParam || !currentUserId) return;
+
+    try {
+      const result = await resolveClientReply({
+        messageId: replyIdParam,
+        userId: currentUserId,
+      });
+
+      console.log("Mark resolved result after reschedule save", {
+        replyId: replyIdParam,
+        linkedClientId: replyClientIdParam || null,
+        linkedAppointmentId: replyAppointmentIdParam || null,
+        resolvedAppointmentId: result.appointmentId,
+        clearedAppointmentAttention: result.clearedAppointmentAttention,
+      });
+    } catch (error) {
+      console.log("CLIENT REPLY RESOLVE AFTER SAVE ERROR:", {
+        replyId: replyIdParam,
+        linkedClientId: replyClientIdParam || null,
+        linkedAppointmentId: replyAppointmentIdParam || null,
+        error:
+          error instanceof Error ? error.message : "Unknown reply resolve error",
+      });
     }
   }
 
@@ -890,7 +1237,7 @@ export function useBookAppointmentForm() {
     currentUserId: string,
     dates: string[],
   ) {
-    if (canUseFeature("moreAppointments")) return true;
+    if (canUseProFeature("moreAppointments")) return true;
 
     const newAppointmentsByMonth = countDatesByMonth(dates);
 
@@ -914,10 +1261,12 @@ export function useBookAppointmentForm() {
       const existingCount = (data || []).length;
 
       if (existingCount + newCount > FREE_TIER_LIMITS.appointmentsPerMonth) {
-        Alert.alert(
-          "Schedova Pro",
-          `Free includes up to ${FREE_TIER_LIMITS.appointmentsPerMonth} appointments per month. Upgrade to book more.`,
-        );
+        if (requestProAccess) {
+          const unlocked = await requestProAccess(PRO_UPSELL_COPY.freeLimit);
+          if (unlocked) return true;
+        }
+
+        showProUpgradePrompt(PRO_UPSELL_COPY.freeLimit);
         return false;
       }
     }
@@ -972,7 +1321,7 @@ export function useBookAppointmentForm() {
     }
 
     const selectedClientRecord = clients.find(
-      (client) => normalizeId(client.id) === normalizeId(selectedClient),
+      (client) => normalizeId(client?.id) === normalizeId(selectedClient),
     );
     const preservedClientName = String(existingAppointmentClientName).trim();
     const preservedClientId = normalizeId(existingAppointmentClientId);
@@ -980,7 +1329,11 @@ export function useBookAppointmentForm() {
       isEditMode && !selectedClientRecord && !!preservedClientName;
     const requestedClientId = normalizeId(selectedClient);
 
-    if (requestedClientId && !selectedClientRecord && !shouldPreserveArchivedClient) {
+    if (
+      requestedClientId &&
+      !selectedClientRecord &&
+      !shouldPreserveArchivedClient
+    ) {
       logSaveContext("INVALID CLIENT", { requestedClientId });
       Alert.alert("Client Error", "Select a valid client and try again.");
       return false;
@@ -1017,9 +1370,14 @@ export function useBookAppointmentForm() {
       return false;
     }
 
-    const finalEndTime = endTimeManuallyChanged
-      ? toDisplayTime(endTime, "")
-      : calculateEndTime(cleanStartTime, totalSafeDuration);
+    const safeAppointmentDuration = durationWithFallback(
+      effectiveAppointmentDurationMinutes,
+      totalSafeDuration,
+    );
+    const finalEndTime = calculateEndTime(
+      cleanStartTime,
+      safeAppointmentDuration,
+    );
 
     const newStartTime = toSqlTime(cleanStartTime, "");
     const newEndTime = toSqlTime(finalEndTime, "");
@@ -1080,11 +1438,14 @@ export function useBookAppointmentForm() {
     }
 
     for (const date of recurringDates) {
-      const { data: existingAppointments, error: existingError } =
+      const { data: existingAppointmentRows, error: existingError } =
         await supabase
           .from("appointments")
-          .select("id, appointment_date, appointment_time, end_time, status")
+          .select(
+            "id, appointment_date, appointment_time, end_time, duration_minutes, status",
+          )
           .eq("user_id", currentUserId)
+          .eq("appointment_date", date)
           .neq("status", "canceled");
 
       if (existingError) {
@@ -1095,19 +1456,25 @@ export function useBookAppointmentForm() {
 
       const newStartMinutes = timeToMinutes(newStartTime);
       const newEndMinutes = timeToMinutes(newEndTime);
+      const existingAppointments = (existingAppointmentRows || []).filter(
+        Boolean,
+      );
 
       const hasOverlap =
-        existingAppointments?.some((appt: any) => {
-          if (isEditMode && appointmentId && appt.id === appointmentId) {
+        existingAppointments.some((appt: any) => {
+          if (isEditMode && appointmentId && appt?.id === appointmentId) {
             return false;
           }
 
-          if (cleanDateOnly(appt.appointment_date) !== cleanDateOnly(date)) {
+          const existingStartMinutes = timeToMinutes(appt?.appointment_time);
+          const existingEndMinutes = getAppointmentEndMinutes(appt);
+
+          if (
+            !Number.isFinite(existingStartMinutes) ||
+            !Number.isFinite(existingEndMinutes)
+          ) {
             return false;
           }
-
-          const existingStartMinutes = timeToMinutes(appt.appointment_time);
-          const existingEndMinutes = timeToMinutes(appt.end_time);
 
           return (
             existingStartMinutes < newEndMinutes &&
@@ -1168,6 +1535,7 @@ export function useBookAppointmentForm() {
       service_id: serviceIds[0],
       service_ids: serviceIds,
       service_snapshots: serviceSnapshots,
+      duration_minutes: safeAppointmentDuration,
       appointment_time: newStartTime,
       end_time: newEndTime,
       appointment_notes: appointmentNotes.trim() || null,
@@ -1207,6 +1575,8 @@ export function useBookAppointmentForm() {
         "update",
       );
 
+      await resolveReplyAfterAppointmentSave(currentUserId);
+
       return true;
     }
 
@@ -1228,7 +1598,7 @@ export function useBookAppointmentForm() {
     const { data: insertedAppointments, error } = await supabase
       .from("appointments")
       .insert(uniqueAppointments)
-      .select("id, appointment_date, appointment_time, client_name");
+      .select("id, client_id, appointment_date, appointment_time, client_name");
 
     if (error) {
       logSupabaseSaveError("appointments.insert", error);
@@ -1236,21 +1606,36 @@ export function useBookAppointmentForm() {
       return false;
     }
 
-    await scheduleAppointmentSideEffects(
-      (insertedAppointments || []) as SavedAppointmentForSideEffects[],
-      "confirmation",
-    );
+    const createdAppointments = (insertedAppointments ||
+      []) as SavedAppointmentForSideEffects[];
+    const newAppointment = createdAppointments[0];
+
+    if (canUseProFeature("smsAutomation")) {
+      await sendAppointmentConfirmationAfterCreate(newAppointment);
+    }
+
+    await scheduleAppointmentSideEffects(createdAppointments, "confirmation");
+
+    await resolveReplyAfterAppointmentSave(currentUserId);
 
     return true;
   }
 
   async function saveCalendarBlock(currentUserId: string, safeDate: string) {
-    if (!canUseFeature("customBusinessHours")) {
-      Alert.alert(
-        "Schedova Pro",
-        "Custom business hours and blocked time are Pro features.",
-      );
-      return false;
+    if (!canUseProFeature("customBusinessHours")) {
+      if (requestProAccess) {
+        const unlocked = await requestProAccess(
+          entryType === "vacation"
+            ? PRO_UPSELL_COPY.vacationBlocks
+            : entryType === "blocked_time"
+              ? PRO_UPSELL_COPY.blockedTime
+              : PRO_UPSELL_COPY.customBusinessHours,
+        );
+        if (!unlocked) return false;
+      } else {
+        showProUpgradePrompt(PRO_UPSELL_COPY.customBusinessHours);
+        return false;
+      }
     }
 
     const safeStartTime = allDay
@@ -1276,7 +1661,9 @@ export function useBookAppointmentForm() {
       return false;
     }
 
-    const existingAppointments = appointmentsResult.data || [];
+    const existingAppointments = (appointmentsResult.data || []).filter(
+      Boolean,
+    );
 
     if (allDay && existingAppointments.length > 0) {
       Alert.alert(
@@ -1291,8 +1678,15 @@ export function useBookAppointmentForm() {
       const blockEndMinutes = timeToMinutes(safeEndTime);
 
       const overlapsAppointment = existingAppointments.some((appointment) => {
-        const apptStartMinutes = timeToMinutes(appointment.appointment_time);
-        const apptEndMinutes = timeToMinutes(appointment.end_time);
+        const apptStartMinutes = timeToMinutes(appointment?.appointment_time);
+        const apptEndMinutes = getAppointmentEndMinutes(appointment);
+
+        if (
+          !Number.isFinite(apptStartMinutes) ||
+          !Number.isFinite(apptEndMinutes)
+        ) {
+          return false;
+        }
 
         return (
           blockStartMinutes < apptEndMinutes &&
@@ -1324,7 +1718,7 @@ export function useBookAppointmentForm() {
     }
 
     const hasOverlappingBlock =
-      overlappingBlocks?.some((block) => block.id !== blockId) ?? false;
+      overlappingBlocks?.some((block) => block?.id !== blockId) ?? false;
 
     if (hasOverlappingBlock) {
       Alert.alert("Conflict", "This time overlaps an existing blocked time.");
@@ -1370,6 +1764,7 @@ export function useBookAppointmentForm() {
     appointmentId,
     blockId,
     isEditMode,
+    isRescheduleMode,
     use24Hour,
     calendarIntervalMinutes,
     loading,
@@ -1396,11 +1791,14 @@ export function useBookAppointmentForm() {
     setAppointmentDate,
     startTime,
     setStartTime,
-    endTime,
+    endTime: displayEndTime,
     setEndTime,
+    setEndTimeFromPicker,
+    appointmentDurationMinutes: effectiveAppointmentDurationMinutes,
+    defaultAppointmentDurationMinutes,
+    setAppointmentDurationMinutes,
     allDay,
     setAllDay,
-    setEndTimeManuallyChanged,
 
     totalPrice,
     clientDropdownData,
