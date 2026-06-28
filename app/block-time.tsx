@@ -8,7 +8,7 @@ import {
   AppScreen,
   AppTextInput,
   EmptyState,
-  ProPreviewCard,
+  ProGateCard,
   ScreenHeader,
   createSchedovaUiTheme,
 } from "../components/ui";
@@ -535,7 +535,7 @@ export default function BlockTimeScreen() {
         />
 
         {ENABLE_PRO ? (
-          <ProPreviewCard
+          <ProGateCard
             message="Blocked time, vacation blocks, and custom business hours are included with Schedova Pro."
             features={[
               "Block personal time and breaks",

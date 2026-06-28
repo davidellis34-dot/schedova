@@ -5,7 +5,7 @@ export { AppTextInput } from "./AppTextInput";
 export { EmptyState } from "./EmptyState";
 export { ListRow } from "./ListRow";
 export { MetricCard } from "./MetricCard";
-export { ProPreviewCard } from "./ProPreviewCard";
+export { ProGateCard } from "./ProGateCard";
 export { ScreenHeader } from "./ScreenHeader";
 export { StatusBadge } from "./StatusBadge";
 export {

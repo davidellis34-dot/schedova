@@ -332,29 +332,6 @@ export default function SmsSettingsScreen() {
         client has opted in.
       </Text>
 
-      {!isPaid && !ENABLE_PRO ? (
-        <View
-          style={{
-            backgroundColor: colors.card,
-            borderWidth: 1,
-            borderColor: colors.border,
-            borderRadius: 16,
-            padding: 16,
-            marginBottom: 18,
-          }}
-        >
-          <Text style={{ color: colors.text, fontWeight: "900", fontSize: 17 }}>
-            SMS messaging unavailable
-          </Text>
-          <Text
-            style={{ color: colors.mutedText, marginTop: 8, lineHeight: 20 }}
-          >
-            Appointment texting will be available after messaging approval is
-            complete.
-          </Text>
-        </View>
-      ) : null}
-
       {!isPaid && ENABLE_PRO ? (
         <View
           style={{

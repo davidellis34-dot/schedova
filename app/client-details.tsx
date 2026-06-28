@@ -23,7 +23,7 @@ import {
   AppScreen,
   EmptyState,
   MetricCard,
-  ProPreviewCard,
+  ProGateCard,
   ScreenHeader,
   StatusBadge,
   createSchedovaUiTheme,
@@ -1219,7 +1219,7 @@ export default function ClientDetailsScreen() {
       )}
 
       {ENABLE_PRO && lockedPastAppointmentCount > 0 ? (
-        <ProPreviewCard
+        <ProGateCard
           title="Client history is included with Schedova Pro."
           message="See past appointments, services, and notes as your client list grows."
           features={[

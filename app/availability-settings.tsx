@@ -6,7 +6,7 @@ import {
   AppButton,
   AppCard,
   AppScreen,
-  ProPreviewCard,
+  ProGateCard,
   ScreenHeader,
   createSchedovaUiTheme,
 } from "../components/ui";
@@ -251,7 +251,7 @@ export default function AvailabilitySettingsScreen() {
         />
 
         {ENABLE_PRO ? (
-          <ProPreviewCard
+          <ProGateCard
             message={PRO_UPSELL_COPY.customBusinessHours}
             features={[
               "Set custom hours for each day",

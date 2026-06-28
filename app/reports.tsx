@@ -607,7 +607,7 @@ export default function ReportsScreen() {
     );
   }
 
-  function renderFreePreview() {
+  function renderProGate() {
     if (!ENABLE_PRO) {
       return (
         <AppScreen scroll backgroundColor={colors.background} bottomPadding={56}>
@@ -664,7 +664,7 @@ export default function ReportsScreen() {
       );
     }
 
-    const previewMetrics = [
+    const proGateMetrics = [
       { label: "Appointments", icon: "calendar-outline" as MetricIcon },
       { label: "Revenue", icon: "cash-outline" as MetricIcon },
       { label: "Clients", icon: "people-outline" as MetricIcon },
@@ -732,7 +732,7 @@ export default function ReportsScreen() {
               marginTop: 18,
             }}
           >
-            {previewMetrics.map((item) => (
+            {proGateMetrics.map((item) => (
               <View
                 key={item.label}
                 style={{
@@ -780,7 +780,7 @@ export default function ReportsScreen() {
     );
   }
 
-  if (!reportsAvailable) return renderFreePreview();
+  if (!reportsAvailable) return renderProGate();
 
   const noReportData = !loading && !loadError && report.appointments === 0;
 

@@ -14,7 +14,7 @@ import {
   AppCard,
   AppScreen,
   EmptyState,
-  ProPreviewCard,
+  ProGateCard,
   ScreenHeader,
 } from "../components/ui";
 import { useAuthSession } from "../lib/authSession";
@@ -493,7 +493,7 @@ export default function MessagesScreen() {
           showBack
         />
 
-        <ProPreviewCard
+        <ProGateCard
           title="Client replies"
           message={PRO_UPSELL_COPY.sms}
           features={[

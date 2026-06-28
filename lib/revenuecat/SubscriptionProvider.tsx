@@ -32,6 +32,8 @@ import {
   isRevenueCatSupported,
   logInRevenueCatUser,
   logOutRevenueCatUser,
+  presentSchedovaPaywall,
+  presentSchedovaPaywallIfNeeded,
   presentCustomerCenter,
   restorePurchases,
   type RevenueCatErrorDetails,
@@ -868,10 +870,6 @@ export function SubscriptionProvider({
       return false;
     }
 
-    if (__DEV__) {
-      console.log("[RevenueCat] Paywall request ignored; Pro is preview-only.");
-    }
-
     if (!revenueCatSupported) {
       Alert.alert(
         "Purchases unavailable",
@@ -905,30 +903,43 @@ export function SubscriptionProvider({
         return true;
       }
 
-      console.log("[RevenueCat] entitlement status", {
-        source: "provider:showPaywall",
-        customerInfoLoaded: Boolean(refreshedInfo),
-        entitlement: REVENUECAT_ENTITLEMENT_ID,
-        active: false,
-        paywallUiEnabled: false,
-      });
+      const paywallResult = await presentSchedovaPaywall();
 
       if (__DEV__) {
-        console.log(
-          "[RevenueCat] RevenueCat UI paywall disabled; locked Pro preview remains visible.",
-        );
+        console.log("[RevenueCat] Paywall finished", {
+          result: paywallResult,
+        });
       }
 
-      return false;
+      const rawPostPaywallInfo = await withSubscriptionTimeout(
+        "RevenueCat post-paywall refresh",
+        getCustomerInfo(userId),
+      );
+      const { info: postPaywallInfo, inactiveConfirmed } =
+        await resolvePotentialInactiveCustomerInfo(
+          rawPostPaywallInfo,
+          userId,
+          "revenuecat:paywall",
+        );
+
+      await applyCustomerInfo(postPaywallInfo, "revenuecat:paywall", {
+        allowKnownProDowngrade: inactiveConfirmed,
+        allowInactiveSync: inactiveConfirmed,
+      });
+      void logRevenueCatDebugStatus(postPaywallInfo);
+
+      return hasSchedovaPro(postPaywallInfo);
     } catch (error) {
       setLastRevenueCatError(getRevenueCatErrorDetails(error));
-      logRevenueCatError("Customer info refresh before Pro preview failed", error);
-      return false;
+      logRevenueCatError("Paywall workflow failed", error);
+      throw error;
     }
   }, [
+    applyCustomerInfo,
     authReady,
     customerInfo,
     getFreshCustomerInfo,
+    resolvePotentialInactiveCustomerInfo,
     revenueCatSupported,
     userId,
   ]);
@@ -941,12 +952,6 @@ export function SubscriptionProvider({
         );
       }
       return false;
-    }
-
-    if (__DEV__) {
-      console.log(
-        "[RevenueCat] Paywall-if-needed request ignored; Pro is preview-only.",
-      );
     }
 
     if (!revenueCatSupported) {
@@ -982,30 +987,43 @@ export function SubscriptionProvider({
         return true;
       }
 
-      console.log("[RevenueCat] entitlement status", {
-        source: "provider:showPaywallIfNeeded",
-        customerInfoLoaded: Boolean(refreshedInfo),
-        entitlement: REVENUECAT_ENTITLEMENT_ID,
-        active: false,
-        paywallUiEnabled: false,
-      });
+      const paywallResult = await presentSchedovaPaywallIfNeeded();
 
       if (__DEV__) {
-        console.log(
-          "[RevenueCat] RevenueCat UI paywall-if-needed disabled; locked Pro preview remains visible.",
-        );
+        console.log("[RevenueCat] Paywall-if-needed finished", {
+          result: paywallResult,
+        });
       }
 
-      return false;
+      const rawPostPaywallInfo = await withSubscriptionTimeout(
+        "RevenueCat post-paywall-if-needed refresh",
+        getCustomerInfo(userId),
+      );
+      const { info: postPaywallInfo, inactiveConfirmed } =
+        await resolvePotentialInactiveCustomerInfo(
+          rawPostPaywallInfo,
+          userId,
+          "revenuecat:paywall-if-needed",
+        );
+
+      await applyCustomerInfo(postPaywallInfo, "revenuecat:paywall-if-needed", {
+        allowKnownProDowngrade: inactiveConfirmed,
+        allowInactiveSync: inactiveConfirmed,
+      });
+      void logRevenueCatDebugStatus(postPaywallInfo);
+
+      return hasSchedovaPro(postPaywallInfo);
     } catch (error) {
       setLastRevenueCatError(getRevenueCatErrorDetails(error));
-      logRevenueCatError("Customer info refresh before Pro preview failed", error);
-      return false;
+      logRevenueCatError("Paywall-if-needed workflow failed", error);
+      throw error;
     }
   }, [
+    applyCustomerInfo,
     authReady,
     customerInfo,
     getFreshCustomerInfo,
+    resolvePotentialInactiveCustomerInfo,
     revenueCatSupported,
     userId,
   ]);

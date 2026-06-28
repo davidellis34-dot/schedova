@@ -479,7 +479,7 @@ export default function ServiceReportsScreen() {
     );
   }
 
-  function renderFreePreview() {
+  function renderProGate() {
     if (!ENABLE_PRO) {
       return (
         <AppScreen scroll backgroundColor={colors.background} bottomPadding={56}>
@@ -649,7 +649,7 @@ export default function ServiceReportsScreen() {
     );
   }
 
-  if (!reportsAvailable) return renderFreePreview();
+  if (!reportsAvailable) return renderProGate();
 
   return (
     <AppScreen scroll backgroundColor={colors.background} bottomPadding={72}>

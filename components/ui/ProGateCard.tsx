@@ -6,7 +6,7 @@ import { AppButton } from "./AppButton";
 import { AppCard } from "./AppCard";
 import { createSchedovaUiTheme } from "./theme";
 
-type ProPreviewCardProps = {
+type ProGateCardProps = {
   title?: string;
   message: string;
   features?: string[];
@@ -15,14 +15,14 @@ type ProPreviewCardProps = {
   style?: StyleProp<ViewStyle>;
 };
 
-export function ProPreviewCard({
+export function ProGateCard({
   title = "Schedova Pro",
   message,
   features,
   ctaLabel = "Upgrade to Schedova Pro",
   onPress,
   style,
-}: ProPreviewCardProps) {
+}: ProGateCardProps) {
   const { colors: appColors } = useAppTheme();
   const theme = createSchedovaUiTheme(appColors);
   const { colors, spacing, typography } = theme;

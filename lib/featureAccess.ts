@@ -17,7 +17,7 @@ export const FREE_TIER_LIMITS = {
   clientHistoryItems: 3,
 } as const;
 
-export const PRO_FEATURE_PREVIEWS = [
+export const PRO_FEATURE_HIGHLIGHTS = [
   "SMS appointment texts and confirmations",
   "Smart rebooking and follow-up reminders",
   "Reports and business insights",

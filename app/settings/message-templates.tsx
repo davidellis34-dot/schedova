@@ -7,7 +7,7 @@ import {
   AppScreen,
   AppTextInput,
   EmptyState,
-  ProPreviewCard,
+  ProGateCard,
   ScreenHeader,
   createSchedovaUiTheme,
 } from "../../components/ui";
@@ -390,7 +390,7 @@ export default function MessageTemplatesScreen() {
           showBack
         />
 
-        <ProPreviewCard
+        <ProGateCard
           title="Custom message templates"
           message={PRO_UPSELL_COPY.messageTemplates}
           features={[

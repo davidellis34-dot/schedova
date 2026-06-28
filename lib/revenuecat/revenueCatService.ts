@@ -1248,23 +1248,86 @@ export async function syncRevenueCatPurchases(
 }
 
 export async function presentSchedovaPaywall() {
-  if (__DEV__) {
-    console.log(
-      "[RevenueCat] RevenueCat UI paywall disabled; using locked Pro preview.",
-    );
-  }
+  if (!isRevenueCatSupported()) return false;
 
-  return false;
+  try {
+    await configureRevenueCat();
+
+    const RevenueCatUiModule = await getRevenueCatUiModule();
+    const offering = await getReadyOffering();
+
+    console.log("[RevenueCat] Opening Schedova Pro paywall", {
+      offeringIdentifier: offering.identifier,
+      productIdentifiers: getRevenueCatAvailablePackages(offering).map(
+        (pkg) => pkg.product.identifier,
+      ),
+    });
+
+    const result = await withRevenueCatUiTimeout(
+      "RevenueCat paywall",
+      RevenueCatUiModule.default.presentPaywall({
+        offering,
+        displayCloseButton: true,
+      }),
+    );
+
+    console.log("[RevenueCat] Paywall finished", {
+      offeringIdentifier: offering.identifier,
+      result,
+    });
+
+    return result;
+  } catch (error) {
+    console.log("[RevenueCat] Paywall failed", {
+      entitlement: REVENUECAT_ENTITLEMENT_ID,
+      error: getRevenueCatErrorDetails(error),
+    });
+    logRevenueCatError("Paywall failed", error);
+    throw error;
+  }
 }
 
 export async function presentSchedovaPaywallIfNeeded() {
-  if (__DEV__) {
-    console.log(
-      "[RevenueCat] RevenueCat UI paywall-if-needed disabled; using locked Pro preview.",
-    );
-  }
+  if (!isRevenueCatSupported()) return false;
 
-  return false;
+  try {
+    await configureRevenueCat();
+
+    const RevenueCatUiModule = await getRevenueCatUiModule();
+    const offering = await getReadyOffering();
+
+    console.log("[RevenueCat] Opening Schedova Pro paywall if needed", {
+      entitlement: REVENUECAT_ENTITLEMENT_ID,
+      offeringIdentifier: offering.identifier,
+      productIdentifiers: getRevenueCatAvailablePackages(offering).map(
+        (pkg) => pkg.product.identifier,
+      ),
+    });
+
+    const result = await withRevenueCatUiTimeout(
+      "RevenueCat paywall if needed",
+      RevenueCatUiModule.default.presentPaywallIfNeeded({
+        requiredEntitlementIdentifier: REVENUECAT_ENTITLEMENT_ID,
+        offering,
+        displayCloseButton: true,
+      }),
+    );
+
+    console.log("[RevenueCat] Paywall-if-needed finished", {
+      entitlement: REVENUECAT_ENTITLEMENT_ID,
+      offeringIdentifier: offering.identifier,
+      result,
+    });
+
+    return result;
+  } catch (error) {
+    console.log("[RevenueCat] Paywall-if-needed failed", {
+      entitlement: REVENUECAT_ENTITLEMENT_ID,
+      error: getRevenueCatErrorDetails(error),
+    });
+    logRevenueCatError("Paywall-if-needed failed", error);
+    throw error;
+  }
 }
 
 export async function presentCustomerCenter() {
