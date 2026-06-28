@@ -23,6 +23,7 @@ import { REVENUECAT_ENTITLEMENT_ID } from "./constants";
 import {
   addCustomerInfoUpdateListener,
   getCustomerInfo,
+  getActiveRevenueCatEntitlementIds,
   getRevenueCatErrorDetails,
   isRevenueCatUnknownBackendError,
   logRevenueCatDebugStatus,
@@ -198,7 +199,7 @@ export function SubscriptionProvider({
       }
 
       const nextIsPro = hasSchedovaPro(info);
-      const activeEntitlements = Object.keys(info.entitlements.active ?? {});
+      const activeEntitlements = getActiveRevenueCatEntitlementIds(info);
       const activeUserId = userId ?? null;
       const wasKnownPro =
         activeUserId !== null &&
@@ -383,8 +384,8 @@ export function SubscriptionProvider({
               "[RevenueCat] Known Pro entitlement recovered during login restore",
               {
                 userId: activeUserId,
-                activeEntitlements: Object.keys(
-                  restored?.customerInfo?.entitlements.active ?? {},
+                activeEntitlements: getActiveRevenueCatEntitlementIds(
+                  restored?.customerInfo,
                 ),
               },
             );
@@ -401,9 +402,8 @@ export function SubscriptionProvider({
         if (__DEV__) {
           console.log("[RevenueCat] customerInfo after login restore attempt", {
             userId: activeUserId,
-            activeEntitlements: Object.keys(
-              refreshedInfo?.entitlements.active ?? {},
-            ),
+            activeEntitlements:
+              getActiveRevenueCatEntitlementIds(refreshedInfo),
             isPro: hasSchedovaPro(refreshedInfo),
           });
         }
@@ -505,8 +505,8 @@ export function SubscriptionProvider({
     if (__DEV__) {
       console.log("[RevenueCat] Force refresh before", {
         userId,
-        activeEntitlements: Object.keys(
-          customerInfoRef.current?.entitlements.active ?? {},
+        activeEntitlements: getActiveRevenueCatEntitlementIds(
+          customerInfoRef.current,
         ),
       });
     }
@@ -530,7 +530,7 @@ export function SubscriptionProvider({
       if (__DEV__) {
         console.log("[RevenueCat] Force refresh after", {
           userId,
-          activeEntitlements: Object.keys(info?.entitlements.active ?? {}),
+          activeEntitlements: getActiveRevenueCatEntitlementIds(info),
           isPro: hasSchedovaPro(info),
           inactiveConfirmed,
         });
@@ -606,7 +606,7 @@ export function SubscriptionProvider({
         console.log("[RevenueCat] Recover Pro for current user completed", {
           userId,
           recovered,
-          activeEntitlements: Object.keys(finalInfo?.entitlements.active ?? {}),
+          activeEntitlements: getActiveRevenueCatEntitlementIds(finalInfo),
         });
       }
 
@@ -826,7 +826,7 @@ export function SubscriptionProvider({
         console.log("[RevenueCat] restore completed", {
           restoredIsPro,
           knownProUser,
-          activeEntitlements: Object.keys(finalInfo?.entitlements.active ?? {}),
+          activeEntitlements: getActiveRevenueCatEntitlementIds(finalInfo),
         });
       }
 

@@ -10,6 +10,7 @@ type SmsConversationContext = {
   user_id?: string | null;
   client_id?: string | null;
   appointment_id?: string | null;
+  message_type?: string | null;
   created_at?: string | null;
 };
 
@@ -30,6 +31,11 @@ type AppointmentRow = {
   appointment_date?: string | null;
   appointment_time?: string | null;
   status?: string | null;
+  confirmation_status?: string | null;
+  confirmed_at?: string | null;
+  confirmation_response_at?: string | null;
+  sms_confirmation_sent_at?: string | null;
+  sms_reminder_sent_at?: string | null;
 };
 
 type ParsedInboundMessage = {
@@ -47,6 +53,8 @@ type PushTokenRow = {
   expo_push_token?: string | null;
   platform?: string | null;
 };
+
+type ClientReplyIntent = "confirmed" | "needs_reschedule" | "declined" | null;
 
 const SMS_PROVIDER = "telnyx";
 const SMS_DIRECTION = "inbound";
@@ -145,9 +153,91 @@ function normalizeTextForMatching(value: string) {
   return value.toLowerCase().replace(/’/g, "'");
 }
 
+function normalizeInboundReplyText(value: string) {
+  return normalizeTextForMatching(value)
+    .replace(/['`]/g, "")
+    .replace(/[^a-z0-9\s]/g, " ")
+    .replace(/\s+/g, " ")
+    .trim();
+}
+
 function looksActionable(body: string) {
   const normalized = normalizeTextForMatching(body);
   return ACTIONABLE_PATTERNS.some((pattern) => pattern.test(normalized));
+}
+
+function getClientReplyIntent(body: string): ClientReplyIntent {
+  const normalized = normalizeInboundReplyText(body);
+
+  if (!normalized) return null;
+
+  const words = new Set(normalized.split(" "));
+  const padded = ` ${normalized} `;
+  const hasPhrase = (phrase: string) => padded.includes(` ${phrase} `);
+
+  if (
+    words.has("yes") ||
+    words.has("y") ||
+    words.has("confirm") ||
+    words.has("confirmed") ||
+    words.has("ok") ||
+    words.has("okay") ||
+    hasPhrase("sounds good") ||
+    hasPhrase("see you then") ||
+    hasPhrase("see you")
+  ) {
+    return "confirmed";
+  }
+
+  if (words.has("cancel") || words.has("canceled") || words.has("cancelled")) {
+    return "declined";
+  }
+
+  if (
+    words.has("no") ||
+    words.has("n") ||
+    words.has("reschedule") ||
+    hasPhrase("need to reschedule") ||
+    hasPhrase("cant make it") ||
+    hasPhrase("can t make it")
+  ) {
+    return "needs_reschedule";
+  }
+
+  return null;
+}
+
+function getAppointmentConfirmationStatus(row: AppointmentRow | null) {
+  const confirmationStatus = asTrimmedString(row?.confirmation_status);
+  if (confirmationStatus) return confirmationStatus;
+
+  const lifecycleStatus = asTrimmedString(row?.status);
+  if (
+    ["confirmed", "accepted", "declined", "canceled", "cancelled"].includes(
+      lifecycleStatus.toLowerCase(),
+    )
+  ) {
+    return lifecycleStatus;
+  }
+
+  if (row?.sms_confirmation_sent_at || row?.sms_reminder_sent_at) {
+    return "waiting_for_response";
+  }
+
+  return lifecycleStatus || null;
+}
+
+function getConfirmationStatusForReplyIntent(replyIntent: ClientReplyIntent) {
+  switch (replyIntent) {
+    case "confirmed":
+      return "confirmed";
+    case "needs_reschedule":
+      return "needs_reschedule";
+    case "declined":
+      return "declined";
+    default:
+      return null;
+  }
 }
 
 function sortByMostRecentlyUpdated(left: ClientRow, right: ClientRow) {
@@ -442,10 +532,22 @@ Deno.serve(async (req: Request) => {
   const inbound = parseInboundMessage(parsedBody);
   const normalizedFromNumber = normalizePhone(inbound.fromNumberRaw);
   const normalizedToNumber = normalizePhone(inbound.toNumberRaw);
-  const needsAttention = looksActionable(inbound.messageBody);
-  const attentionReason = needsAttention
-    ? ACTIONABLE_ATTENTION_REASON
-    : null;
+  const normalizedReplyText = normalizeInboundReplyText(inbound.messageBody);
+  const replyIntent = getClientReplyIntent(inbound.messageBody);
+  const needsAttention =
+    replyIntent === "confirmed"
+      ? false
+      : replyIntent === "needs_reschedule" ||
+        replyIntent === "declined" ||
+        looksActionable(inbound.messageBody);
+  const attentionReason =
+    replyIntent === "needs_reschedule"
+      ? "Client needs to reschedule"
+      : replyIntent === "declined"
+        ? "Client declined or canceled"
+        : needsAttention
+          ? ACTIONABLE_ATTENTION_REASON
+          : null;
 
   console.log("parsed inbound message", {
     eventType: inbound.eventType,
@@ -453,7 +555,10 @@ Deno.serve(async (req: Request) => {
     toNumber: normalizedToNumber || inbound.toNumberRaw,
     providerMessageId: inbound.providerMessageId,
     receivedAt: inbound.receivedAt,
+    inboundPhoneNumber: normalizedFromNumber || inbound.fromNumberRaw,
+    normalizedReplyText,
     needsAttention,
+    replyIntent,
   });
 
   if (inbound.eventType && inbound.eventType !== "message.received") {
@@ -471,11 +576,12 @@ Deno.serve(async (req: Request) => {
   if (normalizedFromNumber && normalizedToNumber) {
     const { data: contextData, error: contextError } = await serviceClient
       .from("sms_message_logs")
-      .select("user_id, client_id, appointment_id, created_at")
+      .select("user_id, client_id, appointment_id, message_type, created_at")
       .eq("provider", SMS_PROVIDER)
       .eq("direction", "outbound")
       .eq("from_number", normalizedToNumber)
       .eq("to_number", normalizedFromNumber)
+      .in("message_type", ["confirmation", "reminder", "update"])
       .order("created_at", { ascending: false })
       .limit(1)
       .maybeSingle();
@@ -493,6 +599,7 @@ Deno.serve(async (req: Request) => {
 
   let matchedClient: ClientRow | null = null;
   let matchedAppointment: AppointmentRow | null = null;
+  let appointmentMatchReason: string | null = null;
   let clientLookupUserId = asTrimmedString(conversationContext?.user_id) || null;
 
   {
@@ -532,32 +639,71 @@ Deno.serve(async (req: Request) => {
     phone: matchedClient?.phone || null,
   });
 
-  if (matchedClient?.id && clientLookupUserId) {
-    const { data: appointmentRows, error: appointmentError } = await serviceClient
-      .from("appointments")
-      .select("id, user_id, client_id, appointment_date, appointment_time, status")
-      .eq("user_id", clientLookupUserId)
-      .eq("client_id", matchedClient.id)
-      .order("appointment_date", { ascending: true })
-      .order("appointment_time", { ascending: true });
+  const conversationAppointmentId =
+    asTrimmedString(conversationContext?.appointment_id) || null;
 
-    if (appointmentError) {
-      console.error("appointment lookup failed", {
-        error: appointmentError,
+  if (conversationAppointmentId && clientLookupUserId) {
+    const { data: contextAppointment, error: contextAppointmentError } =
+      await serviceClient
+        .from("appointments")
+        .select(
+          "id, user_id, client_id, appointment_date, appointment_time, status, confirmation_status, confirmed_at, confirmation_response_at, sms_confirmation_sent_at, sms_reminder_sent_at",
+        )
+        .eq("id", conversationAppointmentId)
+        .eq("user_id", clientLookupUserId)
+        .maybeSingle();
+
+    if (contextAppointmentError) {
+      console.error("conversation appointment lookup failed", {
+        error: contextAppointmentError,
+        appointmentId: conversationAppointmentId,
         userId: clientLookupUserId,
-        clientId: matchedClient.id,
       });
-    } else {
-      matchedAppointment = findNearestUpcomingAppointment(
-        ((appointmentRows || []) as AppointmentRow[]).filter(Boolean),
-      );
+    } else if (contextAppointment) {
+      matchedAppointment = contextAppointment as AppointmentRow;
+      appointmentMatchReason = "matched_recent_outbound_sms_thread";
     }
+  }
+
+  if (matchedClient?.id && clientLookupUserId) {
+    if (!matchedAppointment) {
+      const { data: appointmentRows, error: appointmentError } = await serviceClient
+        .from("appointments")
+        .select(
+          "id, user_id, client_id, appointment_date, appointment_time, status, confirmation_status, confirmed_at, confirmation_response_at, sms_confirmation_sent_at, sms_reminder_sent_at",
+        )
+        .eq("user_id", clientLookupUserId)
+        .eq("client_id", matchedClient.id)
+        .order("appointment_date", { ascending: true })
+        .order("appointment_time", { ascending: true });
+
+      if (appointmentError) {
+        console.error("appointment lookup failed", {
+          error: appointmentError,
+          userId: clientLookupUserId,
+          clientId: matchedClient.id,
+        });
+      } else {
+        matchedAppointment = findNearestUpcomingAppointment(
+          ((appointmentRows || []) as AppointmentRow[]).filter(Boolean),
+        );
+        appointmentMatchReason = matchedAppointment
+          ? "matched_nearest_upcoming_client_appointment"
+          : "no_upcoming_appointment_for_client";
+      }
+    }
+  } else if (!matchedAppointment) {
+    appointmentMatchReason = matchedClient?.id
+      ? "missing_user_for_client"
+      : "no_matching_client";
   }
 
   console.log("matched appointment", {
     matched: Boolean(matchedAppointment?.id),
     appointmentId: matchedAppointment?.id || null,
     clientId: matchedClient?.id || null,
+    matchReason: appointmentMatchReason,
+    oldStatus: getAppointmentConfirmationStatus(matchedAppointment),
   });
 
   const userId = clientLookupUserId;
@@ -585,9 +731,14 @@ Deno.serve(async (req: Request) => {
     to_phone: normalizedToNumber || inbound.toNumberRaw || null,
     body: inbound.messageBody || null,
     message_body: inbound.messageBody || null,
-    status: "received",
+    status: replyIntent || "received",
     provider_message_id: inbound.providerMessageId,
-    provider_response: inbound.payload,
+    provider_response: {
+      ...inbound.payload,
+      normalized_reply_text: normalizedReplyText,
+      schedova_reply_intent: replyIntent,
+      schedova_needs_attention: needsAttention,
+    },
     error_message: clientId ? null : NO_MATCHING_CLIENT_ERROR,
     needs_attention: needsAttention,
     attention_reason: attentionReason,
@@ -620,35 +771,63 @@ Deno.serve(async (req: Request) => {
     clientId,
     appointmentId,
     needsAttention,
+    replyIntent,
+    normalizedReplyText,
   });
 
-  if (needsAttention && appointmentId) {
-    const appointmentAttentionReason = `Client replied: ${buildAttentionPreview(
-      inbound.messageBody,
-    )}`;
+  if (appointmentId && (needsAttention || replyIntent === "confirmed")) {
+    const oldStatus = getAppointmentConfirmationStatus(matchedAppointment);
+    const newStatus = getConfirmationStatusForReplyIntent(replyIntent);
+    const responseAt = new Date().toISOString();
+    const appointmentAttentionReason =
+      replyIntent === "confirmed"
+        ? null
+        : `Client replied: ${buildAttentionPreview(inbound.messageBody)}`;
+    const appointmentUpdatePayload: Record<string, unknown> = {
+      needs_attention: replyIntent === "confirmed" ? false : true,
+      attention_reason: appointmentAttentionReason,
+    };
+
+    if (newStatus) {
+      appointmentUpdatePayload.confirmation_status = newStatus;
+      appointmentUpdatePayload.confirmation_response_at = responseAt;
+    }
+
+    if (replyIntent === "confirmed") {
+      appointmentUpdatePayload.confirmed_at = responseAt;
+    }
 
     const { error: appointmentUpdateError } = await serviceClient
       .from("appointments")
-      .update({
-        needs_attention: true,
-        attention_reason: appointmentAttentionReason,
-      })
+      .update(appointmentUpdatePayload)
       .eq("id", appointmentId)
       .eq("user_id", userId);
 
     if (appointmentUpdateError) {
-      console.error("attention flag update failed", {
+      console.error("appointment confirmation status update failed", {
         error: appointmentUpdateError,
         appointmentId,
         userId,
+        oldStatus,
+        newStatus,
       });
     } else {
-      console.log("attention flag update", {
+      console.log("appointment confirmation status update", {
         appointmentId,
         userId,
         attentionReason: appointmentAttentionReason,
+        replyIntent,
+        oldStatus,
+        newStatus,
       });
     }
+  } else if (replyIntent) {
+    console.log("recognized reply did not update appointment", {
+      inboundPhoneNumber: normalizedFromNumber || inbound.fromNumberRaw,
+      normalizedReplyText,
+      replyIntent,
+      reason: appointmentMatchReason || "no_appointment_matched",
+    });
   }
 
   await sendClientReplyPushNotifications(serviceClient, {

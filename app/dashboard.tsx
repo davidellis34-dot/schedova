@@ -1,7 +1,7 @@
 import { Ionicons } from "@expo/vector-icons";
 import AsyncStorage from "@react-native-async-storage/async-storage";
 import { useFocusEffect, useRouter } from "expo-router";
-import { useCallback, useEffect, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import {
   Alert,
   Modal,
@@ -19,10 +19,12 @@ import {
   ScreenHeader,
   StatusBadge,
 } from "../components/ui";
+import SwipeDownSheet from "../components/SwipeDownSheet";
 import {
   getAppointmentServices as getSavedAppointmentServices,
   getAppointmentServiceTotal,
 } from "../lib/appointmentServices";
+import { sortAppointmentsChronologically } from "../lib/appointmentSort";
 import {
   getAppointmentConfirmationLabel,
   getAppointmentConfirmationStatus,
@@ -33,11 +35,13 @@ import { sendAppointmentSmsNonBlocking } from "../lib/appointmentSms";
 import { formatClockTime, getCalendarPreferences } from "../lib/calendarPreferences";
 import { subscribeToClientMessageEvents } from "../lib/clientMessageEvents";
 import { confirmDestructiveAction } from "../lib/confirmDestructiveAction";
+import { isSchedovaInternalDebugMode } from "../lib/debugMode";
 import { canUseFeature, useFeatureAccess } from "../lib/featureAccess";
 import { cancelAppointmentReminder } from "../lib/localNotifications";
 import { ENABLE_PRO } from "../lib/proFeatureFlag";
 import { openSchedovaProScreen } from "../lib/proUpsell";
 import { supabase } from "../lib/supabase";
+import { useSmsBalance } from "../lib/useSmsBalance";
 import { useAppTheme } from "../lib/useAppTheme";
 
 function normalizeDashboardAppointmentRows(rows: unknown) {
@@ -50,17 +54,27 @@ function isDashboardAppointmentVisible(appointment: any) {
   return Boolean(appointment?.id && appointment?.appointment_date);
 }
 
+function logDashboardAppointmentCardDebug(
+  label: string,
+  details: Record<string, unknown>,
+) {
+  if (!isSchedovaInternalDebugMode()) return;
+
+  console.log(label, details);
+}
+
 export default function Dashboard() {
   const router = useRouter();
   const { colors, themeName } = useAppTheme();
   const { width } = useWindowDimensions();
   const { isHydrated, user, userId } = useAuthSession();
-  useFeatureAccess();
+  const featureAccess = useFeatureAccess();
   const [clients, setClients] = useState<any[]>([]);
   const [statusModalOpen, setStatusModalOpen] = useState(false);
   const [selectedStatusAppointment, setSelectedStatusAppointment] = useState<
     any | null
   >(null);
+  const [actionAppointment, setActionAppointment] = useState<any | null>(null);
   const [fontScale, setFontScale] = useState("normal");
   const [use24Hour, setUse24Hour] = useState(false);
   const [hasBusiness, setHasBusiness] = useState<boolean | null>(null);
@@ -70,6 +84,7 @@ export default function Dashboard() {
   const [clientRepliesCount, setClientRepliesCount] = useState(0);
   const [latestRepliesByAppointmentId, setLatestRepliesByAppointmentId] =
     useState<Record<string, AppointmentReplySummary>>({});
+  const longPressHandledAppointmentId = useRef<string | null>(null);
 
   function canUseProFeature(feature: Parameters<typeof canUseFeature>[0]) {
     return canUseFeature(feature);
@@ -108,8 +123,22 @@ export default function Dashboard() {
 
   const clientRepliesBadgeText =
     clientRepliesCount > 99 ? "99+" : String(clientRepliesCount);
+  const {
+    balance: smsBalance,
+    error: smsBalanceError,
+    hasUnlimited: hasUnlimitedSms,
+    isZero: smsBalanceIsZero,
+    loading: smsBalanceLoading,
+  } = useSmsBalance({
+    userId,
+    subscription: featureAccess.subscription,
+  });
 
   function getClientDisplayName(appointment: any) {
+    if (!appointment) {
+      return "";
+    }
+
     const appointmentName = String(appointment?.client_name || "").trim();
 
     if (appointmentName && appointmentName !== "New Client") {
@@ -218,7 +247,9 @@ export default function Dashboard() {
       return;
     }
 
-    const nextAppointments = normalizeDashboardAppointmentRows(data);
+    const nextAppointments = sortAppointmentsChronologically(
+      normalizeDashboardAppointmentRows(data),
+    );
     setAppointments(nextAppointments);
 
     const appointmentIds = nextAppointments
@@ -233,7 +264,7 @@ export default function Dashboard() {
 
     const repliesResult = await supabase
       .from("sms_message_logs")
-      .select("id, appointment_id, body, message_body, needs_attention, created_at")
+      .select("id, appointment_id, body, message_body, status, needs_attention, created_at")
       .eq("user_id", userId)
       .eq("direction", "inbound")
       .in("appointment_id", appointmentIds)
@@ -370,6 +401,37 @@ export default function Dashboard() {
     });
   }, [fetchClientRepliesCount]);
 
+  useEffect(() => {
+    if (!isHydrated || !userId) return;
+
+    const channel = supabase
+      .channel(`dashboard-client-replies-${userId}`)
+      .on(
+        "postgres_changes",
+        {
+          event: "*",
+          schema: "public",
+          table: "sms_message_logs",
+          filter: `user_id=eq.${userId}`,
+        },
+        (payload) => {
+          const row = (payload.new || payload.old || {}) as {
+            direction?: unknown;
+          };
+
+          if (row.direction === "inbound") {
+            console.log("Dashboard client reply realtime event", payload.eventType);
+            void fetchClientRepliesCount();
+          }
+        },
+      )
+      .subscribe();
+
+    return () => {
+      void supabase.removeChannel(channel);
+    };
+  }, [fetchClientRepliesCount, isHydrated, userId]);
+
   async function deleteAppointment(id: string) {
     await confirmDestructiveAction({
       title: "Delete appointment?",
@@ -407,8 +469,13 @@ export default function Dashboard() {
     });
   }
 
-  async function updateAppointmentStatus(status: string) {
-    if (!selectedStatusAppointment?.id) return;
+  async function updateAppointmentStatus(
+    status: string,
+    appointmentOverride?: any | null,
+  ) {
+    const targetAppointment = appointmentOverride || selectedStatusAppointment;
+
+    if (!targetAppointment?.id) return;
 
     const {
       data: { user },
@@ -423,7 +490,7 @@ export default function Dashboard() {
     const { error } = await supabase
       .from("appointments")
       .update({ status })
-      .eq("id", selectedStatusAppointment.id)
+      .eq("id", targetAppointment.id)
       .eq("user_id", user.id);
 
     if (error) {
@@ -434,11 +501,11 @@ export default function Dashboard() {
     if (status === "canceled") {
       if (canUseProFeature("smsAutomation")) {
         void sendAppointmentSmsNonBlocking(
-          selectedStatusAppointment.id,
+          targetAppointment.id,
           "cancellation",
         );
       }
-      await cancelAppointmentReminder(selectedStatusAppointment.id);
+      await cancelAppointmentReminder(targetAppointment.id);
     }
 
     await fetchAppointments();
@@ -502,6 +569,21 @@ export default function Dashboard() {
   function openAppointmentEdit(appointment: any) {
     if (!appointment?.id) return;
 
+    logDashboardAppointmentCardDebug(
+      "Schedova 1.1.1 appointment card handler active",
+      {
+      surface: "dashboard",
+      gesture: "open-flow",
+      appointmentId: appointment.id,
+      },
+    );
+    logDashboardAppointmentCardDebug("[dashboard flow] openAppointmentEdit", {
+      appointmentId: appointment.id,
+      clientName: getClientDisplayName(appointment),
+    });
+
+    setActionAppointment(null);
+
     router.push({
       pathname: "/book-appointment",
       params: {
@@ -509,6 +591,19 @@ export default function Dashboard() {
         mode: "edit",
       },
     } as any);
+  }
+
+  function shouldIgnoreAppointmentPress(appointmentId: string) {
+    if (longPressHandledAppointmentId.current !== appointmentId) {
+      return false;
+    }
+
+    longPressHandledAppointmentId.current = null;
+    return true;
+  }
+
+  function canCancelAppointment(status?: string | null) {
+    return status === "scheduled" || !status;
   }
 
   const now = new Date();
@@ -520,19 +615,21 @@ export default function Dashboard() {
 
   const displayAppointments = appointments.filter(isDashboardAppointmentVisible);
 
-  const todaysAppointments = displayAppointments.filter(
-    (appointment) =>
-      appointment?.appointment_date === todayIso &&
-      appointment?.status !== "canceled",
+  const todaysAppointments = sortAppointmentsChronologically(
+    displayAppointments.filter(
+      (appointment) =>
+        appointment?.appointment_date === todayIso &&
+        appointment?.status !== "canceled",
+    ),
   );
 
-  const upcomingAppointments = displayAppointments
-    .filter(
+  const upcomingAppointments = sortAppointmentsChronologically(
+    displayAppointments.filter(
       (appointment) =>
         appointment?.appointment_date >= todayIso &&
         appointment?.status !== "canceled",
-    )
-    .slice(0, 5);
+    ),
+  ).slice(0, 5);
   const todayMetricHelper =
     todaysAppointments.length === 1 ? "Appointment" : "Appointments";
   const upcomingMetricHelper =
@@ -571,6 +668,36 @@ export default function Dashboard() {
         return total + serviceTotal;
       }, 0)
     : 0;
+  const compactSmsBalance = width < 390;
+  const smsBalancePillMaxWidth = width < 390 ? 122 : width < 430 ? 148 : 180;
+  const smsBalanceValue = Math.max(0, Number(smsBalance.balance) || 0);
+  const smsBalanceLabel = hasUnlimitedSms
+    ? "SMS: Unlimited"
+    : smsBalanceLoading || smsBalanceError
+      ? "SMS: --"
+      : compactSmsBalance
+        ? `${smsBalanceValue} SMS left`
+        : `Messages: ${smsBalanceValue} left`;
+  const smsBalancePillBaseColor = smsBalanceIsZero
+    ? "#DC2626"
+    : dashboardSummaryAccent;
+  const smsBalancePillBorder = smsBalanceLoading || smsBalanceError
+    ? dashboardCardBorder
+    : smsBalanceIsZero
+      ? themeName === "dark" || themeName === "black"
+        ? "rgba(220, 38, 38, 0.42)"
+        : "rgba(220, 38, 38, 0.26)"
+      : dashboardAccentBorder;
+  const smsBalancePillBackground = smsBalanceLoading || smsBalanceError
+    ? colors.card
+    : smsBalanceIsZero
+      ? themeName === "dark" || themeName === "black"
+        ? "rgba(220, 38, 38, 0.16)"
+        : "rgba(220, 38, 38, 0.08)"
+      : dashboardAccentSoft;
+  const smsBalancePillTextColor = smsBalanceLoading || smsBalanceError
+    ? colors.mutedText
+    : smsBalancePillBaseColor;
 
   function getServiceSummary(serviceNames: string[]) {
     if (serviceNames.length === 0) return "No service selected";
@@ -820,7 +947,9 @@ export default function Dashboard() {
         ? "#16A34A"
         : confirmationStatus === "declined"
           ? "#DC2626"
-          : dashboardStatusAccent;
+          : confirmationStatus === "needs_reschedule"
+            ? "#D97706"
+            : dashboardStatusAccent;
 
     return (
       <View
@@ -937,7 +1066,53 @@ export default function Dashboard() {
 
     return (
       <AppCard
-        onPress={Platform.OS === "web" ? undefined : openEdit}
+        onPress={() => {
+          logDashboardAppointmentCardDebug(
+            "Schedova 1.1.1 appointment card handler active",
+            {
+              surface: "dashboard",
+              gesture: "press",
+              appointmentId: appointment.id,
+            },
+          );
+          logDashboardAppointmentCardDebug("[dashboard card] onPress", {
+            appointmentId: appointment.id,
+            clientName: getClientDisplayName(appointment),
+            status: appointment.status || "scheduled",
+            appointmentDate: appointment.appointment_date,
+            appointmentTime: appointment.appointment_time,
+          });
+
+          if (shouldIgnoreAppointmentPress(appointment.id)) {
+            logDashboardAppointmentCardDebug("[dashboard card] onPress ignored", {
+              appointmentId: appointment.id,
+            });
+            return;
+          }
+
+          openEdit();
+        }}
+        onLongPress={() => {
+          logDashboardAppointmentCardDebug(
+            "Schedova 1.1.1 appointment card handler active",
+            {
+              surface: "dashboard",
+              gesture: "longPress",
+              appointmentId: appointment.id,
+            },
+          );
+          logDashboardAppointmentCardDebug("[dashboard card] onLongPress", {
+            appointmentId: appointment.id,
+            clientName: getClientDisplayName(appointment),
+            status: appointment.status || "scheduled",
+            appointmentDate: appointment.appointment_date,
+            appointmentTime: appointment.appointment_time,
+          });
+
+          longPressHandledAppointmentId.current = appointment.id;
+          setActionAppointment(appointment);
+        }}
+        delayLongPress={250}
         variant="subtle"
         style={{
           backgroundColor: colors.card,
@@ -949,19 +1124,7 @@ export default function Dashboard() {
           ...dashboardCardShadow,
         }}
       >
-        {Platform.OS === "web" ? (
-          <Pressable
-            accessibilityRole="button"
-            accessibilityLabel={`Open appointment for ${getClientDisplayName(
-              appointment,
-            )}`}
-            onPress={openEdit}
-            style={({ pressed }) => ({ opacity: pressed ? 0.86 : 1 })}
-          >
-            {cardDetails}
-          </Pressable>
-        ) : null}
-        {Platform.OS !== "web" ? cardDetails : null}
+        {cardDetails}
 
         <View style={{ flexDirection: "row", gap: 8, marginTop: 14 }}>
           <AppButton
@@ -1012,9 +1175,38 @@ export default function Dashboard() {
             style={{
               flexDirection: "row",
               alignItems: "center",
-              gap: 14,
+              gap: 10,
             }}
           >
+            <Pressable
+              accessibilityRole="button"
+              accessibilityLabel="Open message packs and SMS balance"
+              accessibilityHint="View your remaining SMS balance and message packs"
+              onPress={() => router.push("/settings/message-packs" as any)}
+              hitSlop={10}
+              style={{
+                maxWidth: smsBalancePillMaxWidth,
+                borderRadius: 999,
+                borderWidth: 1,
+                borderColor: smsBalancePillBorder,
+                backgroundColor: smsBalancePillBackground,
+                paddingHorizontal: compactSmsBalance ? 9 : 11,
+                paddingVertical: 8,
+                flexShrink: 1,
+              }}
+            >
+              <Text
+                numberOfLines={1}
+                style={{
+                  color: smsBalancePillTextColor,
+                  fontSize: getFontSize(11),
+                  fontWeight: "900",
+                }}
+              >
+                {smsBalanceLabel}
+              </Text>
+            </Pressable>
+
             <Pressable
               accessibilityRole="button"
               accessibilityLabel="Client replies"
@@ -1023,40 +1215,40 @@ export default function Dashboard() {
               hitSlop={10}
               style={{
                 position: "relative",
-                width: 30,
-                height: 30,
+                width: 36,
+                height: 36,
                 alignItems: "center",
                 justifyContent: "center",
               }}
             >
               <Ionicons
                 name="mail-unread-outline"
-                size={24}
+                size={26}
                 color={colors.text}
               />
               {clientRepliesCount > 0 ? (
                 <View
                   style={{
                     position: "absolute",
-                    top: -5,
-                    right: -7,
-                    minWidth: 18,
-                    height: 18,
+                    top: -6,
+                    right: -8,
+                    minWidth: 22,
+                    height: 22,
                     borderRadius: 999,
                     backgroundColor: "#DC2626",
-                    borderWidth: 1,
+                    borderWidth: 2,
                     borderColor: colors.card,
                     alignItems: "center",
                     justifyContent: "center",
-                    paddingHorizontal: 4,
+                    paddingHorizontal: 5,
                   }}
                 >
                   <Text
                     style={{
                       color: "#FFFFFF",
-                      fontSize: 10,
+                      fontSize: 11,
                       fontWeight: "900",
-                      lineHeight: 12,
+                      lineHeight: 13,
                     }}
                   >
                     {clientRepliesBadgeText}
@@ -1351,6 +1543,127 @@ export default function Dashboard() {
           ))
         )}
       </AppCard>
+
+      <SwipeDownSheet
+        visible={!!actionAppointment}
+        onClose={() => {
+          longPressHandledAppointmentId.current = null;
+          setActionAppointment(null);
+        }}
+        backgroundColor={colors.background}
+      >
+        <Text
+          style={{
+            color: colors.text,
+            fontSize: getFontSize(22),
+            fontWeight: "900",
+          }}
+        >
+          {getClientDisplayName(actionAppointment) || "Appointment"}
+        </Text>
+
+        <Text
+          style={{
+            color: colors.mutedText,
+            marginTop: 6,
+            fontSize: getFontSize(14),
+          }}
+        >
+          {formatAppointmentTimeRange(
+            actionAppointment,
+            Number(actionAppointment?.duration_minutes || 0) ||
+              getAppointmentTotals(actionAppointment || {}).totalDuration,
+          )}{" "}
+          - {formatDate(actionAppointment?.appointment_date)}
+        </Text>
+
+        <Text
+          style={{
+            color: colors.mutedText,
+            marginTop: 4,
+            fontSize: getFontSize(14),
+          }}
+        >
+          Status: {actionAppointment?.status || "scheduled"}
+        </Text>
+
+        <View style={{ gap: 12, marginTop: 20 }}>
+          <Pressable
+            onPress={() => openAppointmentEdit(actionAppointment)}
+            style={{
+              backgroundColor: "#2563EB",
+              borderRadius: 14,
+              padding: 14,
+              alignItems: "center",
+            }}
+          >
+            <Text style={{ color: "#FFFFFF", fontWeight: "900" }}>
+              Open Appointment
+            </Text>
+          </Pressable>
+
+          <Pressable
+            onPress={() => {
+              setActionAppointment(null);
+              setSelectedStatusAppointment(actionAppointment);
+              setStatusModalOpen(true);
+            }}
+            style={{
+              backgroundColor: colors.card,
+              borderWidth: 1,
+              borderColor: colors.border,
+              borderRadius: 14,
+              padding: 14,
+              alignItems: "center",
+            }}
+          >
+            <Text style={{ color: colors.text, fontWeight: "900" }}>
+              Change Status
+            </Text>
+          </Pressable>
+
+          {canCancelAppointment(actionAppointment?.status) ? (
+            <Pressable
+              onPress={async () => {
+                const appointment = actionAppointment;
+                setActionAppointment(null);
+                await updateAppointmentStatus("canceled", appointment);
+              }}
+              style={{
+                backgroundColor: colors.card,
+                borderWidth: 1,
+                borderColor: "#DC2626",
+                borderRadius: 14,
+                padding: 14,
+                alignItems: "center",
+              }}
+            >
+              <Text style={{ color: "#DC2626", fontWeight: "900" }}>
+                Cancel Appointment
+              </Text>
+            </Pressable>
+          ) : null}
+
+          <Pressable
+            onPress={() => {
+              const appointmentId = actionAppointment?.id;
+              setActionAppointment(null);
+              if (!appointmentId) return;
+              void deleteAppointment(appointmentId);
+            }}
+            style={{
+              backgroundColor: "#DC2626",
+              borderRadius: 14,
+              padding: 14,
+              alignItems: "center",
+            }}
+          >
+            <Text style={{ color: "#FFFFFF", fontWeight: "900" }}>
+              Delete Appointment
+            </Text>
+          </Pressable>
+        </View>
+      </SwipeDownSheet>
 
       <Modal visible={statusModalOpen} transparent animationType="fade">
         <Pressable

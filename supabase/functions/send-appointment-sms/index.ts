@@ -5,6 +5,11 @@ import {
   isCountryRegionCode,
   normalizePhoneForSms,
 } from "../../../lib/phoneNumbers.ts";
+import {
+  confirmMessageCreditReservation,
+  refundMessageCreditReservation,
+  reserveMessageCredit,
+} from "../_shared/messageCredits.ts";
 
 type AppointmentSmsMessageType =
   | "confirmation"
@@ -249,16 +254,18 @@ function buildSmsBody({
 }) {
   const name = clientName || "there";
   const time = formatAppointmentTime(appointmentTime);
+  const replyInstructions =
+    "Reply YES to confirm, or reply NO if you need to reschedule.";
 
   switch (messageType) {
     case "confirmation":
-      return `Hi ${name}, confirming your appointment on ${appointmentDate} at ${time}. Reply here if you need to make a change.`;
+      return `Hi ${name}, confirming your appointment on ${appointmentDate} at ${time}. ${replyInstructions}`;
     case "update":
       return `Hi ${name}, your appointment has been updated to ${appointmentDate} at ${time}. Reply here if you need help.`;
     case "cancellation":
       return `Hi ${name}, your appointment on ${appointmentDate} at ${time} has been canceled. Reply here if you need to reschedule.`;
     case "reminder":
-      return `Hi ${name}, this is a reminder for your appointment on ${appointmentDate} at ${time}. Reply here if you need to make a change.`;
+      return `Hi ${name}, this is a reminder for your appointment on ${appointmentDate} at ${time}. ${replyInstructions}`;
   }
 }
 
@@ -966,6 +973,75 @@ Deno.serve(async (req) => {
   }
 
   const queuedLogPayload = logPayloadFor({ status: "queued" });
+  const reservationResult = await reserveMessageCredit(serviceClient, {
+    userId: user.id,
+    appointmentId: appointment.id,
+    clientId: client.id,
+    messageType,
+    reason: "sms_send",
+    metadata: {
+      function: "send-appointment-sms",
+      appointmentId: appointment.id,
+      clientId: client.id,
+      messageType,
+    },
+  });
+
+  if (reservationResult.error) {
+    console.error("message credit reservation failed", {
+      userId: user.id,
+      appointmentId: appointment.id,
+      clientId: client.id,
+      messageType,
+      error: reservationResult.error,
+    });
+    await tryInsertSmsLog(
+      serviceClient,
+      logPayloadFor({
+        status: "failed",
+        errorMessage: "Message credit reservation failed",
+      }),
+      "message_credit_reservation",
+    );
+    return jsonError(
+      {
+        message: "Message credit reservation failed",
+        details: reservationResult.error,
+      },
+      500,
+      {
+        step: "message_credit_reservation",
+        code: "message_credit_reservation_failed",
+        message: SMS_SEND_FRIENDLY_ERROR,
+      },
+    );
+  }
+
+  if (!reservationResult.data.ok || !reservationResult.data.reserved) {
+    const noCreditsMessage = "Insufficient message credits";
+    await tryInsertSmsLog(
+      serviceClient,
+      logPayloadFor({
+        status: "failed",
+        errorMessage: noCreditsMessage,
+      }),
+      "message_credit_reservation",
+    );
+    return jsonResponse(
+      {
+        ok: false,
+        step: "message_credit_reservation",
+        code: "insufficient_credits",
+        error: noCreditsMessage,
+        balance: Number(reservationResult.data.balance) || 0,
+      },
+      402,
+    );
+  }
+
+  const messageCreditReservationId = asTrimmedString(
+    reservationResult.data.eventId,
+  );
   const queuedLogId = await tryInsertSmsLog(
     serviceClient,
     queuedLogPayload,
@@ -973,6 +1049,12 @@ Deno.serve(async (req) => {
   );
 
   if (!queuedLogId) {
+    if (messageCreditReservationId) {
+      await refundMessageCreditReservation(serviceClient, {
+        eventId: messageCreditReservationId,
+        refundReason: "sms_log_insert_failed",
+      });
+    }
     return jsonError(
       {
         message: "SMS log insert failed",
@@ -1035,6 +1117,14 @@ Deno.serve(async (req) => {
         "telnyx_send_failed",
       );
 
+      if (messageCreditReservationId) {
+        await refundMessageCreditReservation(serviceClient, {
+          eventId: messageCreditReservationId,
+          refundReason: "telnyx_send_failed",
+          smsMessageLogId: queuedLogId,
+        });
+      }
+
       return jsonError(
         {
           message: telnyxErrorMessage,
@@ -1056,6 +1146,7 @@ Deno.serve(async (req) => {
     const providerStatus = extractTelnyxMessageStatus(telnyxResponseBody);
     const sentAtColumn = appointmentSentAtColumn(messageType);
     let appointmentUpdateWarning: string | null = null;
+    let messageCreditWarning: string | null = null;
 
     if (sentAtColumn) {
       const { error: appointmentUpdateError } = await serviceClient
@@ -1079,6 +1170,39 @@ Deno.serve(async (req) => {
       }
     }
 
+    if (messageCreditReservationId) {
+      const confirmationResult = await confirmMessageCreditReservation(
+        serviceClient,
+        {
+          eventId: messageCreditReservationId,
+          smsMessageLogId: queuedLogId,
+        },
+      );
+
+      if (
+        confirmationResult.error ||
+        (!confirmationResult.data.ok &&
+          confirmationResult.data.reason !== "already_confirmed")
+      ) {
+        messageCreditWarning =
+          "SMS sent, but message credit confirmation needs review.";
+        console.error("message credit confirmation failed", {
+          userId: user.id,
+          appointmentId: appointment.id,
+          clientId: client.id,
+          messageType,
+          reservationId: messageCreditReservationId,
+          error: confirmationResult.error,
+          result: confirmationResult.data,
+        });
+      }
+    }
+
+    const combinedWarning = [appointmentUpdateWarning, messageCreditWarning]
+      .filter(Boolean)
+      .join(" ")
+      .trim() || null;
+
     await tryUpdateSmsLog(
       serviceClient,
       queuedLogId,
@@ -1086,7 +1210,7 @@ Deno.serve(async (req) => {
         status: providerStatus,
         providerMessageId,
         providerResponse: telnyxResponseBody,
-        errorMessage: appointmentUpdateWarning,
+        errorMessage: combinedWarning,
       }),
       "telnyx_send_success",
     );
@@ -1096,7 +1220,7 @@ Deno.serve(async (req) => {
       step: "telnyx_send",
       providerMessageId,
       providerStatus,
-      warning: appointmentUpdateWarning,
+      warning: combinedWarning,
     });
   } catch (error) {
     const errorMessage = getErrorMessage(error);
@@ -1117,6 +1241,14 @@ Deno.serve(async (req) => {
       }),
       "telnyx_send_exception",
     );
+
+    if (messageCreditReservationId) {
+      await refundMessageCreditReservation(serviceClient, {
+        eventId: messageCreditReservationId,
+        refundReason: "telnyx_send_exception",
+        smsMessageLogId: queuedLogId,
+      });
+    }
 
     return jsonError(
       { message: errorMessage, request_body: telnyxRequestBody, error },

@@ -5,10 +5,12 @@ export default function SwipeDownSheet({
   visible,
   onClose,
   children,
+  backgroundColor = "#ffffff",
 }: {
   visible: boolean;
   onClose: () => void;
   children: ReactNode;
+  backgroundColor?: string;
 }) {
   const responder = useRef(
     PanResponder.create({
@@ -35,7 +37,7 @@ export default function SwipeDownSheet({
           onPress={() => {}}
           {...responder.panHandlers}
           style={{
-            backgroundColor: "#ffffff",
+            backgroundColor,
             padding: 24,
             borderTopLeftRadius: 24,
             borderTopRightRadius: 24,

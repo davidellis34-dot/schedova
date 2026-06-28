@@ -14,6 +14,7 @@ import {
   useWindowDimensions,
 } from "react-native";
 import { useSafeAreaInsets } from "react-native-safe-area-context";
+import SwipeDownSheet from "../components/SwipeDownSheet";
 import { AppScreen } from "../components/layout/AppScreen";
 import { confirmDestructiveAction } from "../lib/confirmDestructiveAction";
 import {
@@ -21,6 +22,7 @@ import {
   getAppointmentServices,
   getAppointmentServiceTotal,
 } from "../lib/appointmentServices";
+import { sortAppointmentsChronologically } from "../lib/appointmentSort";
 import {
   getAppointmentConfirmationLabel,
   getAppointmentConfirmationStatus,
@@ -29,6 +31,7 @@ import {
 import { sendAppointmentSmsNonBlocking } from "../lib/appointmentSms";
 import { getCalendarPreferences } from "../lib/calendarPreferences";
 import { canUseFeature, useFeatureAccess } from "../lib/featureAccess";
+import { isSchedovaInternalDebugMode } from "../lib/debugMode";
 import { cancelAppointmentReminder } from "../lib/localNotifications";
 import { ENABLE_PRO } from "../lib/proFeatureFlag";
 import { openSchedovaProScreen, PRO_UPSELL_COPY } from "../lib/proUpsell";
@@ -45,6 +48,14 @@ const DAYS = [
   "Friday",
   "Saturday",
 ];
+
+function logCalendarAppointmentCardDebug(
+  label: string,
+  details: Record<string, unknown>,
+) {
+  if (!isSchedovaInternalDebugMode()) return;
+  console.log(label, details);
+}
 
 const DEFAULT_INTERVAL_MINUTES = 30;
 const DEFAULT_TIME_FORMAT: TimeFormat = "12h";
@@ -897,6 +908,7 @@ export default function CalendarView() {
       : "today",
   );
   const [filterModalVisible, setFilterModalVisible] = useState(false);
+  const [actionAppointment, setActionAppointment] = useState<any | null>(null);
   const [statusMenuAppointment, setStatusMenuAppointment] =
     useState<any | null>(null);
   const [statusUpdatingId, setStatusUpdatingId] = useState<string | null>(null);
@@ -905,6 +917,7 @@ export default function CalendarView() {
   const dayLayouts = useRef<Record<string, number>>({});
   const hasAutoScrolled = useRef(false);
   const fetchRequestId = useRef(0);
+  const longPressHandledAppointmentId = useRef<string | null>(null);
 
   const todayKey = initialDate;
 
@@ -1039,10 +1052,12 @@ export default function CalendarView() {
     weekDates.find((item) => item.date === selectedGridDate) || weekDates[0];
   const selectedGridAppointments = useMemo(
     () =>
-      appointments.filter(
-        (appointment) =>
-          isValidAppointmentForDisplay(appointment) &&
-          appointment.appointment_date === selectedGridDate,
+      sortAppointmentsChronologically(
+        appointments.filter(
+          (appointment) =>
+            isValidAppointmentForDisplay(appointment) &&
+            appointment.appointment_date === selectedGridDate,
+        ),
       ),
     [appointments, selectedGridDate],
   );
@@ -1063,10 +1078,12 @@ export default function CalendarView() {
   );
   const gridRangeAppointments = useMemo(
     () =>
-      appointments.filter(
-        (appointment) =>
-          isValidAppointmentForDisplay(appointment) &&
-          gridRangeDates.includes(String(appointment.appointment_date || "")),
+      sortAppointmentsChronologically(
+        appointments.filter(
+          (appointment) =>
+            isValidAppointmentForDisplay(appointment) &&
+            gridRangeDates.includes(String(appointment.appointment_date || "")),
+        ),
       ),
     [appointments, gridRangeDates],
   );
@@ -1398,12 +1415,14 @@ export default function CalendarView() {
       return;
     }
 
-    const nextAppointments = (appointmentsResult.data || []).filter((appt: any) => {
-      if (!isValidAppointmentForDisplay(appt)) return false;
-      if (appt.status === "canceled") return false;
+    const nextAppointments = sortAppointmentsChronologically(
+      (appointmentsResult.data || []).filter((appt: any) => {
+        if (!isValidAppointmentForDisplay(appt)) return false;
+        if (appt.status === "canceled") return false;
 
-      return true;
-    });
+        return true;
+      }),
+    );
     let nextFinderAppointments: any[] = [];
 
     if (finderAppointmentsResult.error) {
@@ -1413,8 +1432,8 @@ export default function CalendarView() {
       );
       setFinderAppointments([]);
     } else {
-      nextFinderAppointments = (finderAppointmentsResult.data || []).filter(
-        isValidAppointmentForDisplay,
+      nextFinderAppointments = sortAppointmentsChronologically(
+        (finderAppointmentsResult.data || []).filter(isValidAppointmentForDisplay),
       );
       setFinderAppointments(nextFinderAppointments);
     }
@@ -1445,7 +1464,7 @@ export default function CalendarView() {
     if (appointmentIds.length > 0) {
       const repliesResult = await supabase
         .from("sms_message_logs")
-        .select("id, appointment_id, body, message_body, needs_attention, created_at")
+        .select("id, appointment_id, body, message_body, status, needs_attention, created_at")
         .eq("user_id", userId)
         .eq("direction", "inbound")
         .in("appointment_id", appointmentIds)
@@ -1650,22 +1669,26 @@ export default function CalendarView() {
     }
 
     setAppointments((current) =>
-      current
-        .filter((appointment) => isValidAppointmentForDisplay(appointment))
-        .map((appointment) =>
-          String(appointment.id) === String(updatedAppointmentId)
-            ? updatedAppointment
-            : appointment,
-        ),
+      sortAppointmentsChronologically(
+        current
+          .filter((appointment) => isValidAppointmentForDisplay(appointment))
+          .map((appointment) =>
+            String(appointment.id) === String(updatedAppointmentId)
+              ? updatedAppointment
+              : appointment,
+          ),
+      ),
     );
     setFinderAppointments((current) =>
-      current
-        .filter((appointment) => isValidAppointmentForDisplay(appointment))
-        .map((appointment) =>
-          String(appointment.id) === String(updatedAppointmentId)
-            ? updatedAppointment
-            : appointment,
-        ),
+      sortAppointmentsChronologically(
+        current
+          .filter((appointment) => isValidAppointmentForDisplay(appointment))
+          .map((appointment) =>
+            String(appointment.id) === String(updatedAppointmentId)
+              ? updatedAppointment
+              : appointment,
+          ),
+      ),
     );
     setStatusMenuAppointment((current: any | null) =>
       String(current?.id || "") === String(updatedAppointmentId)
@@ -1736,6 +1759,7 @@ export default function CalendarView() {
     appointment: any,
     options: {
       compact?: boolean;
+      interactive?: boolean;
       onColor?: boolean;
       textColor?: string;
     } = {},
@@ -1755,6 +1779,33 @@ export default function CalendarView() {
       ? "rgba(255,255,255,0.18)"
       : `${statusColor}14`;
 
+    const pillContent = (
+      <Text
+        numberOfLines={1}
+        style={{
+          color: textColor,
+          fontSize: options.compact ? 10 : 11,
+          fontWeight: "900",
+        }}
+      >
+        {pillText}
+      </Text>
+    );
+
+    const baseStyle = {
+      alignSelf: "flex-start",
+      backgroundColor,
+      borderColor,
+      borderWidth: 1,
+      borderRadius: 999,
+      paddingHorizontal: options.compact ? 7 : 9,
+      paddingVertical: options.compact ? 3 : 4,
+    } as const;
+
+    if (options.interactive === false) {
+      return <View style={baseStyle}>{pillContent}</View>;
+    }
+
     return (
       <Pressable
         accessibilityRole="button"
@@ -1768,26 +1819,11 @@ export default function CalendarView() {
           setStatusMenuAppointment(appointment);
         }}
         style={({ pressed }) => ({
-          alignSelf: "flex-start",
-          backgroundColor,
-          borderColor,
-          borderWidth: 1,
-          borderRadius: 999,
+          ...baseStyle,
           opacity: pressed ? 0.82 : 1,
-          paddingHorizontal: options.compact ? 7 : 9,
-          paddingVertical: options.compact ? 3 : 4,
         })}
       >
-        <Text
-          numberOfLines={1}
-          style={{
-            color: textColor,
-            fontSize: options.compact ? 10 : 11,
-            fontWeight: "900",
-          }}
-        >
-          {pillText}
-        </Text>
+        {pillContent}
       </Pressable>
     );
   }
@@ -1813,7 +1849,9 @@ export default function CalendarView() {
         ? "#16A34A"
         : confirmationStatus === "declined"
           ? "#DC2626"
-          : infoAccent;
+          : confirmationStatus === "needs_reschedule"
+            ? "#D97706"
+            : infoAccent;
     const textColor = options.onColor
       ? options.textColor || "#FFFFFF"
       : chipColor;
@@ -1854,6 +1892,21 @@ export default function CalendarView() {
   function openAppointmentEditor(appointment: any) {
     if (!appointment?.id) return;
 
+    logCalendarAppointmentCardDebug(
+      "Schedova 1.1.1 appointment card handler active",
+      {
+        surface: "calendar-view",
+        gesture: "open-flow",
+        appointmentId: appointment.id,
+      },
+    );
+    logCalendarAppointmentCardDebug("[calendar-view flow] openAppointmentEdit", {
+      appointmentId: appointment.id,
+      clientName: appointment.client_name || "",
+    });
+
+    setActionAppointment(null);
+
     router.push({
       pathname: "/book-appointment",
       params: {
@@ -1861,6 +1914,120 @@ export default function CalendarView() {
         mode: "edit",
       },
     } as any);
+  }
+
+  function shouldIgnoreAppointmentPress(appointmentId: string) {
+    if (longPressHandledAppointmentId.current !== appointmentId) {
+      return false;
+    }
+
+    longPressHandledAppointmentId.current = null;
+    return true;
+  }
+
+  function canCancelAppointment(status?: string | null) {
+    return status === "scheduled" || !status || status === "confirmed";
+  }
+
+  function logAppointmentCardHandler(
+    surface: string,
+    gesture: "press" | "longPress",
+    appointment: any,
+  ) {
+    logCalendarAppointmentCardDebug(
+      "Schedova 1.1.1 appointment card handler active",
+      {
+        surface,
+        gesture,
+        appointmentId: appointment?.id || null,
+      },
+    );
+    logCalendarAppointmentCardDebug(
+      `[${surface} card] on${gesture === "press" ? "Press" : "LongPress"}`,
+      {
+        appointmentId: appointment?.id || null,
+        clientName: appointment?.client_name || "",
+        status: appointment?.status || "scheduled",
+        appointmentDate: appointment?.appointment_date || "",
+        appointmentTime: appointment?.appointment_time || "",
+      },
+    );
+  }
+
+  function handleAppointmentCardPress(
+    surface: string,
+    appointment: any,
+    options: { allowSelectionToggle?: boolean } = {},
+  ) {
+    if (!appointment?.id) return;
+
+    logAppointmentCardHandler(surface, "press", appointment);
+
+    if (shouldIgnoreAppointmentPress(String(appointment.id))) {
+      logCalendarAppointmentCardDebug(`[${surface} card] onPress ignored`, {
+        appointmentId: appointment.id,
+      });
+      return;
+    }
+
+    if (selectMode && options.allowSelectionToggle) {
+      toggleAppointment(String(appointment.id));
+      return;
+    }
+
+    openAppointmentEditor(appointment);
+  }
+
+  function handleAppointmentCardLongPress(surface: string, appointment: any) {
+    if (!appointment?.id || selectMode) return;
+
+    logAppointmentCardHandler(surface, "longPress", appointment);
+    longPressHandledAppointmentId.current = String(appointment.id);
+    setActionAppointment(appointment);
+  }
+
+  async function deleteAppointment(appointment?: any | null) {
+    if (!appointment?.id) {
+      Alert.alert("Error", "No appointment ID found.");
+      return;
+    }
+
+    await confirmDestructiveAction({
+      title: "Delete Appointment",
+      message: "Are you sure you want to delete this appointment?",
+      confirmText: "Delete",
+      onConfirm: async () => {
+        const {
+          data: { user },
+          error: userError,
+        } = await supabase.auth.getUser();
+
+        if (userError || !user) {
+          Alert.alert("Not signed in", "Please sign in again.");
+          return;
+        }
+
+        if (canUseFeature("smsAutomation")) {
+          void sendAppointmentSmsNonBlocking(appointment.id, "cancellation");
+        }
+
+        const { error } = await supabase
+          .from("appointments")
+          .delete()
+          .eq("id", appointment.id)
+          .eq("user_id", user.id);
+
+        if (error) {
+          Alert.alert("Delete failed", "Unable to delete this appointment.");
+          return;
+        }
+
+        await cancelAppointmentReminder(appointment.id);
+        setActionAppointment(null);
+        setStatusMenuAppointment(null);
+        void fetchCalendarData();
+      },
+    });
   }
 
   function openClientDetails(appointment: any) {
@@ -1882,6 +2049,7 @@ export default function CalendarView() {
       disabledColor?: string;
       fontSize: number;
       fontWeight?: "700" | "800" | "900" | "bold";
+      interactive?: boolean;
       numberOfLines?: number;
     },
   ) {
@@ -1897,7 +2065,7 @@ export default function CalendarView() {
       textDecorationLine: hasClientId ? "underline" : "none",
     } as const;
 
-    if (!hasClientId) {
+    if (!hasClientId || options.interactive === false) {
       return (
         <Text
           numberOfLines={options.numberOfLines || 1}
@@ -1977,7 +2145,13 @@ export default function CalendarView() {
         accessibilityLabel={`Open appointment for ${
           appointment.client_name || "Client"
         }`}
-        onPress={() => openAppointmentEditor(appointment)}
+        onPress={() =>
+          handleAppointmentCardPress("calendar-grid", appointment)
+        }
+        onLongPress={() =>
+          handleAppointmentCardLongPress("calendar-grid", appointment)
+        }
+        delayLongPress={250}
         style={({ pressed }) => ({
           backgroundColor: blockColor,
           borderRadius: 5,
@@ -1993,6 +2167,7 @@ export default function CalendarView() {
           color: textColor,
           fontSize: compact ? 12 : 14,
           fontWeight: "900",
+          interactive: false,
         })}
         <Text
           numberOfLines={1}
@@ -2026,6 +2201,7 @@ export default function CalendarView() {
         >
           {renderStatusPill(appointment, {
             compact: true,
+            interactive: false,
             onColor: true,
             textColor,
           })}
@@ -3205,7 +3381,13 @@ export default function CalendarView() {
                   accessibilityLabel={`Open appointment for ${
                     appt.client_name || "Client"
                   }`}
-                  onPress={() => openAppointmentEditor(appt)}
+                  onPress={() =>
+                    handleAppointmentCardPress("calendar-finder", appt)
+                  }
+                  onLongPress={() =>
+                    handleAppointmentCardLongPress("calendar-finder", appt)
+                  }
+                  delayLongPress={250}
                   style={({ pressed }) => ({
                     backgroundColor: colors.background,
                     paddingVertical: 12,
@@ -3224,6 +3406,7 @@ export default function CalendarView() {
                     disabledColor: colors.text,
                     fontSize: 16,
                     fontWeight: "900",
+                    interactive: false,
                   })}
 
                   <Text
@@ -3272,7 +3455,7 @@ export default function CalendarView() {
                         gap: 6,
                       }}
                     >
-                      {renderStatusPill(appt)}
+                      {renderStatusPill(appt, { interactive: false })}
                       {renderConfirmationChip(appt)}
                     </View>
 
@@ -3543,7 +3726,7 @@ export default function CalendarView() {
                     </>
                   ) : null}
 
-                  {dayAppointments.map((appt) => {
+                  {sortAppointmentsChronologically(dayAppointments).map((appt) => {
                     const selected = selectedAppointments.includes(appt.id);
                     const appointmentEndTime = getAppointmentEndTimeText(
                       appt,
@@ -3557,20 +3740,15 @@ export default function CalendarView() {
                         accessibilityLabel={`Open appointment for ${
                           appt.client_name || "Client"
                         }`}
-                        onPress={() => {
-                          if (selectMode) {
-                            toggleAppointment(appt.id);
-                            return;
-                          }
-
-                          router.push({
-                            pathname: "/book-appointment",
-                            params: {
-                              appointmentId: appt.id,
-                              mode: "edit",
-                            },
-                          } as any);
-                        }}
+                        onPress={() =>
+                          handleAppointmentCardPress("calendar-view", appt, {
+                            allowSelectionToggle: true,
+                          })
+                        }
+                        onLongPress={() =>
+                          handleAppointmentCardLongPress("calendar-view", appt)
+                        }
+                        delayLongPress={250}
                         style={({ pressed }) => ({
                           backgroundColor: selected
                             ? infoAccentSoft
@@ -3597,6 +3775,7 @@ export default function CalendarView() {
                           disabledColor: colors.text,
                           fontSize: 16,
                           fontWeight: "bold",
+                          interactive: false,
                         })}
 
                         <Text
@@ -3621,7 +3800,7 @@ export default function CalendarView() {
                             marginTop: 6,
                           }}
                         >
-                          {renderStatusPill(appt)}
+                          {renderStatusPill(appt, { interactive: false })}
                           {renderConfirmationChip(appt)}
                         </View>
 
@@ -3809,6 +3988,121 @@ export default function CalendarView() {
           </>
         ) : null}
       </AppScreen>
+
+      <SwipeDownSheet
+        visible={!!actionAppointment}
+        onClose={() => {
+          longPressHandledAppointmentId.current = null;
+          setActionAppointment(null);
+        }}
+        backgroundColor={colors.background}
+      >
+        <Text
+          style={{
+            color: colors.text,
+            fontSize: 22,
+            fontWeight: "900",
+          }}
+        >
+          {actionAppointment?.client_name || "Appointment"}
+        </Text>
+
+        <Text style={{ color: colors.mutedText, marginTop: 6 }}>
+          {formatAppointmentDateLabel(actionAppointment?.appointment_date)} -{" "}
+          {formatTime(actionAppointment?.appointment_time, timeFormat)}
+          {actionAppointment
+            ? (() => {
+                const appointmentEndTime = getAppointmentEndTimeText(
+                  actionAppointment,
+                  calendarIntervalMinutes,
+                );
+                return appointmentEndTime
+                  ? ` - ${formatTime(appointmentEndTime, timeFormat)}`
+                  : "";
+              })()
+            : ""}
+        </Text>
+
+        <Text style={{ color: colors.mutedText, marginTop: 4 }}>
+          Status: {formatStatusText(actionAppointment?.status)}
+        </Text>
+
+        <View style={{ gap: 12, marginTop: 20 }}>
+          <Pressable
+            onPress={() => openAppointmentEditor(actionAppointment)}
+            style={{
+              backgroundColor: colors.primary,
+              borderRadius: 14,
+              padding: 14,
+              alignItems: "center",
+            }}
+          >
+            <Text style={{ color: "#FFFFFF", fontWeight: "900" }}>
+              Open Appointment
+            </Text>
+          </Pressable>
+
+          <Pressable
+            onPress={() => {
+              setActionAppointment(null);
+              setStatusMenuAppointment(actionAppointment);
+            }}
+            style={{
+              backgroundColor: colors.card,
+              borderWidth: 1,
+              borderColor: colors.border,
+              borderRadius: 14,
+              padding: 14,
+              alignItems: "center",
+            }}
+          >
+            <Text style={{ color: colors.text, fontWeight: "900" }}>
+              Change Status
+            </Text>
+          </Pressable>
+
+          {canCancelAppointment(actionAppointment?.status) ? (
+            <Pressable
+              onPress={async () => {
+                const appointment = actionAppointment;
+                setActionAppointment(null);
+                if (!appointment) return;
+                await updateAppointmentStatus(appointment, "canceled");
+              }}
+              style={{
+                backgroundColor: colors.card,
+                borderWidth: 1,
+                borderColor: "#DC2626",
+                borderRadius: 14,
+                padding: 14,
+                alignItems: "center",
+              }}
+            >
+              <Text style={{ color: "#DC2626", fontWeight: "900" }}>
+                Cancel Appointment
+              </Text>
+            </Pressable>
+          ) : null}
+
+          <Pressable
+            onPress={async () => {
+              const appointment = actionAppointment;
+              if (!appointment) return;
+              await deleteAppointment(appointment);
+            }}
+            style={{
+              backgroundColor: "#DC2626",
+              borderRadius: 14,
+              padding: 14,
+              alignItems: "center",
+            }}
+          >
+            <Text style={{ color: "#FFFFFF", fontWeight: "900" }}>
+              Delete Appointment
+            </Text>
+          </Pressable>
+        </View>
+      </SwipeDownSheet>
 
       <Modal
         visible={Boolean(statusMenuAppointment)}

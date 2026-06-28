@@ -32,6 +32,25 @@ const DEFAULT_SMS_SETTINGS: SmsSettings = {
 
 const REMINDER_TIMING_OPTIONS = [24, 48, 72, 168];
 
+function logSmsSettingsSupabaseError(
+  label: string,
+  error: {
+    code?: string | null;
+    message?: string | null;
+    details?: string | null;
+    hint?: string | null;
+  } | null | undefined,
+  extra: Record<string, unknown> = {},
+) {
+  console.log(`[SMS settings] ${label}`, {
+    code: error?.code ?? null,
+    message: error?.message ?? null,
+    details: error?.details ?? null,
+    hint: error?.hint ?? null,
+    ...extra,
+  });
+}
+
 export default function SmsSettingsScreen() {
   const { colors } = useAppTheme();
   useFeatureAccess();
@@ -68,6 +87,19 @@ export default function SmsSettingsScreen() {
         .select("*")
         .eq("user_id", user.id)
         .maybeSingle();
+
+      if (settingsResult.error) {
+        logSmsSettingsSupabaseError("load failed", settingsResult.error, {
+          userId: user.id,
+        });
+        setSettings(DEFAULT_SMS_SETTINGS);
+        setStatusMessage("");
+        Alert.alert(
+          "SMS settings",
+          "SMS settings could not be loaded right now. Please try again.",
+        );
+        return;
+      }
 
       if (settingsResult.data) {
         setSettings({
@@ -127,14 +159,38 @@ export default function SmsSettingsScreen() {
         return;
       }
 
-      const { error } = await supabase.from("sms_settings").upsert({
-        user_id: user.id,
-        ...settings,
+      const settingsPayload = {
+        enabled: Boolean(settings.enabled),
+        appointment_confirmations_enabled: Boolean(
+          settings.appointment_confirmations_enabled,
+        ),
+        appointment_updates_enabled: Boolean(
+          settings.appointment_updates_enabled,
+        ),
+        appointment_cancellations_enabled: Boolean(
+          settings.appointment_cancellations_enabled,
+        ),
+        appointment_reminders_enabled: Boolean(
+          settings.appointment_reminders_enabled,
+        ),
+        reminder_hours_before: Number(settings.reminder_hours_before) || 24,
         updated_at: new Date().toISOString(),
-      });
+      };
 
-      if (error) {
-        console.log("SMS settings save failed", error.message);
+      const existingRowResult = await supabase
+        .from("sms_settings")
+        .select("user_id")
+        .eq("user_id", user.id)
+        .maybeSingle();
+
+      if (existingRowResult.error) {
+        logSmsSettingsSupabaseError(
+          "existing row lookup failed",
+          existingRowResult.error,
+          {
+            userId: user.id,
+          },
+        );
         setStatusMessage("");
         Alert.alert(
           "SMS settings",
@@ -143,7 +199,54 @@ export default function SmsSettingsScreen() {
         return;
       }
 
+      const saveResult = existingRowResult.data
+        ? await supabase
+            .from("sms_settings")
+            .update(settingsPayload)
+            .eq("user_id", user.id)
+            .select("user_id")
+            .maybeSingle()
+        : await supabase
+            .from("sms_settings")
+            .upsert(
+              {
+                user_id: user.id,
+                ...settingsPayload,
+              },
+              { onConflict: "user_id" },
+            )
+            .select("user_id")
+            .maybeSingle();
+
+      if (saveResult.error) {
+        logSmsSettingsSupabaseError("save failed", saveResult.error, {
+          userId: user.id,
+          mode: existingRowResult.data ? "update" : "upsert",
+          payload: settingsPayload,
+        });
+        setStatusMessage("");
+        Alert.alert(
+          "SMS settings",
+          "SMS text settings could not be saved. Please try again.",
+        );
+        return;
+      }
+
+      console.log("[SMS settings] save success", {
+        userId: user.id,
+        mode: existingRowResult.data ? "update" : "upsert",
+      });
       setStatusMessage("SMS settings saved.");
+    } catch (error) {
+      logSmsSettingsSupabaseError(
+        "save exception",
+        error instanceof Error ? { message: error.message } : null,
+      );
+      setStatusMessage("");
+      Alert.alert(
+        "SMS settings",
+        "SMS text settings could not be saved. Please try again.",
+      );
     } finally {
       setSaving(false);
     }

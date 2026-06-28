@@ -27,8 +27,10 @@ import {
   hasAdminLifetimeSchedovaProAccess,
 } from "../lib/subscriptionAccess";
 import {
+  getActiveRevenueCatEntitlementIds,
   getRevenueCatErrorDetails,
   getRevenueCatDebugSnapshot,
+  getSchedovaProEntitlement,
   logRevenueCatError,
   prefetchRevenueCatOfferings,
   type RevenueCatDebugSnapshot,
@@ -157,7 +159,7 @@ function formatDebugList(values: string[]) {
 }
 
 function hasProEntitlement(customerInfo: CustomerInfo | null | undefined) {
-  return Boolean(customerInfo?.entitlements.active[REVENUECAT_ENTITLEMENT_ID]);
+  return Boolean(getSchedovaProEntitlement(customerInfo));
 }
 
 function formatSubscriptionDuration(pkg: PurchasesPackage) {
@@ -563,12 +565,12 @@ function RevenueCatDebugPanel({ colors }: { colors: DebugColors }) {
           lastKnownProRecoveryHint: lastKnownProForCurrentUser,
           activeEntitlementIds:
             snapshot?.activeEntitlementIdentifiers ??
-            Object.keys(customerInfo?.entitlements.active ?? {}),
+            getActiveRevenueCatEntitlementIds(customerInfo),
           entitlementDetails: snapshot?.entitlementDetails ?? [],
           currentOfferingId: snapshot?.currentOfferingIdentifier ?? null,
           sdkKeyPrefix: snapshot?.sdkKeyPrefix ?? null,
-          packageIds: snapshot?.packages.map((pkg) => pkg.identifier) ?? [],
-          productIds: snapshot?.packages.map((pkg) => pkg.productId) ?? [],
+          packageIds: snapshot?.packages?.map((pkg) => pkg.identifier) ?? [],
+          productIds: snapshot?.packages?.map((pkg) => pkg.productId) ?? [],
           lastCustomerInfoRefreshAt,
           lastRestoreAt,
           customerInfoFetchStatus,
@@ -664,10 +666,10 @@ function RevenueCatDebugPanel({ colors }: { colors: DebugColors }) {
     snapshot?.originalAppUserID ?? customerInfo?.originalAppUserId ?? "Unknown";
   const activeEntitlementIds =
     snapshot?.activeEntitlementIdentifiers ??
-    Object.keys(customerInfo?.entitlements.active ?? {});
+    getActiveRevenueCatEntitlementIds(customerInfo);
   const entitlementDetails = snapshot?.entitlementDetails ?? [];
-  const packageIds = snapshot?.packages.map((pkg) => pkg.identifier) ?? [];
-  const productIds = snapshot?.packages.map((pkg) => pkg.productId) ?? [];
+  const packageIds = snapshot?.packages?.map((pkg) => pkg.identifier) ?? [];
+  const productIds = snapshot?.packages?.map((pkg) => pkg.productId) ?? [];
 
   async function handleCopyDebugInfo() {
     try {
@@ -1069,63 +1071,6 @@ function RevenueCatDebugPanel({ colors }: { colors: DebugColors }) {
   );
 }
 
-function ProDisabledScreen() {
-  const { colors } = useAppTheme();
-
-  return (
-    <AppScreen
-      scroll
-      backgroundColor={colors.background}
-      horizontalPadding={22}
-      bottomPadding={56}
-      contentContainerStyle={{ gap: 16 }}
-    >
-      <Pressable
-        onPress={() => router.back()}
-        style={{
-          alignSelf: "flex-start",
-          paddingVertical: 6,
-          paddingRight: 12,
-        }}
-      >
-        <Text style={{ color: colors.mutedText, fontWeight: "900" }}>Back</Text>
-      </Pressable>
-
-      <View
-        style={{
-          backgroundColor: colors.card,
-          borderColor: colors.border,
-          borderWidth: 1,
-          borderRadius: 18,
-          padding: 20,
-        }}
-      >
-        <Text
-          style={{
-            color: colors.text,
-            fontSize: 28,
-            fontWeight: "900",
-            lineHeight: 34,
-          }}
-        >
-          Schedova is running in free mode
-        </Text>
-        <Text
-          style={{
-            color: colors.mutedText,
-            fontSize: 16,
-            lineHeight: 23,
-            marginTop: 10,
-          }}
-        >
-          Advanced paid features are temporarily hidden while messaging approval
-          is completed.
-        </Text>
-      </View>
-    </AppScreen>
-  );
-}
-
 function SchedovaProEnabledScreen() {
   const { colors } = useAppTheme();
   const { subscription, userId: featureAccessUserId } = useFeatureAccess();
@@ -1140,8 +1085,7 @@ function SchedovaProEnabledScreen() {
     showCustomerCenter,
     userId,
   } = useSubscription();
-  const entitlement =
-    customerInfo?.entitlements.active[REVENUECAT_ENTITLEMENT_ID] ?? null;
+  const entitlement = getSchedovaProEntitlement(customerInfo);
   const hasLifetimeAccess = hasAdminLifetimeSchedovaProAccess(subscription);
   const proUiVisible = true;
   const proStatusLabel = hasLifetimeAccess

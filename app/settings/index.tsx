@@ -435,6 +435,14 @@ export default function SettingsScreen() {
           style={rowStyle()}
         />
         <ListRow
+          title="Message Packs"
+          subtitle="Check SMS credits and buy message packs."
+          leftIcon={<IconBadge name="cash-outline" />}
+          right={<Chevron />}
+          onPress={() => router.push("/settings/message-packs")}
+          style={rowStyle()}
+        />
+        <ListRow
           title="Message Templates"
           subtitle="Create reusable client messages."
           leftIcon={<IconBadge name="document-text-outline" />}

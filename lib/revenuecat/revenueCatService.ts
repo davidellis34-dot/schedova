@@ -2,8 +2,10 @@ import Constants from "expo-constants";
 import { Platform } from "react-native";
 import type {
   CustomerInfo,
+  PRODUCT_CATEGORY,
   PurchasesOffering,
   PurchasesPackage,
+  PurchasesStoreProduct,
 } from "react-native-purchases";
 
 import {
@@ -64,11 +66,25 @@ export type RevenueCatDebugSnapshot = {
   lastError: RevenueCatErrorDetails | null;
 };
 
+export type RevenueCatSupportState = {
+  supported: boolean;
+  platform: string;
+  appOwnership: string | null;
+  reason: "expo_go" | "unsupported_platform" | null;
+};
+
+export type RevenueCatConfigurationState = {
+  configured: boolean;
+  configuredAppUserId: string | null;
+  lastError: RevenueCatErrorDetails | null;
+};
+
 let configured = false;
 let configuredAppUserId: string | null = null;
 let purchasesModulePromise: Promise<PurchasesModule> | null = null;
 let purchasesUiModulePromise: Promise<PurchasesUiModule> | null = null;
 let lastRevenueCatErrorDetails: RevenueCatErrorDetails | null = null;
+const REVENUECAT_OPERATION_TIMEOUT_MS = 20_000;
 const REVENUECAT_UI_TIMEOUT_MS = 35_000;
 const REVENUECAT_OFFERING_CACHE_MS = 60_000;
 const SUBSCRIPTION_OPTIONS_UNAVAILABLE_CODE =
@@ -79,12 +95,76 @@ let cachedCurrentOffering: PurchasesOffering | null = null;
 let cachedOfferingFetchedAt = 0;
 let offeringFetchPromise: Promise<PurchasesOffering | null> | null = null;
 
+function getActiveRevenueCatEntitlements(
+  customerInfo: CustomerInfo | null | undefined,
+) {
+  return customerInfo?.entitlements?.active ?? {};
+}
+
+function getAllRevenueCatEntitlements(
+  customerInfo: CustomerInfo | null | undefined,
+) {
+  return customerInfo?.entitlements?.all ?? {};
+}
+
+function getRevenueCatOfferingMap(
+  offerings: PurchasesOfferings | null | undefined,
+) {
+  return offerings?.all ?? {};
+}
+
+function getRevenueCatAvailablePackages(
+  offering: PurchasesOffering | null | undefined,
+) {
+  return Array.isArray(offering?.availablePackages)
+    ? offering.availablePackages
+    : [];
+}
+
+function getRevenueCatNonSubscriptionTransactions(
+  customerInfo: CustomerInfo | null | undefined,
+) {
+  return Array.isArray(customerInfo?.nonSubscriptionTransactions)
+    ? customerInfo.nonSubscriptionTransactions
+    : [];
+}
+
 function isExpoGo() {
   return Constants.appOwnership === "expo";
 }
 
+export function getRevenueCatSupportState(): RevenueCatSupportState {
+  const platformSupported = Platform.OS === "ios" || Platform.OS === "android";
+  const appOwnership = Constants.appOwnership ?? null;
+
+  if (!platformSupported) {
+    return {
+      supported: false,
+      platform: Platform.OS,
+      appOwnership,
+      reason: "unsupported_platform",
+    };
+  }
+
+  if (isExpoGo()) {
+    return {
+      supported: false,
+      platform: Platform.OS,
+      appOwnership,
+      reason: "expo_go",
+    };
+  }
+
+  return {
+    supported: true,
+    platform: Platform.OS,
+    appOwnership,
+    reason: null,
+  };
+}
+
 export function isRevenueCatSupported() {
-  return (Platform.OS === "ios" || Platform.OS === "android") && !isExpoGo();
+  return getRevenueCatSupportState().supported;
 }
 
 function logRevenueCatRuntime(apiKey?: string) {
@@ -119,24 +199,38 @@ function summarizePackage(pkg: PurchasesPackage) {
   };
 }
 
+function summarizeStoreProduct(product: PurchasesStoreProduct) {
+  return {
+    identifier: product.identifier,
+    title: product.title,
+    priceString: product.priceString,
+    productCategory: product.productCategory,
+    productType: product.productType,
+  };
+}
+
 function summarizeOffering(offering: PurchasesOffering | null | undefined) {
   if (!offering) return null;
 
+  const packages = getRevenueCatAvailablePackages(offering);
+
   return {
     identifier: offering.identifier,
-    packageCount: offering.availablePackages.length,
-    packages: offering.availablePackages.map(summarizePackage),
+    packageCount: packages.length,
+    packages: packages.map(summarizePackage),
   };
 }
 
 function summarizeOfferings(offerings: PurchasesOfferings) {
-  return Object.values(offerings.all).map(summarizeOffering).filter(Boolean);
+  return Object.values(getRevenueCatOfferingMap(offerings))
+    .map(summarizeOffering)
+    .filter(Boolean);
 }
 
 function logProductIdDiagnostics(selectedOffering: PurchasesOffering | null) {
-  const loadedProductIds =
-    selectedOffering?.availablePackages.map((pkg) => pkg.product.identifier) ??
-    [];
+  const loadedProductIds = getRevenueCatAvailablePackages(selectedOffering).map(
+    (pkg) => pkg.product.identifier,
+  );
   const matchedExpectedProductIds = loadedProductIds.filter((productId) =>
     EXPECTED_REVENUECAT_PRODUCT_IDS.includes(productId),
   );
@@ -154,10 +248,13 @@ function logProductIdDiagnostics(selectedOffering: PurchasesOffering | null) {
 }
 
 function logOfferings(offerings: PurchasesOfferings) {
-  const currentPackages = offerings.current?.availablePackages ?? [];
+  const currentPackages = getRevenueCatAvailablePackages(offerings.current);
 
   console.log("[RevenueCat] Offerings loaded:", true);
-  console.log("[RevenueCat] Offering identifiers:", Object.keys(offerings.all));
+  console.log(
+    "[RevenueCat] Offering identifiers:",
+    Object.keys(getRevenueCatOfferingMap(offerings)),
+  );
   console.log(
     "[RevenueCat] Current offering identifier:",
     offerings.current?.identifier ?? null,
@@ -217,6 +314,14 @@ export function getLastRevenueCatErrorDetails() {
 
 export function clearLastRevenueCatErrorDetails() {
   lastRevenueCatErrorDetails = null;
+}
+
+export function getRevenueCatConfigurationState(): RevenueCatConfigurationState {
+  return {
+    configured,
+    configuredAppUserId,
+    lastError: lastRevenueCatErrorDetails,
+  };
 }
 
 export function isRevenueCatUnknownBackendError(error: unknown) {
@@ -284,6 +389,22 @@ function createRevenueCatUiTimeoutError(operation: string) {
   return error;
 }
 
+function createRevenueCatOperationTimeoutError(
+  operation: string,
+  timeoutMs: number,
+) {
+  const error = new Error(
+    `${operation} did not finish within ${timeoutMs / 1000} seconds.`,
+  ) as Error & RevenueCatErrorRecord;
+
+  error.code = "timeout";
+  error.readableErrorCode = "REVENUECAT_OPERATION_TIMEOUT";
+  error.underlyingErrorMessage =
+    "RevenueCat or Google Play did not respond before the app timeout.";
+
+  return error;
+}
+
 async function withRevenueCatUiTimeout<T>(
   operation: string,
   promise: Promise<T>,
@@ -297,6 +418,29 @@ async function withRevenueCatUiTimeout<T>(
         timeoutId = setTimeout(() => {
           reject(createRevenueCatUiTimeoutError(operation));
         }, REVENUECAT_UI_TIMEOUT_MS);
+      }),
+    ]);
+  } finally {
+    if (timeoutId) {
+      clearTimeout(timeoutId);
+    }
+  }
+}
+
+async function withRevenueCatOperationTimeout<T>(
+  operation: string,
+  promise: Promise<T>,
+  timeoutMs = REVENUECAT_OPERATION_TIMEOUT_MS,
+) {
+  let timeoutId: ReturnType<typeof setTimeout> | null = null;
+
+  try {
+    return await Promise.race([
+      promise,
+      new Promise<never>((_, reject) => {
+        timeoutId = setTimeout(() => {
+          reject(createRevenueCatOperationTimeoutError(operation, timeoutMs));
+        }, timeoutMs);
       }),
     ]);
   } finally {
@@ -452,7 +596,9 @@ export async function logInRevenueCatUser(appUserID: string) {
       console.log("[RevenueCat] customerInfo fetched", {
         appUserID,
         isAnonymous,
-        activeEntitlements: Object.keys(customerInfo.entitlements.active ?? {}),
+        activeEntitlements: Object.keys(
+          getActiveRevenueCatEntitlements(customerInfo),
+        ),
       });
     }
 
@@ -472,13 +618,13 @@ export async function logInRevenueCatUser(appUserID: string) {
       resultAppUserID,
     );
     console.log("[RevenueCat] RevenueCat anonymous after login", isAnonymous);
-    console.log("[RevenueCat] customerInfo fetched", {
-      appUserID,
-      isAnonymous,
-      activeEntitlements: Object.keys(
-        result.customerInfo.entitlements.active ?? {},
-      ),
-    });
+      console.log("[RevenueCat] customerInfo fetched", {
+        appUserID,
+        isAnonymous,
+        activeEntitlements: Object.keys(
+          getActiveRevenueCatEntitlements(result.customerInfo),
+        ),
+      });
   }
 
   return result.customerInfo;
@@ -515,22 +661,38 @@ export async function getCustomerInfo(
   await configureRevenueCat(appUserID);
 
   const Purchases = (await getPurchasesModule()).default;
-  const [currentAppUserID, isAnonymous, customerInfo] = await Promise.all([
-    Purchases.getAppUserID().catch(() => null),
-    Purchases.isAnonymous().catch(() => null),
-    Purchases.getCustomerInfo(),
-  ]);
 
-  if (__DEV__) {
-    console.log("[RevenueCat] customerInfo fetched", {
+  try {
+    const [currentAppUserID, isAnonymous, customerInfo] =
+      await withRevenueCatOperationTimeout(
+        "RevenueCat customer info refresh",
+        Promise.all([
+          Purchases.getAppUserID().catch(() => null),
+          Purchases.isAnonymous().catch(() => null),
+          Purchases.getCustomerInfo(),
+        ]),
+      );
+
+    if (__DEV__) {
+      console.log("[RevenueCat] customerInfo fetched", {
+        appUserID: appUserID ?? null,
+        currentAppUserID,
+        isAnonymous,
+        activeEntitlements: Object.keys(
+          getActiveRevenueCatEntitlements(customerInfo),
+        ),
+      });
+    }
+
+    return customerInfo;
+  } catch (error) {
+    console.log("[RevenueCat] customerInfo failure", {
       appUserID: appUserID ?? null,
-      currentAppUserID,
-      isAnonymous,
-      activeEntitlements: Object.keys(customerInfo.entitlements.active ?? {}),
+      error: getRevenueCatErrorDetails(error),
     });
+    logRevenueCatError("Customer info refresh failed", error);
+    throw error;
   }
-
-  return customerInfo;
 }
 
 export async function getRevenueCatIdentity(appUserID?: string | null) {
@@ -561,12 +723,19 @@ export function getSchedovaProEntitlement(
   customerInfo: CustomerInfo | null | undefined,
 ) {
   return (
-    customerInfo?.entitlements?.active?.[REVENUECAT_ENTITLEMENT_ID] || null
+    getActiveRevenueCatEntitlements(customerInfo)[REVENUECAT_ENTITLEMENT_ID] ||
+    null
   );
 }
 
 export function hasSchedovaPro(customerInfo: CustomerInfo | null | undefined) {
   return Boolean(getSchedovaProEntitlement(customerInfo));
+}
+
+export function getActiveRevenueCatEntitlementIds(
+  customerInfo: CustomerInfo | null | undefined,
+) {
+  return Object.keys(getActiveRevenueCatEntitlements(customerInfo));
 }
 
 export async function checkSchedovaPro() {
@@ -612,7 +781,10 @@ export async function getCurrentOffering({
 
     const offeringStartedAt = Date.now();
     const Purchases = (await getPurchasesModule()).default;
-    const offerings = await Purchases.getOfferings().catch((error) => {
+    const offerings = await withRevenueCatOperationTimeout(
+      "RevenueCat offerings load",
+      Purchases.getOfferings(),
+    ).catch((error) => {
       console.log("[RevenueCat] getOfferings error", {
         platform: Platform.OS,
         expectedOffering: REVENUECAT_OFFERING_ID,
@@ -622,12 +794,14 @@ export async function getCurrentOffering({
       throw error;
     });
     logOfferings(offerings);
+    const offeringMap = getRevenueCatOfferingMap(offerings);
 
     const offering =
       offerings.current ??
-      offerings.all[REVENUECAT_OFFERING_ID] ??
-      Object.values(offerings.all).find(
-        (availableOffering) => availableOffering.availablePackages.length > 0,
+      offeringMap[REVENUECAT_OFFERING_ID] ??
+      Object.values(offeringMap).find(
+        (availableOffering) =>
+          getRevenueCatAvailablePackages(availableOffering).length > 0,
       ) ??
       null;
 
@@ -645,7 +819,7 @@ export async function getCurrentOffering({
         expectedOffering: REVENUECAT_OFFERING_ID,
         availableOfferings: summarizeOfferings(offerings),
       });
-    } else if (offering.availablePackages.length === 0) {
+    } else if (getRevenueCatAvailablePackages(offering).length === 0) {
       console.log("[RevenueCat] Offerings/packages unavailable", {
         reason: "packages_empty",
         selectedOffering: summarizeOffering(offering),
@@ -682,7 +856,52 @@ export async function prefetchRevenueCatOfferings() {
 
 export async function getAvailablePackages(): Promise<PurchasesPackage[]> {
   const offering = await getCurrentOffering();
-  return offering?.availablePackages ?? [];
+  return getRevenueCatAvailablePackages(offering);
+}
+
+export async function getStoreProducts(
+  productIdentifiers: string[],
+  productCategory: PRODUCT_CATEGORY | null = null,
+): Promise<PurchasesStoreProduct[]> {
+  if (!isRevenueCatSupported()) return [];
+
+  const nextIdentifiers = productIdentifiers
+    .map((identifier) => String(identifier || "").trim())
+    .filter(Boolean);
+
+  if (nextIdentifiers.length === 0) {
+    return [];
+  }
+
+  await configureRevenueCat();
+
+  const PurchasesModule = await getPurchasesModule();
+  const Purchases = PurchasesModule.default;
+
+  const resolvedCategory =
+    productCategory ?? PurchasesModule.PRODUCT_CATEGORY.NON_SUBSCRIPTION;
+
+  const products = await withRevenueCatOperationTimeout(
+    "RevenueCat store product load",
+    Purchases.getProducts(nextIdentifiers, resolvedCategory),
+  ).catch((error) => {
+    console.log("[RevenueCat] getProducts error", {
+      platform: Platform.OS,
+      productIdentifiers: nextIdentifiers,
+      productCategory: resolvedCategory,
+      error: getRevenueCatErrorDetails(error),
+    });
+    logRevenueCatError("getProducts failed", error);
+    throw error;
+  });
+
+  console.log("[RevenueCat] Store products loaded", {
+    productIdentifiers: nextIdentifiers,
+    productCategory: resolvedCategory,
+    products: products.map(summarizeStoreProduct),
+  });
+
+  return products;
 }
 
 export async function logRevenueCatDebugStatus(
@@ -728,7 +947,9 @@ export async function getRevenueCatDebugSnapshot(
     Purchases.isAnonymous().catch(() => null),
   ]);
   const info = customerInfo ?? (await Purchases.getCustomerInfo());
-  const entitlementDetails = Object.entries(info?.entitlements.all ?? {}).map(
+  const entitlementDetails = Object.entries(
+    getAllRevenueCatEntitlements(info),
+  ).map(
     ([identifier, entitlement]) => ({
       identifier,
       isActive: Boolean(entitlement.isActive),
@@ -746,14 +967,14 @@ export async function getRevenueCatDebugSnapshot(
     logRevenueCatError("Debug offerings fetch failed", error);
     return null;
   });
-  const currentPackages = offerings?.current?.availablePackages ?? [];
+  const currentPackages = getRevenueCatAvailablePackages(offerings?.current);
 
   return {
     appUserID: currentAppUserID,
     originalAppUserID: info?.originalAppUserId ?? null,
     isAnonymous,
     schedovaProActive: hasSchedovaPro(info),
-    activeEntitlementIdentifiers: Object.keys(info?.entitlements.active ?? {}),
+    activeEntitlementIdentifiers: getActiveRevenueCatEntitlementIds(info),
     entitlementDetails,
     currentOfferingIdentifier: offerings?.current?.identifier ?? null,
     sdkKeyPrefix: getRevenueCatApiKeyPrefix(),
@@ -781,7 +1002,7 @@ async function getReadyOffering() {
     throw createSubscriptionOptionsUnavailableError("no_ready_offering");
   }
 
-  if (offering.availablePackages.length === 0) {
+  if (getRevenueCatAvailablePackages(offering).length === 0) {
     console.log("[RevenueCat] Offerings/packages unavailable", {
       reason: "packages_empty",
       selectedOffering: summarizeOffering(offering),
@@ -856,6 +1077,66 @@ export async function purchasePackage(pkg: PurchasesPackage | null | undefined) 
   }
 }
 
+export async function purchaseStoreProduct(
+  product: PurchasesStoreProduct | null | undefined,
+) {
+  if (!isRevenueCatSupported()) {
+    throw new Error("purchases_unsupported");
+  }
+
+  if (!product) {
+    console.log("[RevenueCat] purchase blocked; store product missing");
+    throw createSubscriptionOptionsUnavailableError("missing_store_product");
+  }
+
+  console.log("[RevenueCat] store product purchase start", {
+    productIdentifier: product.identifier,
+    productCategory: product.productCategory,
+    productType: product.productType,
+  });
+
+  await configureRevenueCat();
+
+  const Purchases = (await getPurchasesModule()).default;
+
+  try {
+    const { customerInfo, productIdentifier } =
+      await Purchases.purchaseStoreProduct(product);
+
+    console.log("[RevenueCat] store product purchase success", {
+      requestedProductIdentifier: product.identifier,
+      productIdentifier,
+      nonSubscriptionTransactionCount:
+        getRevenueCatNonSubscriptionTransactions(customerInfo).length,
+    });
+
+    return {
+      customerInfo,
+      productIdentifier,
+      cancelled: false,
+    };
+  } catch (error: any) {
+    if (error?.userCancelled) {
+      console.log("[RevenueCat] store product purchase cancelled", {
+        productIdentifier: product.identifier,
+      });
+
+      return {
+        customerInfo: null,
+        productIdentifier: null,
+        cancelled: true,
+      };
+    }
+
+    console.log("[RevenueCat] store product purchase failure", {
+      productIdentifier: product.identifier,
+      error: getRevenueCatErrorDetails(error),
+    });
+    logRevenueCatError("Store product purchase failed", error);
+    throw error;
+  }
+}
+
 export async function restorePurchases(appUserID?: string | null) {
   if (!isRevenueCatSupported()) return null;
 
@@ -868,36 +1149,102 @@ export async function restorePurchases(appUserID?: string | null) {
   await configureRevenueCat(appUserID);
 
   const Purchases = (await getPurchasesModule()).default;
-  const currentAppUserID = await Purchases.getAppUserID().catch(() => null);
 
-  if (appUserID && currentAppUserID !== appUserID) {
+  try {
+    const restoreResult = await withRevenueCatOperationTimeout(
+      "RevenueCat restore purchases",
+      (async () => {
+        const currentAppUserID = await Purchases.getAppUserID().catch(
+          () => null,
+        );
+
+        if (appUserID && currentAppUserID !== appUserID) {
+          if (__DEV__) {
+            console.log("[RevenueCat] restore logIn appUserID", appUserID);
+          }
+
+          await Purchases.logIn(appUserID);
+          configuredAppUserId = appUserID;
+        }
+
+        const customerInfo = await Purchases.restorePurchases();
+        const [restoredAppUserID, isAnonymous] = await Promise.all([
+          Purchases.getAppUserID().catch(() => null),
+          Purchases.isAnonymous().catch(() => null),
+        ]);
+
+        return {
+          customerInfo,
+          restoredAppUserID,
+          isAnonymous,
+        };
+      })(),
+    );
+
     if (__DEV__) {
-      console.log("[RevenueCat] restore logIn appUserID", appUserID);
+      console.log("[RevenueCat] restore completed", {
+        appUserID: restoreResult.restoredAppUserID,
+        isAnonymous: restoreResult.isAnonymous,
+        activeEntitlements: getActiveRevenueCatEntitlementIds(
+          restoreResult.customerInfo,
+        ),
+        isPro: hasSchedovaPro(restoreResult.customerInfo),
+      });
     }
 
-    await Purchases.logIn(appUserID);
-    configuredAppUserId = appUserID;
-  }
-
-  const customerInfo = await Purchases.restorePurchases();
-  const [restoredAppUserID, isAnonymous] = await Promise.all([
-    Purchases.getAppUserID().catch(() => null),
-    Purchases.isAnonymous().catch(() => null),
-  ]);
-
-  if (__DEV__) {
-    console.log("[RevenueCat] restore completed", {
-      appUserID: restoredAppUserID,
-      isAnonymous,
-      activeEntitlements: Object.keys(customerInfo.entitlements.active ?? {}),
-      isPro: hasSchedovaPro(customerInfo),
+    return {
+      customerInfo: restoreResult.customerInfo,
+      isPro: hasSchedovaPro(restoreResult.customerInfo),
+    };
+  } catch (error) {
+    console.log("[RevenueCat] restore failure", {
+      appUserID: appUserID ?? null,
+      error: getRevenueCatErrorDetails(error),
     });
+    logRevenueCatError("Restore purchases failed", error);
+    throw error;
   }
+}
 
-  return {
-    customerInfo,
-    isPro: hasSchedovaPro(customerInfo),
-  };
+export async function syncRevenueCatPurchases(
+  appUserID?: string | null,
+): Promise<CustomerInfo | null> {
+  if (!isRevenueCatSupported()) return null;
+
+  await configureRevenueCat(appUserID);
+
+  const Purchases = (await getPurchasesModule()).default;
+
+  console.log("[RevenueCat] syncPurchases start", {
+    appUserID: appUserID ?? null,
+  });
+
+  try {
+    const customerInfo = await withRevenueCatOperationTimeout(
+      "RevenueCat purchase sync",
+      (async () => {
+        await Purchases.syncPurchases();
+        return Purchases.getCustomerInfo();
+      })(),
+    );
+
+    console.log("[RevenueCat] syncPurchases complete", {
+      appUserID: appUserID ?? null,
+      nonSubscriptionTransactionCount:
+        getRevenueCatNonSubscriptionTransactions(customerInfo).length,
+      allPurchasedProductIdentifiers:
+        customerInfo.allPurchasedProductIdentifiers,
+    });
+
+    return customerInfo;
+  } catch (error) {
+    console.log("[RevenueCat] syncPurchases failure", {
+      appUserID: appUserID ?? null,
+      error: getRevenueCatErrorDetails(error),
+    });
+    logRevenueCatError("syncPurchases failed", error);
+    throw error;
+  }
 }
 
 export async function presentSchedovaPaywall() {

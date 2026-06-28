@@ -1,5 +1,6 @@
 import { supabase } from "./supabase";
 import { normalizePhoneForSmsWithUserDefault } from "./countrySettings";
+import { emitSmsBalanceUpdated } from "./smsBalanceEvents";
 
 export type AppointmentSmsMessageType =
   | "confirmation"
@@ -24,6 +25,8 @@ export function getFriendlySmsMessage(code?: string | null) {
       return "This client does not have a phone number.";
     case "invalid_phone":
       return "Please check the client's phone number.";
+    case "insufficient_credits":
+      return "You are out of SMS credits. Buy a message pack to keep sending texts.";
     case "sms_provider_failed":
     case "provider_error":
     case "send_failed":
@@ -202,6 +205,10 @@ export async function sendAppointmentSmsNonBlocking(
 ) {
   try {
     const result = await sendAppointmentSms(appointmentId, messageType);
+
+    if (result.ok && !result.skipped) {
+      emitSmsBalanceUpdated();
+    }
 
     if (!result.ok && result.code !== "not_paid") {
       console.log("Appointment SMS was not sent", result);

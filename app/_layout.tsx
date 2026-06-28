@@ -201,6 +201,10 @@ export default function RootLayout() {
                 options={{ headerShown: false }}
               />
               <Stack.Screen
+                name="settings/message-packs"
+                options={{ headerShown: false }}
+              />
+              <Stack.Screen
                 name="settings/sms"
                 options={{ headerShown: false }}
               />

@@ -1,5 +1,5 @@
-import { useRouter } from "expo-router";
-import { useEffect, useState } from "react";
+import { useFocusEffect, useRouter } from "expo-router";
+import { useCallback, useRef, useState } from "react";
 import {
   Alert,
   KeyboardAvoidingView,
@@ -12,11 +12,14 @@ import {
   View,
 } from "react-native";
 import { useSafeAreaInsets } from "react-native-safe-area-context";
+import SwipeDownSheet from "../components/SwipeDownSheet";
 import { AppScreen } from "../components/layout/AppScreen";
 import { getAppointmentServices as getSavedAppointmentServices } from "../lib/appointmentServices";
+import { sortAppointmentsChronologically } from "../lib/appointmentSort";
 import { sendAppointmentSmsNonBlocking } from "../lib/appointmentSms";
 import { formatClockTime, getCalendarPreferences } from "../lib/calendarPreferences";
 import { confirmDestructiveAction } from "../lib/confirmDestructiveAction";
+import { isSchedovaInternalDebugMode } from "../lib/debugMode";
 import { canUseFeature, useFeatureAccess } from "../lib/featureAccess";
 import { cancelAppointmentReminder } from "../lib/localNotifications";
 import { ENABLE_PRO } from "../lib/proFeatureFlag";
@@ -39,6 +42,11 @@ type Appointment = {
   appointment_notes?: string | null;
   tip_amount?: number | null;
 };
+
+function logAppointmentListCardDebug(label: string, details: Record<string, unknown>) {
+  if (!isSchedovaInternalDebugMode()) return;
+  console.log(label, details);
+}
 export default function AppointmentsList() {
   const router = useRouter();
   const { colors, themeName } = useAppTheme();
@@ -52,12 +60,16 @@ export default function AppointmentsList() {
   const [selectedAppointment, setSelectedAppointment] = useState<any | null>(
     null,
   );
+  const [actionAppointment, setActionAppointment] = useState<Appointment | null>(
+    null,
+  );
   const [selectMode, setSelectMode] = useState(false);
   const [selectedIds, setSelectedIds] = useState<string[]>([]);
 
   const [tipAmount, setTipAmount] = useState("");
   const [appointmentNotes, setAppointmentNotes] = useState("");
   const [use24Hour, setUse24Hour] = useState(false);
+  const longPressHandledAppointmentId = useRef<string | null>(null);
 
   function canUseProFeature(feature: Parameters<typeof canUseFeature>[0]) {
     return canUseFeature(feature);
@@ -90,15 +102,10 @@ export default function AppointmentsList() {
     }
   }
 
-  useEffect(() => {
-    fetchData();
-    void loadCalendarPreferences();
-  }, []);
-
-  async function loadCalendarPreferences() {
+  const loadCalendarPreferences = useCallback(async () => {
     const preferences = await getCalendarPreferences();
     setUse24Hour(preferences.timeFormat === "24h");
-  }
+  }, []);
 
   async function getCurrentUserIdOrAlert() {
     const {
@@ -178,7 +185,7 @@ export default function AppointmentsList() {
     return end ? `${start} - ${end}` : start;
   }
 
-  async function fetchData() {
+  const fetchData = useCallback(async () => {
     const { data: userData } = await supabase.auth.getUser();
     const userId = userData.user?.id;
 
@@ -206,10 +213,21 @@ export default function AppointmentsList() {
       return;
     }
 
-    setAppointments(((appointmentsResult.data || []).filter(Boolean)) as Appointment[]);
+    setAppointments(
+      sortAppointmentsChronologically(
+        ((appointmentsResult.data || []).filter(Boolean)) as Appointment[],
+      ),
+    );
     setServices((servicesResult.data || []).filter(Boolean));
     setClients((clientsResult.data || []).filter(Boolean));
-  }
+  }, []);
+
+  useFocusEffect(
+    useCallback(() => {
+      void fetchData();
+      void loadCalendarPreferences();
+    }, [fetchData, loadCalendarPreferences]),
+  );
 
   function getClientByName(name?: string | null) {
     return clients.find((client) => client?.name === name);
@@ -240,25 +258,31 @@ export default function AppointmentsList() {
 
   function filteredAppointments() {
     if (activeTab === "upcoming") {
-      return appointments.filter(
-        (a) => a && (a.status === "scheduled" || !a.status) && !a.archived,
+      return sortAppointmentsChronologically(
+        appointments.filter(
+          (a) => a && (a.status === "scheduled" || !a.status) && !a.archived,
+        ),
       );
     }
 
     if (activeTab === "completed") {
-      return appointments.filter(
-        (a) => a && a.status === "completed" && !a.archived,
+      return sortAppointmentsChronologically(
+        appointments.filter(
+          (a) => a && a.status === "completed" && !a.archived,
+        ),
       );
     }
 
-    return appointments.filter(
-      (a) =>
-        a &&
-        !a.archived &&
-        (a.status === "canceled" ||
-          a.status === "customer_canceled" ||
-          a.status === "business_canceled" ||
-          a.status === "no_show"),
+    return sortAppointmentsChronologically(
+      appointments.filter(
+        (a) =>
+          a &&
+          !a.archived &&
+          (a.status === "canceled" ||
+            a.status === "customer_canceled" ||
+            a.status === "business_canceled" ||
+            a.status === "no_show"),
+      ),
     );
   }
 
@@ -268,9 +292,28 @@ export default function AppointmentsList() {
       return;
     }
 
+    logAppointmentListCardDebug("Schedova 1.1.1 appointment card handler active", {
+      surface: "appointments-list",
+      gesture: "open-flow",
+      appointmentId: appointment.id,
+    });
+    logAppointmentListCardDebug("[appointments-list flow] openAppointment", {
+      appointmentId: appointment.id,
+      clientName: appointment.client_name || "",
+    });
+
     setSelectedAppointment(appointment);
     setTipAmount(String(appointment.tip_amount ?? ""));
     setAppointmentNotes(appointment.appointment_notes ?? "");
+  }
+
+  function shouldIgnoreAppointmentPress(appointmentId: string) {
+    if (longPressHandledAppointmentId.current !== appointmentId) {
+      return false;
+    }
+
+    longPressHandledAppointmentId.current = null;
+    return true;
   }
 
   async function saveTip() {
@@ -311,8 +354,10 @@ export default function AppointmentsList() {
     setTipAmount(String(data.tip_amount ?? ""));
 
     setAppointments((current) =>
-      current.map((appointment) =>
-        appointment.id === data.id ? data : appointment,
+      sortAppointmentsChronologically(
+        current.map((appointment) =>
+          appointment.id === data.id ? data : appointment,
+        ),
       ),
     );
   }
@@ -339,8 +384,10 @@ export default function AppointmentsList() {
     if (data) {
       setSelectedAppointment(data);
       setAppointments((current) =>
-        current.map((appointment) =>
-          appointment.id === data.id ? data : appointment,
+        sortAppointmentsChronologically(
+          current.map((appointment) =>
+            appointment.id === data.id ? data : appointment,
+          ),
         ),
       );
     }
@@ -377,8 +424,10 @@ export default function AppointmentsList() {
       }
 
       setAppointments((current) =>
-        current.map((appointment) =>
-          appointment.id === data.id ? data : appointment,
+        sortAppointmentsChronologically(
+          current.map((appointment) =>
+            appointment.id === data.id ? data : appointment,
+          ),
         ),
       );
 
@@ -424,6 +473,28 @@ export default function AppointmentsList() {
         setSelectedAppointment(null);
       },
     });
+  }
+
+  function editAppointment(appointmentId?: string) {
+    if (!appointmentId) {
+      Alert.alert("Error", "No appointment ID found.");
+      return;
+    }
+
+    setActionAppointment(null);
+    setSelectedAppointment(null);
+
+    router.push({
+      pathname: "/book-appointment",
+      params: {
+        appointmentId,
+        mode: "edit",
+      },
+    });
+  }
+
+  function canCancelAppointment(status?: string | null) {
+    return status === "scheduled" || !status;
   }
 
   async function archiveSelectedAppointments() {
@@ -568,6 +639,9 @@ export default function AppointmentsList() {
   const shownAppointments = filteredAppointments()
     .filter((appointment) => Boolean(appointment?.id))
     .slice(0, 50);
+  const actionAppointmentServices = actionAppointment
+    ? getAppointmentServices(actionAppointment)
+    : [];
 
   const selectedAppointmentServices = selectedAppointment
     ? getAppointmentServices(selectedAppointment)
@@ -651,8 +725,65 @@ export default function AppointmentsList() {
         const statusAccent = getStatusAccent(appointment.status);
 
         return (
-          <View
+          <Pressable
             key={appointment.id}
+            onPress={() => {
+              logAppointmentListCardDebug(
+                "Schedova 1.1.1 appointment card handler active",
+                {
+                  surface: "appointments-list",
+                  gesture: "press",
+                  appointmentId: appointment.id,
+                },
+              );
+              logAppointmentListCardDebug("[appointments-list card] onPress", {
+                appointmentId: appointment.id,
+                clientName: appointment.client_name || "",
+                status: appointment.status || "scheduled",
+              });
+
+              if (shouldIgnoreAppointmentPress(appointment.id)) {
+                logAppointmentListCardDebug("[appointments-list card] onPress ignored", {
+                  appointmentId: appointment.id,
+                });
+                return;
+              }
+
+              if (selectMode) {
+                if (selectedIds.includes(appointment.id)) {
+                  setSelectedIds(
+                    selectedIds.filter((id) => id !== appointment.id),
+                  );
+                } else {
+                  setSelectedIds([...selectedIds, appointment.id]);
+                }
+
+                return;
+              }
+
+              openAppointment(appointment);
+            }}
+            onLongPress={() => {
+              if (selectMode) return;
+
+              logAppointmentListCardDebug(
+                "Schedova 1.1.1 appointment card handler active",
+                {
+                  surface: "appointments-list",
+                  gesture: "longPress",
+                  appointmentId: appointment.id,
+                },
+              );
+              logAppointmentListCardDebug("[appointments-list card] onLongPress", {
+                appointmentId: appointment.id,
+                clientName: appointment.client_name || "",
+                status: appointment.status || "scheduled",
+              });
+
+              longPressHandledAppointmentId.current = appointment.id;
+              setActionAppointment(appointment);
+            }}
+            delayLongPress={250}
             style={{
               backgroundColor: colors.card,
               borderLeftWidth: 5,
@@ -662,6 +793,8 @@ export default function AppointmentsList() {
               marginBottom: 16,
               borderWidth: 1,
               borderColor: polishedBorder,
+              opacity:
+                selectMode && selectedIds.includes(appointment.id) ? 0.92 : 1,
             }}
           >
             <View
@@ -710,16 +843,7 @@ export default function AppointmentsList() {
             ) : null}
 
             {selectMode && (
-              <Pressable
-                onPress={() => {
-                  if (selectedIds.includes(appointment.id)) {
-                    setSelectedIds(
-                      selectedIds.filter((id) => id !== appointment.id),
-                    );
-                  } else {
-                    setSelectedIds([...selectedIds, appointment.id]);
-                  }
-                }}
+              <View
                 style={{
                   position: "absolute",
                   top: 14,
@@ -747,7 +871,7 @@ export default function AppointmentsList() {
                 >
                   {"\u2713"}
                 </Text>
-              </Pressable>
+              </View>
             )}
 
             <View
@@ -774,25 +898,118 @@ export default function AppointmentsList() {
               )}
             </View>
 
-            <Pressable
-              onPress={() => openAppointment(appointment)}
-              style={{
-                backgroundColor: colors.primary,
-                paddingVertical: 13,
-                borderRadius: 999,
-                alignItems: "center",
-                marginTop: 16,
-              }}
-            >
-              <Text
-                style={{ color: "#ffffff", fontWeight: "bold", fontSize: 15 }}
-              >
-                Edit
-              </Text>
-            </Pressable>
-          </View>
+          </Pressable>
         );
       })}
+
+      <SwipeDownSheet
+        visible={!!actionAppointment}
+        onClose={() => {
+          longPressHandledAppointmentId.current = null;
+          setActionAppointment(null);
+        }}
+        backgroundColor={colors.background}
+      >
+        <Text
+          style={{
+            color: colors.text,
+            fontSize: 22,
+            fontWeight: "bold",
+          }}
+        >
+          {actionAppointment?.client_name || "Appointment"}
+        </Text>
+
+        <Text style={{ color: colors.mutedText, marginTop: 6 }}>
+          {actionAppointment?.appointment_date} at{" "}
+          {formatAppointmentTimeRange(actionAppointment)}
+        </Text>
+
+        {actionAppointmentServices.length > 0 ? (
+          <Text style={{ color: colors.mutedText, marginTop: 4 }}>
+            {actionAppointmentServices
+              .map((service: any) => service?.name)
+              .filter(Boolean)
+              .join(", ")}
+          </Text>
+        ) : null}
+
+        <View style={{ gap: 12, marginTop: 20 }}>
+          <Pressable
+            onPress={() => {
+              if (!actionAppointment) return;
+              setActionAppointment(null);
+              openAppointment(actionAppointment);
+            }}
+            style={{
+              backgroundColor: colors.card,
+              borderWidth: 1,
+              borderColor: polishedBorder,
+              borderRadius: 14,
+              padding: 14,
+              alignItems: "center",
+            }}
+          >
+            <Text style={{ color: colors.text, fontWeight: "bold" }}>
+              View Details
+            </Text>
+          </Pressable>
+
+          <Pressable
+            onPress={() => editAppointment(actionAppointment?.id)}
+            style={{
+              backgroundColor: colors.primary,
+              borderRadius: 14,
+              padding: 14,
+              alignItems: "center",
+            }}
+          >
+            <Text style={{ color: "#ffffff", fontWeight: "bold" }}>
+              Edit Appointment
+            </Text>
+          </Pressable>
+
+          {canCancelAppointment(actionAppointment?.status) ? (
+            <Pressable
+              onPress={async () => {
+                if (!actionAppointment?.id) return;
+                setActionAppointment(null);
+                await updateAppointmentStatus(actionAppointment.id, "canceled");
+              }}
+              style={{
+                backgroundColor: colors.card,
+                borderWidth: 1,
+                borderColor: "#DC2626",
+                borderRadius: 14,
+                padding: 14,
+                alignItems: "center",
+              }}
+            >
+              <Text style={{ color: "#DC2626", fontWeight: "bold" }}>
+                Cancel Appointment
+              </Text>
+            </Pressable>
+          ) : null}
+
+          <Pressable
+            onPress={async () => {
+              if (!actionAppointment?.id) return;
+              setActionAppointment(null);
+              await deleteAppointment(actionAppointment.id);
+            }}
+            style={{
+              backgroundColor: "#DC2626",
+              borderRadius: 14,
+              padding: 14,
+              alignItems: "center",
+            }}
+          >
+            <Text style={{ color: "#ffffff", fontWeight: "bold" }}>
+              Delete Appointment
+            </Text>
+          </Pressable>
+        </View>
+      </SwipeDownSheet>
 
       <Modal visible={!!selectedAppointment} transparent animationType="slide">
         <KeyboardAvoidingView
@@ -842,22 +1059,7 @@ export default function AppointmentsList() {
               <ScrollView keyboardShouldPersistTaps="handled">
               <Pressable
                 onPress={() => {
-                  const idToEdit = selectedAppointment?.id;
-
-                  if (!idToEdit) {
-                    Alert.alert("Error", "No appointment ID found.");
-                    return;
-                  }
-
-                  setSelectedAppointment(null);
-
-                  router.push({
-                    pathname: "/book-appointment",
-                    params: {
-                      appointmentId: idToEdit,
-                      mode: "edit",
-                    },
-                  });
+                  editAppointment(selectedAppointment?.id);
                 }}
                 style={{
                   backgroundColor: colors.primary,
