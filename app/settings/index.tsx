@@ -12,6 +12,7 @@ import {
 import { getUserCountryRegion } from "../../lib/countrySettings";
 import { isSchedovaInternalDebugMode } from "../../lib/debugMode";
 import { isDemoScreenshotModeAvailable } from "../../lib/demoData";
+import { useAuthSession } from "../../lib/authSession";
 import { useFeatureAccess } from "../../lib/featureAccess";
 import { ENABLE_PRO } from "../../lib/proFeatureFlag";
 import {
@@ -28,7 +29,6 @@ import {
 } from "../../lib/legalLinks";
 import { getCountryRegionLabel } from "../../lib/phoneNumbers";
 import { useSubscription } from "../../lib/revenuecat/SubscriptionProvider";
-import { supabase } from "../../lib/supabase";
 import { useAppTheme } from "../../lib/useAppTheme";
 
 type SettingTone = "info" | "primary" | "danger" | "neutral";
@@ -38,6 +38,13 @@ export default function SettingsScreen() {
   const { colors: appColors, themeName } = useAppTheme();
   const theme = createSchedovaUiTheme(appColors);
   const { colors, spacing, typography } = theme;
+  const {
+    authStatus,
+    isAuthTransitioning,
+    signOut,
+    userEmail: authUserEmail,
+    userId: authUserId,
+  } = useAuthSession();
   const { subscription, userId: featureAccessUserId } = useFeatureAccess();
   const { isPro } = useSubscription();
   const [countryRegion, setCountryRegion] = useState("US");
@@ -73,12 +80,24 @@ export default function SettingsScreen() {
 
   useFocusEffect(
     useCallback(() => {
-      void getUserCountryRegion().then(setCountryRegion);
-      void supabase.auth.getUser().then(({ data }) => {
-        setAccountUserId(data.user?.id || "");
-        setAccountEmail(data.user?.email || "");
-      });
-    }, []),
+      if (authStatus !== "authenticated" || !authUserId) {
+        setCountryRegion("US");
+        setAccountUserId("");
+        setAccountEmail("");
+        return;
+      }
+
+      setAccountUserId(authUserId);
+      setAccountEmail(authUserEmail || "");
+
+      void getUserCountryRegion()
+        .then(setCountryRegion)
+        .catch((error) => {
+          if (__DEV__) {
+            console.log("[Settings] country/region load failed", error);
+          }
+        });
+    }, [authStatus, authUserEmail, authUserId]),
   );
 
   useEffect(() => {
@@ -108,19 +127,19 @@ export default function SettingsScreen() {
   }
 
   async function switchAccount() {
+    if (isAuthTransitioning) return;
+
     if (__DEV__) {
-      console.log("[RevenueCat] Supabase sign out started");
+      console.log("[AuthSession] sign out started from Settings");
     }
 
     try {
-      const { error } = await supabase.auth.signOut();
+      const { error } = await signOut();
 
       if (error) {
         Alert.alert("Sign Out Error", error.message);
         return;
       }
-
-      router.replace("/login");
     } catch (error) {
       console.log("Sign out failed", error);
       Alert.alert("Sign Out Error", "Unable to sign out. Please try again.");
@@ -358,7 +377,11 @@ export default function SettingsScreen() {
         />
         <ListRow
           title="Sign Out / Switch Account"
-          subtitle="Leave this account and choose another."
+          subtitle={
+            isAuthTransitioning
+              ? "Signing out..."
+              : "Leave this account and choose another."
+          }
           leftIcon={<IconBadge name="log-out-outline" tone="neutral" />}
           right={<Chevron />}
           onPress={switchAccount}

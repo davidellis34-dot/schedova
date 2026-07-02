@@ -69,8 +69,16 @@ function PushNotificationsBootstrap() {
   useEffect(() => {
     if (!isHydrated || !userId) return;
 
-    void syncUserTimezone(userId);
-    void registerForPushNotifications(userId);
+    void syncUserTimezone(userId).catch((error) => {
+      if (__DEV__) {
+        console.log("User timezone sync bootstrap failed", error);
+      }
+    });
+    void registerForPushNotifications(userId).catch((error) => {
+      if (__DEV__) {
+        console.log("Push registration bootstrap failed", error);
+      }
+    });
   }, [isHydrated, userId]);
 
   useEffect(() => {
@@ -82,11 +90,17 @@ function PushNotificationsBootstrap() {
 
     if (!handledInitialNotification.current) {
       handledInitialNotification.current = true;
-      void getLastClientMessageNotificationRoute().then((route) => {
-        if (route) {
-          router.push(route as any);
-        }
-      });
+      void getLastClientMessageNotificationRoute()
+        .then((route) => {
+          if (route) {
+            router.push(route as any);
+          }
+        })
+        .catch((error) => {
+          if (__DEV__) {
+            console.log("Initial client message notification lookup failed", error);
+          }
+        });
     }
 
     return removeListeners;
@@ -99,7 +113,7 @@ function AuthRouteGuard() {
   const router = useRouter();
   const segments = useSegments();
   const routeKey = segments.join("/");
-  const { isHydrated, userId } = useAuthSession();
+  const { authStatus, isHydrated, userId } = useAuthSession();
 
   useEffect(() => {
     const firstSegment = segments[0];
@@ -116,10 +130,10 @@ function AuthRouteGuard() {
 
     if (isPublicRoute || !isHydrated) return;
 
-    if (!userId) {
+    if (authStatus === "unauthenticated" && !userId) {
       router.replace("/login" as any);
     }
-  }, [isHydrated, routeKey, router, segments, userId]);
+  }, [authStatus, isHydrated, routeKey, router, segments, userId]);
 
   return null;
 }

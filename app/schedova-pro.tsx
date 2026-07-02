@@ -1140,25 +1140,39 @@ function SchedovaProEnabledScreen() {
   useEffect(() => {
     let cancelled = false;
 
-    void supabase.auth.getUser().then(({ data }) => {
-      if (cancelled) return;
+    if (!authReady || !userId) {
+      return () => {
+        cancelled = true;
+      };
+    }
 
-      console.log("[ProScreen] ENABLE_PRO", ENABLE_PRO);
-      console.log(
-        "[ProScreen] current user id",
-        data.user?.id ?? userId ?? featureAccessUserId ?? null,
-      );
-      console.log("[ProScreen] current user email", data.user?.email ?? null);
-      console.log("[ProScreen] subscription row", subscription);
-      console.log("[ProScreen] adminLifetimeAccess", hasLifetimeAccess);
-      console.log("[ProScreen] final isPro", isPro);
-      console.log("[ProScreen] pro UI visible", proUiVisible);
-    });
+    void supabase.auth
+      .getUser()
+      .then(({ data }) => {
+        if (cancelled) return;
+
+        console.log("[ProScreen] ENABLE_PRO", ENABLE_PRO);
+        console.log(
+          "[ProScreen] current user id",
+          data.user?.id ?? userId ?? featureAccessUserId ?? null,
+        );
+        console.log("[ProScreen] current user email", data.user?.email ?? null);
+        console.log("[ProScreen] subscription row", subscription);
+        console.log("[ProScreen] adminLifetimeAccess", hasLifetimeAccess);
+        console.log("[ProScreen] final isPro", isPro);
+        console.log("[ProScreen] pro UI visible", proUiVisible);
+      })
+      .catch((error) => {
+        if (__DEV__) {
+          console.log("[ProScreen] current user lookup failed", error);
+        }
+      });
 
     return () => {
       cancelled = true;
     };
   }, [
+    authReady,
     featureAccessUserId,
     hasLifetimeAccess,
     isPro,
@@ -1176,6 +1190,21 @@ function SchedovaProEnabledScreen() {
       setDirectPurchaseBusyProductId(null);
     }
   }, [isPro]);
+
+  useEffect(() => {
+    if (authReady && userId) {
+      return;
+    }
+
+    subscriptionPrefetchedAtRef.current = 0;
+    setSubscriptionPackages([]);
+    setSubscriptionPackageSummaries([]);
+    setSubscriptionPackageStatus("checking");
+    setShowDirectPurchaseFallback(false);
+    setDirectPurchaseBusyProductId(null);
+    setPurchaseStatusMessage("");
+    setShowSubscriptionHelp(false);
+  }, [authReady, userId]);
 
   async function refreshCustomerInfoForPurchase(source: string) {
     console.log("[RevenueCat] customer info refresh started", { source });
@@ -1406,6 +1435,11 @@ function SchedovaProEnabledScreen() {
       return false;
     }
 
+    if (!authReady || !userId) {
+      Alert.alert("Schedova Pro", "Please sign in again before purchasing.");
+      return false;
+    }
+
     const productIdentifier = pkg.product.identifier;
 
     setDirectPurchaseBusyProductId(productIdentifier);
@@ -1455,6 +1489,11 @@ function SchedovaProEnabledScreen() {
 
   async function handleRestore() {
     if (isRestoringPurchases) return;
+
+    if (!authReady || !userId) {
+      Alert.alert("Schedova Pro", "Please sign in again before restoring.");
+      return;
+    }
 
     console.log("[RevenueCat] restore start", {
       source: "pro_screen",

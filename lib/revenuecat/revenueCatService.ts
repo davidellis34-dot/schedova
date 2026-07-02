@@ -94,6 +94,24 @@ const EXPECTED_REVENUECAT_PRODUCT_IDS: string[] =
 let cachedCurrentOffering: PurchasesOffering | null = null;
 let cachedOfferingFetchedAt = 0;
 let offeringFetchPromise: Promise<PurchasesOffering | null> | null = null;
+let revenueCatIdentityLock: Promise<void> = Promise.resolve();
+
+async function withRevenueCatIdentityLock<T>(operation: () => Promise<T>) {
+  let releaseLock!: () => void;
+  const previous = revenueCatIdentityLock.catch(() => undefined);
+
+  revenueCatIdentityLock = new Promise<void>((resolve) => {
+    releaseLock = resolve;
+  });
+
+  await previous;
+
+  try {
+    return await operation();
+  } finally {
+    releaseLock();
+  }
+}
 
 function getActiveRevenueCatEntitlements(
   customerInfo: CustomerInfo | null | undefined,
@@ -478,7 +496,7 @@ async function getRevenueCatUiModule() {
   return purchasesUiModulePromise;
 }
 
-export async function configureRevenueCat(appUserID?: string | null) {
+async function configureRevenueCatInternal(appUserID?: string | null) {
   if (!isRevenueCatSupported()) {
     console.log("[RevenueCat] RevenueCat is not supported in this runtime", {
       appOwnership: Constants.appOwnership,
@@ -558,30 +576,65 @@ export async function configureRevenueCat(appUserID?: string | null) {
   });
 }
 
+export async function configureRevenueCat(appUserID?: string | null) {
+  return withRevenueCatIdentityLock(() =>
+    configureRevenueCatInternal(appUserID),
+  );
+}
+
 export async function logInRevenueCatUser(appUserID: string) {
   if (!isRevenueCatSupported()) return null;
 
-  if (__DEV__) {
-    console.log("[RevenueCat] logIn called with appUserID", appUserID);
-  }
+  return withRevenueCatIdentityLock(async () => {
+    if (__DEV__) {
+      console.log("[RevenueCat] logIn called with appUserID", appUserID);
+    }
 
-  await configureRevenueCat(appUserID);
+    await configureRevenueCatInternal(appUserID);
 
-  const Purchases = (await getPurchasesModule()).default;
-  const currentAppUserID = await Purchases.getAppUserID().catch(() => null);
-  const currentIsAnonymous = await Purchases.isAnonymous().catch(() => null);
+    const Purchases = (await getPurchasesModule()).default;
+    const currentAppUserID = await Purchases.getAppUserID().catch(() => null);
+    const currentIsAnonymous = await Purchases.isAnonymous().catch(() => null);
 
-  if (__DEV__) {
-    console.log("[RevenueCat] current identity before logIn", {
-      appUserID: currentAppUserID,
-      isAnonymous: currentIsAnonymous,
-      expectedAppUserID: appUserID,
-    });
-  }
+    if (__DEV__) {
+      console.log("[RevenueCat] current identity before logIn", {
+        appUserID: currentAppUserID,
+        isAnonymous: currentIsAnonymous,
+        expectedAppUserID: appUserID,
+      });
+    }
 
-  if (currentAppUserID === appUserID) {
+    if (currentAppUserID === appUserID) {
+      configuredAppUserId = appUserID;
+      const customerInfo = await Purchases.getCustomerInfo();
+      const [resultAppUserID, isAnonymous] = await Promise.all([
+        Purchases.getAppUserID().catch(() => null),
+        Purchases.isAnonymous().catch(() => null),
+      ]);
+
+      if (__DEV__) {
+        console.log(
+          "[RevenueCat] RevenueCat logIn result appUserID",
+          resultAppUserID,
+        );
+        console.log(
+          "[RevenueCat] RevenueCat anonymous after login",
+          isAnonymous,
+        );
+        console.log("[RevenueCat] customerInfo fetched", {
+          appUserID,
+          isAnonymous,
+          activeEntitlements: Object.keys(
+            getActiveRevenueCatEntitlements(customerInfo),
+          ),
+        });
+      }
+
+      return customerInfo;
+    }
+
+    const result = await Purchases.logIn(appUserID);
     configuredAppUserId = appUserID;
-    const customerInfo = await Purchases.getCustomerInfo();
     const [resultAppUserID, isAnonymous] = await Promise.all([
       Purchases.getAppUserID().catch(() => null),
       Purchases.isAnonymous().catch(() => null),
@@ -597,60 +650,38 @@ export async function logInRevenueCatUser(appUserID: string) {
         appUserID,
         isAnonymous,
         activeEntitlements: Object.keys(
-          getActiveRevenueCatEntitlements(customerInfo),
+          getActiveRevenueCatEntitlements(result.customerInfo),
         ),
       });
     }
 
-    return customerInfo;
-  }
-
-  const result = await Purchases.logIn(appUserID);
-  configuredAppUserId = appUserID;
-  const [resultAppUserID, isAnonymous] = await Promise.all([
-    Purchases.getAppUserID().catch(() => null),
-    Purchases.isAnonymous().catch(() => null),
-  ]);
-
-  if (__DEV__) {
-    console.log(
-      "[RevenueCat] RevenueCat logIn result appUserID",
-      resultAppUserID,
-    );
-    console.log("[RevenueCat] RevenueCat anonymous after login", isAnonymous);
-      console.log("[RevenueCat] customerInfo fetched", {
-        appUserID,
-        isAnonymous,
-        activeEntitlements: Object.keys(
-          getActiveRevenueCatEntitlements(result.customerInfo),
-        ),
-      });
-  }
-
-  return result.customerInfo;
+    return result.customerInfo;
+  });
 }
 
 export async function logOutRevenueCatUser() {
   if (!isRevenueCatSupported()) return null;
 
-  if (__DEV__) {
-    console.log("[RevenueCat] RevenueCat logOut called");
-  }
-
-  await configureRevenueCat();
-
-  const Purchases = (await getPurchasesModule()).default;
-  configuredAppUserId = null;
-
-  try {
-    return await Purchases.logOut();
-  } catch (error) {
+  return withRevenueCatIdentityLock(async () => {
     if (__DEV__) {
-      console.log("RevenueCat logout skipped:", error);
+      console.log("[RevenueCat] RevenueCat logOut called");
     }
 
-    return Purchases.getCustomerInfo().catch(() => null);
-  }
+    await configureRevenueCatInternal();
+
+    const Purchases = (await getPurchasesModule()).default;
+    configuredAppUserId = null;
+
+    try {
+      return await Purchases.logOut();
+    } catch (error) {
+      if (__DEV__) {
+        console.log("RevenueCat logout skipped:", error);
+      }
+
+      return Purchases.getCustomerInfo().catch(() => null);
+    }
+  });
 }
 
 export async function getCustomerInfo(
@@ -1140,70 +1171,72 @@ export async function purchaseStoreProduct(
 export async function restorePurchases(appUserID?: string | null) {
   if (!isRevenueCatSupported()) return null;
 
-  if (__DEV__) {
-    console.log("[RevenueCat] restore started", {
-      appUserID: appUserID ?? null,
-    });
-  }
-
-  await configureRevenueCat(appUserID);
-
-  const Purchases = (await getPurchasesModule()).default;
-
-  try {
-    const restoreResult = await withRevenueCatOperationTimeout(
-      "RevenueCat restore purchases",
-      (async () => {
-        const currentAppUserID = await Purchases.getAppUserID().catch(
-          () => null,
-        );
-
-        if (appUserID && currentAppUserID !== appUserID) {
-          if (__DEV__) {
-            console.log("[RevenueCat] restore logIn appUserID", appUserID);
-          }
-
-          await Purchases.logIn(appUserID);
-          configuredAppUserId = appUserID;
-        }
-
-        const customerInfo = await Purchases.restorePurchases();
-        const [restoredAppUserID, isAnonymous] = await Promise.all([
-          Purchases.getAppUserID().catch(() => null),
-          Purchases.isAnonymous().catch(() => null),
-        ]);
-
-        return {
-          customerInfo,
-          restoredAppUserID,
-          isAnonymous,
-        };
-      })(),
-    );
-
+  return withRevenueCatIdentityLock(async () => {
     if (__DEV__) {
-      console.log("[RevenueCat] restore completed", {
-        appUserID: restoreResult.restoredAppUserID,
-        isAnonymous: restoreResult.isAnonymous,
-        activeEntitlements: getActiveRevenueCatEntitlementIds(
-          restoreResult.customerInfo,
-        ),
-        isPro: hasSchedovaPro(restoreResult.customerInfo),
+      console.log("[RevenueCat] restore started", {
+        appUserID: appUserID ?? null,
       });
     }
 
-    return {
-      customerInfo: restoreResult.customerInfo,
-      isPro: hasSchedovaPro(restoreResult.customerInfo),
-    };
-  } catch (error) {
-    console.log("[RevenueCat] restore failure", {
-      appUserID: appUserID ?? null,
-      error: getRevenueCatErrorDetails(error),
-    });
-    logRevenueCatError("Restore purchases failed", error);
-    throw error;
-  }
+    await configureRevenueCatInternal(appUserID);
+
+    const Purchases = (await getPurchasesModule()).default;
+
+    try {
+      const restoreResult = await withRevenueCatOperationTimeout(
+        "RevenueCat restore purchases",
+        (async () => {
+          const currentAppUserID = await Purchases.getAppUserID().catch(
+            () => null,
+          );
+
+          if (appUserID && currentAppUserID !== appUserID) {
+            if (__DEV__) {
+              console.log("[RevenueCat] restore logIn appUserID", appUserID);
+            }
+
+            await Purchases.logIn(appUserID);
+            configuredAppUserId = appUserID;
+          }
+
+          const customerInfo = await Purchases.restorePurchases();
+          const [restoredAppUserID, isAnonymous] = await Promise.all([
+            Purchases.getAppUserID().catch(() => null),
+            Purchases.isAnonymous().catch(() => null),
+          ]);
+
+          return {
+            customerInfo,
+            restoredAppUserID,
+            isAnonymous,
+          };
+        })(),
+      );
+
+      if (__DEV__) {
+        console.log("[RevenueCat] restore completed", {
+          appUserID: restoreResult.restoredAppUserID,
+          isAnonymous: restoreResult.isAnonymous,
+          activeEntitlements: getActiveRevenueCatEntitlementIds(
+            restoreResult.customerInfo,
+          ),
+          isPro: hasSchedovaPro(restoreResult.customerInfo),
+        });
+      }
+
+      return {
+        customerInfo: restoreResult.customerInfo,
+        isPro: hasSchedovaPro(restoreResult.customerInfo),
+      };
+    } catch (error) {
+      console.log("[RevenueCat] restore failure", {
+        appUserID: appUserID ?? null,
+        error: getRevenueCatErrorDetails(error),
+      });
+      logRevenueCatError("Restore purchases failed", error);
+      throw error;
+    }
+  });
 }
 
 export async function syncRevenueCatPurchases(

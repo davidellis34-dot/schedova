@@ -9,6 +9,7 @@ import {
   ScreenHeader,
   createSchedovaUiTheme,
 } from "../components/ui";
+import { useAuthSession } from "../lib/authSession";
 import { clearFeatureAccess } from "../lib/featureAccess";
 import { SUPPORT_EMAIL, openSupportEmail } from "../lib/legalLinks";
 import { ENABLE_PRO } from "../lib/proFeatureFlag";
@@ -27,6 +28,7 @@ export default function DeleteAccountScreen() {
   const { colors: appColors } = useAppTheme();
   const theme = createSchedovaUiTheme(appColors);
   const { colors, spacing, typography, radii } = theme;
+  const { signOut } = useAuthSession();
   const { showCustomerCenter } = useSubscription();
   const [submitting, setSubmitting] = useState(false);
   const [understood, setUnderstood] = useState(false);
@@ -83,7 +85,7 @@ export default function DeleteAccountScreen() {
       clearFeatureAccess("account-deleted");
 
       try {
-        await supabase.auth.signOut();
+        await signOut();
       } catch {
         // The Edge Function may already have deleted the auth user.
       }

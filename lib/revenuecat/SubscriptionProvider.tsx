@@ -22,6 +22,7 @@ import { hasSchedovaProAccess } from "../subscriptionAccess";
 import { REVENUECAT_ENTITLEMENT_ID } from "./constants";
 import {
   addCustomerInfoUpdateListener,
+  clearLastRevenueCatErrorDetails,
   getCustomerInfo,
   getActiveRevenueCatEntitlementIds,
   getRevenueCatErrorDetails,
@@ -167,6 +168,10 @@ export function SubscriptionProvider({
   const activeUserIdRef = useRef<string | null>(null);
   const cachedRevenueCatUserIdRef = useRef<string | null>(null);
   const lastKnownProByUserRef = useRef<Record<string, boolean>>({});
+  const latestAuthReadyRef = useRef(authReady);
+  const latestUserIdRef = useRef<string | null>(userId ?? null);
+  const initRunIdRef = useRef(0);
+  const customerInfoListenerRunIdRef = useRef(0);
 
   const lastKnownProForCurrentUser =
     Boolean(userId) &&
@@ -177,6 +182,8 @@ export function SubscriptionProvider({
   const activeSupabaseSchedovaPro = hasSchedovaProAccess(
     featureAccess.subscription,
   );
+  latestAuthReadyRef.current = authReady;
+  latestUserIdRef.current = userId ?? null;
 
   const applyCustomerInfo = useCallback(
     async (
@@ -200,9 +207,22 @@ export function SubscriptionProvider({
         return;
       }
 
+      const activeUserId = userId ?? null;
+      const latestUserId = latestUserIdRef.current ?? null;
+
+      if (!activeUserId || latestUserId !== activeUserId) {
+        if (__DEV__) {
+          console.log("[RevenueCat] Ignoring stale customerInfo result", {
+            source,
+            sourceUserId: activeUserId,
+            latestUserId,
+          });
+        }
+        return;
+      }
+
       const nextIsPro = hasSchedovaPro(info);
       const activeEntitlements = getActiveRevenueCatEntitlementIds(info);
-      const activeUserId = userId ?? null;
       const wasKnownPro =
         activeUserId !== null &&
         lastKnownProByUserRef.current[activeUserId] === true;
@@ -238,6 +258,10 @@ export function SubscriptionProvider({
           setRevenueCatFeatureAccess(true, `${source}:preserved-current-pro`);
         }
         setCachedRevenueCatIsPro(true);
+
+        if (latestUserIdRef.current !== activeUserId) {
+          return;
+        }
 
         await syncRevenueCatSubscriptionToSupabase({
           userId,
@@ -285,11 +309,20 @@ export function SubscriptionProvider({
           await writeLastKnownPro(userId, false);
         }
 
+        if (latestUserIdRef.current !== userId) {
+          return;
+        }
+
         await syncRevenueCatSubscriptionToSupabase({
           userId,
           customerInfo: info,
           allowInactive: nextIsPro || allowInactiveSync,
         });
+
+        if (latestUserIdRef.current !== userId) {
+          return;
+        }
+
         await refreshFeatureAccess(userId, `${source}:supabase-sync`);
       }
     },
@@ -337,7 +370,11 @@ export function SubscriptionProvider({
       }
     }
 
-    void hydrateLastKnownPro();
+    void hydrateLastKnownPro().catch((error) => {
+      if (__DEV__) {
+        console.log("[RevenueCat] last-known Pro hydrate failed", error);
+      }
+    });
 
     return () => {
       mounted = false;
@@ -640,6 +677,7 @@ export function SubscriptionProvider({
 
   useEffect(() => {
     let mounted = true;
+    const runId = ++initRunIdRef.current;
 
     async function init() {
       if (!revenueCatSupported) {
@@ -668,12 +706,15 @@ export function SubscriptionProvider({
           customerInfoRef.current = null;
           setCustomerInfo(null);
           setRevenueCatFeatureAccess(false, "revenuecat:logout");
+          clearLastRevenueCatErrorDetails();
+          setLastRevenueCatError(null);
+          setLastRestoreAt(null);
           if (__DEV__) {
             console.log("[RevenueCat] Local subscription state cleared");
           }
           await logOutRevenueCatUser();
 
-          if (mounted) {
+          if (mounted && runId === initRunIdRef.current) {
             setCustomerInfoFetchStatus("idle");
             setLastCustomerInfoRefreshAt(null);
             lastCustomerInfoRefreshAtRef.current = null;
@@ -692,6 +733,9 @@ export function SubscriptionProvider({
           customerInfoRef.current = null;
           setCustomerInfo(null);
           setRevenueCatFeatureAccess(false, "revenuecat:user-switch");
+          clearLastRevenueCatErrorDetails();
+          setLastRevenueCatError(null);
+          setLastRestoreAt(null);
         }
 
         if (__DEV__) {
@@ -708,7 +752,11 @@ export function SubscriptionProvider({
             "revenuecat:init",
           );
 
-        if (mounted) {
+        if (
+          mounted &&
+          runId === initRunIdRef.current &&
+          latestUserIdRef.current === userId
+        ) {
           activeUserIdRef.current = userId;
           await applyCustomerInfo(info, "revenuecat:init", {
             allowKnownProDowngrade: inactiveConfirmed,
@@ -725,7 +773,9 @@ export function SubscriptionProvider({
           console.log("RevenueCat init failed:", error);
         }
       } finally {
-        if (mounted) setLoading(false);
+        if (mounted && runId === initRunIdRef.current) {
+          setLoading(false);
+        }
       }
     }
 
@@ -745,31 +795,59 @@ export function SubscriptionProvider({
   useEffect(() => {
     let removeListener: (() => void) | null = null;
     let mounted = true;
+    const runId = ++customerInfoListenerRunIdRef.current;
 
     async function listenForUpdates() {
       if (!revenueCatSupported || !authReady || !userId) return;
 
-      removeListener = await addCustomerInfoUpdateListener((info) => {
+      const nextRemoveListener = await addCustomerInfoUpdateListener((info) => {
         if (!mounted) return;
         void (async () => {
-          const { info: resolvedInfo, inactiveConfirmed } =
-            await resolvePotentialInactiveCustomerInfo(
-              info,
-              userId,
-              "revenuecat:update",
-            );
+          try {
+            const { info: resolvedInfo, inactiveConfirmed } =
+              await resolvePotentialInactiveCustomerInfo(
+                info,
+                userId,
+                "revenuecat:update",
+              );
 
-          if (!mounted) return;
+            if (
+              !mounted ||
+              runId !== customerInfoListenerRunIdRef.current ||
+              latestUserIdRef.current !== userId
+            ) {
+              return;
+            }
 
-          await applyCustomerInfo(resolvedInfo, "revenuecat:update", {
-            allowKnownProDowngrade: inactiveConfirmed,
-            allowInactiveSync: inactiveConfirmed,
-          });
+            await applyCustomerInfo(resolvedInfo, "revenuecat:update", {
+              allowKnownProDowngrade: inactiveConfirmed,
+              allowInactiveSync: inactiveConfirmed,
+            });
+          } catch (error) {
+            logRevenueCatError("RevenueCat customer info update failed", error);
+            setLastRevenueCatError(getRevenueCatErrorDetails(error));
+            setCustomerInfoFetchStatus("error");
+          }
         })();
       });
+
+      if (
+        !mounted ||
+        runId !== customerInfoListenerRunIdRef.current ||
+        latestUserIdRef.current !== userId
+      ) {
+        nextRemoveListener();
+        return;
+      }
+
+      removeListener = nextRemoveListener;
     }
 
-    void listenForUpdates();
+    void listenForUpdates().catch((error) => {
+      logRevenueCatError("RevenueCat listener attach failed", error);
+      setLastRevenueCatError(getRevenueCatErrorDetails(error));
+      setCustomerInfoFetchStatus("error");
+    });
 
     return () => {
       mounted = false;

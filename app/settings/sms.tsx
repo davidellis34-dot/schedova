@@ -2,6 +2,7 @@ import { useFocusEffect } from "expo-router";
 import { useCallback, useState } from "react";
 import { Alert, Pressable, Switch, Text, View } from "react-native";
 import { AppScreen } from "../../components/layout/AppScreen";
+import { useAuthSession } from "../../lib/authSession";
 import { canUseFeature, useFeatureAccess } from "../../lib/featureAccess";
 import { ENABLE_PRO } from "../../lib/proFeatureFlag";
 import {
@@ -53,6 +54,7 @@ function logSmsSettingsSupabaseError(
 
 export default function SmsSettingsScreen() {
   const { colors } = useAppTheme();
+  const { authStatus, userId } = useAuthSession();
   useFeatureAccess();
   const [loading, setLoading] = useState(true);
   const [saving, setSaving] = useState(false);
@@ -72,25 +74,21 @@ export default function SmsSettingsScreen() {
         return;
       }
 
-      const {
-        data: { user },
-        error: userError,
-      } = await supabase.auth.getUser();
-
-      if (userError || !user) {
-        Alert.alert("Not signed in", "Please sign in again.");
+      if (authStatus !== "authenticated" || !userId) {
+        setSettings(DEFAULT_SMS_SETTINGS);
+        setStatusMessage("");
         return;
       }
 
       const settingsResult = await supabase
         .from("sms_settings")
         .select("*")
-        .eq("user_id", user.id)
+        .eq("user_id", userId)
         .maybeSingle();
 
       if (settingsResult.error) {
         logSmsSettingsSupabaseError("load failed", settingsResult.error, {
-          userId: user.id,
+          userId,
         });
         setSettings(DEFAULT_SMS_SETTINGS);
         setStatusMessage("");
@@ -125,7 +123,7 @@ export default function SmsSettingsScreen() {
     } finally {
       setLoading(false);
     }
-  }, [smsAvailable]);
+  }, [authStatus, smsAvailable, userId]);
 
   useFocusEffect(
     useCallback(() => {
@@ -149,12 +147,7 @@ export default function SmsSettingsScreen() {
     setSaving(true);
 
     try {
-      const {
-        data: { user },
-        error: userError,
-      } = await supabase.auth.getUser();
-
-      if (userError || !user) {
+      if (authStatus !== "authenticated" || !userId) {
         Alert.alert("Not signed in", "Please sign in again.");
         return;
       }
@@ -180,7 +173,7 @@ export default function SmsSettingsScreen() {
       const existingRowResult = await supabase
         .from("sms_settings")
         .select("user_id")
-        .eq("user_id", user.id)
+        .eq("user_id", userId)
         .maybeSingle();
 
       if (existingRowResult.error) {
@@ -188,7 +181,7 @@ export default function SmsSettingsScreen() {
           "existing row lookup failed",
           existingRowResult.error,
           {
-            userId: user.id,
+            userId,
           },
         );
         setStatusMessage("");
@@ -203,14 +196,14 @@ export default function SmsSettingsScreen() {
         ? await supabase
             .from("sms_settings")
             .update(settingsPayload)
-            .eq("user_id", user.id)
+            .eq("user_id", userId)
             .select("user_id")
             .maybeSingle()
         : await supabase
             .from("sms_settings")
             .upsert(
               {
-                user_id: user.id,
+                user_id: userId,
                 ...settingsPayload,
               },
               { onConflict: "user_id" },
@@ -220,7 +213,7 @@ export default function SmsSettingsScreen() {
 
       if (saveResult.error) {
         logSmsSettingsSupabaseError("save failed", saveResult.error, {
-          userId: user.id,
+          userId,
           mode: existingRowResult.data ? "update" : "upsert",
           payload: settingsPayload,
         });
@@ -233,7 +226,7 @@ export default function SmsSettingsScreen() {
       }
 
       console.log("[SMS settings] save success", {
-        userId: user.id,
+        userId,
         mode: existingRowResult.data ? "update" : "upsert",
       });
       setStatusMessage("SMS settings saved.");

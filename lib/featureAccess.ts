@@ -197,6 +197,7 @@ export async function refreshFeatureAccess(
   source = "refresh",
 ) {
   const generation = ++refreshGeneration;
+  let activeUserId = userId || null;
 
   publishFeatureAccess({
     ...featureAccessState,
@@ -205,52 +206,86 @@ export async function refreshFeatureAccess(
     error: null,
   });
 
-  let activeUserId = userId || null;
+  try {
+    if (!activeUserId) {
+      const { data, error } = await supabase.auth.getUser();
 
-  if (!activeUserId) {
-    const { data, error } = await supabase.auth.getUser();
+      if (generation !== refreshGeneration) return featureAccessState;
+
+      if (error || !data.user?.id) {
+        publishFeatureAccess({
+          ...initialState,
+          source,
+          loadedAt: new Date().toISOString(),
+          error: error?.message || null,
+        });
+        return featureAccessState;
+      }
+
+      activeUserId = data.user.id;
+    }
+
+    const { data: authUserData } = await supabase.auth.getUser();
+    const authUserId = authUserData.user?.id ?? activeUserId;
+    const authEmail = authUserData.user?.email ?? null;
+    const subscriptionSelect =
+      "status, plan, current_period_end, entitlement, entitlement_source, entitlement_expires_at";
+
+    const { data, error } = await supabase
+      .from("user_subscriptions")
+      .select(subscriptionSelect)
+      .eq("user_id", activeUserId);
 
     if (generation !== refreshGeneration) return featureAccessState;
 
-    if (error || !data.user?.id) {
+    if (error) {
+      const adminLifetimeAccess = false;
+      const revenueCatStyleAccess = false;
+      const computedIsPro = getEffectiveProAccess(
+        null,
+        featureAccessState.revenueCatLoaded,
+        featureAccessState.revenueCatIsPro,
+      );
+
+      console.log("current auth user id", authUserId);
+      console.log("current auth email", authEmail);
+      console.log("subscription object used", null);
+      console.log("subscription row loaded from Supabase", null);
+      console.log("adminLifetimeAccess", adminLifetimeAccess);
+      console.log("revenueCatStyleAccess", revenueCatStyleAccess);
+      console.log("revenuecat result", featureAccessState.revenueCatIsPro);
+      console.log("final isPro", computedIsPro);
+
       publishFeatureAccess({
-        ...initialState,
-        source,
+        userId: activeUserId,
+        subscription: null,
+        isPro: computedIsPro,
+        revenueCatLoaded: featureAccessState.revenueCatLoaded,
+        revenueCatIsPro: featureAccessState.revenueCatIsPro,
+        loading: false,
         loadedAt: new Date().toISOString(),
-        error: error?.message || null,
+        source,
+        error: error.message,
       });
       return featureAccessState;
     }
 
-    activeUserId = data.user.id;
-  }
-
-  const { data: authUserData } = await supabase.auth.getUser();
-  const authUserId = authUserData.user?.id ?? activeUserId;
-  const authEmail = authUserData.user?.email ?? null;
-  const subscriptionSelect =
-    "status, plan, current_period_end, entitlement, entitlement_source, entitlement_expires_at";
-
-  const { data, error } = await supabase
-    .from("user_subscriptions")
-    .select(subscriptionSelect)
-    .eq("user_id", activeUserId);
-
-  if (generation !== refreshGeneration) return featureAccessState;
-
-  if (error) {
-    const adminLifetimeAccess = false;
-    const revenueCatStyleAccess = false;
+    const subscriptions = (data || []) as UserSubscription[];
+    const subscription =
+      subscriptions.find(hasSchedovaProAccess) || subscriptions[0] || null;
+    const adminLifetimeAccess = hasAdminLifetimeSchedovaProAccess(subscription);
+    const revenueCatStyleAccess =
+      hasRevenueCatStyleSchedovaProAccess(subscription);
     const computedIsPro = getEffectiveProAccess(
-      null,
+      subscription,
       featureAccessState.revenueCatLoaded,
       featureAccessState.revenueCatIsPro,
     );
 
     console.log("current auth user id", authUserId);
     console.log("current auth email", authEmail);
-    console.log("subscription object used", null);
-    console.log("subscription row loaded from Supabase", null);
+    console.log("subscription object used", subscription);
+    console.log("subscription row loaded from Supabase", subscription);
     console.log("adminLifetimeAccess", adminLifetimeAccess);
     console.log("revenueCatStyleAccess", revenueCatStyleAccess);
     console.log("revenuecat result", featureAccessState.revenueCatIsPro);
@@ -258,50 +293,32 @@ export async function refreshFeatureAccess(
 
     publishFeatureAccess({
       userId: activeUserId,
-      subscription: null,
+      subscription,
       isPro: computedIsPro,
       revenueCatLoaded: featureAccessState.revenueCatLoaded,
       revenueCatIsPro: featureAccessState.revenueCatIsPro,
       loading: false,
       loadedAt: new Date().toISOString(),
       source,
-      error: error.message,
+      error: null,
     });
-    return featureAccessState;
+  } catch (error) {
+    if (generation !== refreshGeneration) return featureAccessState;
+
+    const message =
+      error instanceof Error
+        ? error.message
+        : "Feature access could not be refreshed.";
+
+    publishFeatureAccess({
+      ...featureAccessState,
+      userId: activeUserId,
+      loading: false,
+      loadedAt: new Date().toISOString(),
+      source,
+      error: message,
+    });
   }
-
-  const subscriptions = (data || []) as UserSubscription[];
-  const subscription =
-    subscriptions.find(hasSchedovaProAccess) || subscriptions[0] || null;
-  const adminLifetimeAccess = hasAdminLifetimeSchedovaProAccess(subscription);
-  const revenueCatStyleAccess =
-    hasRevenueCatStyleSchedovaProAccess(subscription);
-  const computedIsPro = getEffectiveProAccess(
-    subscription,
-    featureAccessState.revenueCatLoaded,
-    featureAccessState.revenueCatIsPro,
-  );
-
-  console.log("current auth user id", authUserId);
-  console.log("current auth email", authEmail);
-  console.log("subscription object used", subscription);
-  console.log("subscription row loaded from Supabase", subscription);
-  console.log("adminLifetimeAccess", adminLifetimeAccess);
-  console.log("revenueCatStyleAccess", revenueCatStyleAccess);
-  console.log("revenuecat result", featureAccessState.revenueCatIsPro);
-  console.log("final isPro", computedIsPro);
-
-  publishFeatureAccess({
-    userId: activeUserId,
-    subscription,
-    isPro: computedIsPro,
-    revenueCatLoaded: featureAccessState.revenueCatLoaded,
-    revenueCatIsPro: featureAccessState.revenueCatIsPro,
-    loading: false,
-    loadedAt: new Date().toISOString(),
-    source,
-    error: null,
-  });
 
   return featureAccessState;
 }

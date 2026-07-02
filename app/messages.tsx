@@ -1,5 +1,5 @@
 import { useFocusEffect, useRouter } from "expo-router";
-import { useCallback, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useState } from "react";
 import {
   ActivityIndicator,
   Alert,
@@ -145,7 +145,7 @@ function Badge({
 export default function MessagesScreen() {
   const router = useRouter();
   const { colors, themeName } = useAppTheme();
-  const { isHydrated, userId } = useAuthSession();
+  const { authStatus, isHydrated, userId } = useAuthSession();
   useFeatureAccess();
   const clientRepliesAvailable = canUseFeature("smsAutomation");
   const [loading, setLoading] = useState(true);
@@ -191,6 +191,19 @@ export default function MessagesScreen() {
     ? appointmentsById[selectedMessage.appointment_id]
     : null;
 
+  useEffect(() => {
+    if (authStatus === "authenticated" && userId) {
+      return;
+    }
+
+    setMessages([]);
+    setClientsById({});
+    setAppointmentsById({});
+    setSelectedMessage(null);
+    setResolving(false);
+    setLoading(authStatus === "loading");
+  }, [authStatus, userId]);
+
   const fetchMessages = useCallback(async () => {
     if (!clientRepliesAvailable) {
       setMessages([]);
@@ -209,8 +222,11 @@ export default function MessagesScreen() {
     setLoading(true);
 
     if (!userId) {
+      setMessages([]);
+      setClientsById({});
+      setAppointmentsById({});
+      setSelectedMessage(null);
       setLoading(false);
-      router.replace("/login" as any);
       return;
     }
 
@@ -303,7 +319,7 @@ export default function MessagesScreen() {
     setClientsById(nextClientsById);
     setAppointmentsById(nextAppointmentsById);
     setLoading(false);
-  }, [clientRepliesAvailable, isHydrated, router, userId]);
+  }, [clientRepliesAvailable, isHydrated, userId]);
 
   useFocusEffect(
     useCallback(() => {

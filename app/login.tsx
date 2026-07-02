@@ -9,6 +9,7 @@ import {
   ScreenHeader,
   createSchedovaUiTheme,
 } from "../components/ui";
+import { useAuthSession } from "../lib/authSession";
 import { hasSelectedUserCountryRegion } from "../lib/countrySettings";
 import { refreshFeatureAccess } from "../lib/featureAccess";
 import {
@@ -24,6 +25,7 @@ import { useAppTheme } from "../lib/useAppTheme";
 
 export default function LoginScreen() {
   const router = useRouter();
+  const { authStatus, isHydrated, userId } = useAuthSession();
   const params = useLocalSearchParams<{
     mode?: string;
     previewMessage?: string;
@@ -37,6 +39,12 @@ export default function LoginScreen() {
   const [submitting, setSubmitting] = useState(false);
   const [errorMessage, setErrorMessage] = useState("");
   const [previewMessage, setPreviewMessage] = useState("");
+  const [pendingNavigationUserId, setPendingNavigationUserId] = useState<
+    string | null
+  >(null);
+  const [pendingNavigationMode, setPendingNavigationMode] = useState<
+    "signin" | "signup" | null
+  >(null);
 
   useEffect(() => {
     if (params.mode === "signup") {
@@ -49,6 +57,73 @@ export default function LoginScreen() {
       setPreviewMessage(params.previewMessage);
     }
   }, [params.mode, params.previewMessage]);
+
+  useEffect(() => {
+    if (
+      !pendingNavigationUserId ||
+      !pendingNavigationMode ||
+      !isHydrated ||
+      authStatus !== "authenticated" ||
+      userId !== pendingNavigationUserId
+    ) {
+      return;
+    }
+
+    let cancelled = false;
+
+    async function completePostAuthNavigation() {
+      const navigationSource =
+        pendingNavigationMode === "signup" ? "signup" : "signin";
+
+      try {
+        await refreshFeatureAccess(pendingNavigationUserId, navigationSource);
+
+        const nextRoute =
+          navigationSource === "signup"
+            ? ("/onboarding" as const)
+            : ((await hasCompletedOnboarding())
+                ? "/dashboard"
+                : "/onboarding") as "/dashboard" | "/onboarding";
+
+        if (!(await hasSelectedUserCountryRegion())) {
+          router.replace({
+            pathname: "/country-region",
+            params: { next: nextRoute },
+          } as any);
+          return;
+        }
+
+        router.replace(nextRoute as any);
+      } catch (error) {
+        if (!cancelled) {
+          const message =
+            error instanceof Error
+              ? error.message
+              : "Unable to finish signing in. Please try again.";
+          setErrorMessage(message);
+          Alert.alert("Login Error", message);
+        }
+      } finally {
+        if (!cancelled) {
+          setPendingNavigationUserId(null);
+          setPendingNavigationMode(null);
+        }
+      }
+    }
+
+    void completePostAuthNavigation();
+
+    return () => {
+      cancelled = true;
+    };
+  }, [
+    authStatus,
+    isHydrated,
+    pendingNavigationMode,
+    pendingNavigationUserId,
+    router,
+    userId,
+  ]);
 
   async function signUp() {
     if (!email || !password) {
@@ -69,12 +144,11 @@ export default function LoginScreen() {
       return;
     }
 
-    if (data.session?.user?.id) {
-      await refreshFeatureAccess(data.session.user.id, "signup");
-      router.replace({
-        pathname: "/country-region",
-        params: { next: "/onboarding" },
-      } as any);
+    const signedUpUserId = data.session?.user?.id ?? null;
+
+    if (signedUpUserId) {
+      setPendingNavigationMode("signup");
+      setPendingNavigationUserId(signedUpUserId);
       return;
     }
 
@@ -95,25 +169,21 @@ export default function LoginScreen() {
     }
 
     setErrorMessage("");
-    await refreshFeatureAccess(data.user?.id, "login");
+    const signedInUserId = data.user?.id ?? data.session?.user?.id ?? null;
 
-    const nextRoute = (await hasCompletedOnboarding()
-      ? "/dashboard"
-      : "/onboarding") as "/dashboard" | "/onboarding";
-
-    if (!(await hasSelectedUserCountryRegion())) {
-      router.replace({
-        pathname: "/country-region",
-        params: { next: nextRoute },
-      } as any);
+    if (!signedInUserId) {
+      const message = "Signed in, but the account session was not ready.";
+      setErrorMessage(message);
+      Alert.alert("Login Error", message);
       return;
     }
 
-    router.replace(nextRoute as any);
+    setPendingNavigationMode("signin");
+    setPendingNavigationUserId(signedInUserId);
   }
 
   async function submitAuth() {
-    if (submitting) return;
+    if (submitting || authStatus === "signingOut") return;
 
     setSubmitting(true);
     setErrorMessage("");
@@ -125,6 +195,13 @@ export default function LoginScreen() {
       }
 
       await signUp();
+    } catch (error) {
+      const message =
+        error instanceof Error
+          ? error.message
+          : "Unable to reach the sign-in service right now.";
+      setErrorMessage(message);
+      Alert.alert("Login Error", message);
     } finally {
       setSubmitting(false);
     }
@@ -252,7 +329,7 @@ export default function LoginScreen() {
             void submitAuth();
           }}
           loading={submitting}
-          disabled={submitting}
+          disabled={submitting || authStatus === "signingOut"}
         />
 
         <AppButton
@@ -262,7 +339,7 @@ export default function LoginScreen() {
               : "Already have an account? Sign in"
           }
           variant="ghost"
-          disabled={submitting}
+          disabled={submitting || authStatus === "signingOut"}
           onPress={() => {
             setErrorMessage("");
             setAuthMode((current) =>

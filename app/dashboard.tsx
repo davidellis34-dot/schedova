@@ -67,7 +67,7 @@ export default function Dashboard() {
   const router = useRouter();
   const { colors, themeName } = useAppTheme();
   const { width } = useWindowDimensions();
-  const { isHydrated, user, userId } = useAuthSession();
+  const { authStatus, isHydrated, user, userId } = useAuthSession();
   const featureAccess = useFeatureAccess();
   const [clients, setClients] = useState<any[]>([]);
   const [statusModalOpen, setStatusModalOpen] = useState(false);
@@ -133,6 +133,23 @@ export default function Dashboard() {
     userId,
     subscription: featureAccess.subscription,
   });
+
+  useEffect(() => {
+    if (authStatus === "authenticated" && userId) {
+      return;
+    }
+
+    setClients([]);
+    setAppointments([]);
+    setServices([]);
+    setUserEmail("");
+    setHasBusiness(null);
+    setClientRepliesCount(0);
+    setLatestRepliesByAppointmentId({});
+    setStatusModalOpen(false);
+    setSelectedStatusAppointment(null);
+    setActionAppointment(null);
+  }, [authStatus, userId]);
 
   function getClientDisplayName(appointment: any) {
     if (!appointment) {
@@ -203,8 +220,8 @@ export default function Dashboard() {
     setUserEmail(user?.email || "");
 
     if (!userId) {
-      setHasBusiness(false);
-      router.replace("/login" as any);
+      setUserEmail("");
+      setHasBusiness(null);
       return;
     }
 
@@ -221,7 +238,7 @@ export default function Dashboard() {
     }
 
     setHasBusiness((data || []).length > 0);
-  }, [isHydrated, router, user?.email, userId]);
+  }, [isHydrated, user?.email, userId]);
 
   const fetchAppointments = useCallback(async () => {
     if (!isHydrated) return;
@@ -230,6 +247,8 @@ export default function Dashboard() {
 
     if (!userId) {
       setAppointments([]);
+      setUserEmail("");
+      setLatestRepliesByAppointmentId({});
       return;
     }
 

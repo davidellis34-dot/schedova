@@ -109,7 +109,7 @@ function getFriendlyMessage(error: unknown, fallback: string) {
 export default function MessagePacksScreen() {
   const router = useRouter();
   const { colors } = useAppTheme();
-  const { userId, isPro, revenueCatSupported } = useSubscription();
+  const { authReady, userId, isPro, revenueCatSupported } = useSubscription();
   const [balance, setBalance] = useState<MessageCreditBalance>(EMPTY_BALANCE);
   const [products, setProducts] = useState<MessagePackProductSummary[]>([]);
   const [loadingBalance, setLoadingBalance] = useState(true);
@@ -132,6 +132,15 @@ export default function MessagePacksScreen() {
 
   const refreshBalance = useCallback(
     async (showAlertOnFailure = false) => {
+      if (!authReady) {
+        if (screenActiveRef.current) {
+          setBalance(EMPTY_BALANCE);
+          setLoadingBalance(true);
+          setBalanceLoadMessage("");
+        }
+        return false;
+      }
+
       if (screenActiveRef.current) {
         setLoadingBalance(true);
         setBalanceLoadMessage("");
@@ -168,7 +177,7 @@ export default function MessagePacksScreen() {
         }
       }
     },
-    [userId],
+    [authReady, userId],
   );
 
   const refreshProducts = useCallback(async () => {
@@ -291,6 +300,11 @@ export default function MessagePacksScreen() {
   );
 
   async function handleCheckPurchases() {
+    if (!authReady) {
+      Alert.alert("Message packs", "Your account is still loading. Please try again.");
+      return;
+    }
+
     if (!userId) {
       Alert.alert("Message packs", "Please sign in again.");
       return;
@@ -370,6 +384,11 @@ export default function MessagePacksScreen() {
   }
 
   async function handleBuy(product: MessagePackProductSummary) {
+    if (!authReady) {
+      Alert.alert("Message packs", "Your account is still loading. Please try again.");
+      return;
+    }
+
     if (!userId) {
       Alert.alert("Message packs", "Please sign in again.");
       return;

@@ -114,32 +114,32 @@ export async function registerForPushNotifications(userId: string) {
     return null;
   }
 
-  if (Platform.OS === "android") {
-    await Notifications.setNotificationChannelAsync("client-messages", {
-      name: "Client messages",
-      importance: Notifications.AndroidImportance.DEFAULT,
-      sound: "default",
-    });
-  }
-
-  const existingPermissions = await Notifications.getPermissionsAsync();
-  let finalPermissions = existingPermissions;
-
-  if (
-    !existingPermissions.granted &&
-    existingPermissions.canAskAgain !== false
-  ) {
-    finalPermissions = await Notifications.requestPermissionsAsync();
-  }
-
-  if (!finalPermissions.granted) {
-    if (__DEV__) {
-      console.log("Expo push registration skipped: permission not granted");
-    }
-    return null;
-  }
-
   try {
+    if (Platform.OS === "android") {
+      await Notifications.setNotificationChannelAsync("client-messages", {
+        name: "Client messages",
+        importance: Notifications.AndroidImportance.DEFAULT,
+        sound: "default",
+      });
+    }
+
+    const existingPermissions = await Notifications.getPermissionsAsync();
+    let finalPermissions = existingPermissions;
+
+    if (
+      !existingPermissions.granted &&
+      existingPermissions.canAskAgain !== false
+    ) {
+      finalPermissions = await Notifications.requestPermissionsAsync();
+    }
+
+    if (!finalPermissions.granted) {
+      if (__DEV__) {
+        console.log("Expo push registration skipped: permission not granted");
+      }
+      return null;
+    }
+
     const tokenResponse = await Notifications.getExpoPushTokenAsync({
       projectId,
     });
@@ -190,9 +190,15 @@ export async function getLastClientMessageNotificationRoute() {
 
   configureSchedovaNotificationHandler();
 
-  const response = await Notifications.getLastNotificationResponseAsync();
-
-  return getClientMessageRouteFromNotification(response?.notification);
+  try {
+    const response = await Notifications.getLastNotificationResponseAsync();
+    return getClientMessageRouteFromNotification(response?.notification);
+  } catch (error) {
+    if (__DEV__) {
+      console.log("Last notification response lookup failed", error);
+    }
+    return null;
+  }
 }
 
 export function addClientMessageNotificationListeners({
