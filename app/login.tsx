@@ -1,6 +1,6 @@
 import { useLocalSearchParams, useRouter } from "expo-router";
-import { useEffect, useState } from "react";
-import { Alert, Text, View } from "react-native";
+import { useCallback, useEffect, useRef, useState } from "react";
+import { Keyboard, Text, TextInput, View } from "react-native";
 import {
   AppButton,
   AppCard,
@@ -32,12 +32,18 @@ export default function LoginScreen() {
   }>();
   const { colors } = useAppTheme();
   const uiColors = createSchedovaUiTheme(colors).colors;
+  const emailRef = useRef<TextInput | null>(null);
+  const passwordRef = useRef<TextInput | null>(null);
+  const emailFocusedRef = useRef(false);
+  const passwordFocusedRef = useRef(false);
+  const navigatingRef = useRef(false);
 
   const [email, setEmail] = useState("");
   const [password, setPassword] = useState("");
   const [authMode, setAuthMode] = useState<"signin" | "signup">("signin");
   const [submitting, setSubmitting] = useState(false);
   const [errorMessage, setErrorMessage] = useState("");
+  const [infoMessage, setInfoMessage] = useState("");
   const [previewMessage, setPreviewMessage] = useState("");
   const [pendingNavigationUserId, setPendingNavigationUserId] = useState<
     string | null
@@ -57,6 +63,77 @@ export default function LoginScreen() {
       setPreviewMessage(params.previewMessage);
     }
   }, [params.mode, params.previewMessage]);
+
+  async function settleKeyboard() {
+    Keyboard.dismiss();
+    await new Promise((resolve) => setTimeout(resolve, 100));
+    await new Promise<void>((resolve) => {
+      requestAnimationFrame(() => resolve());
+    });
+  }
+
+  const blurAuthInputs = useCallback(() => {
+    emailFocusedRef.current = false;
+    passwordFocusedRef.current = false;
+    emailRef.current?.blur();
+    passwordRef.current?.blur();
+  }, []);
+
+  const hasFocusedInput = useCallback(() => {
+    return (
+      emailFocusedRef.current ||
+      passwordFocusedRef.current ||
+      Boolean(TextInput.State.currentlyFocusedInput?.())
+    );
+  }, []);
+
+  const waitForBlurredInputs = useCallback(async () => {
+    for (let attempt = 0; attempt < 3; attempt += 1) {
+      blurAuthInputs();
+      await settleKeyboard();
+
+      if (!hasFocusedInput()) {
+        return;
+      }
+    }
+  }, [blurAuthInputs, hasFocusedInput]);
+
+  const navigateAfterAuth = useCallback(
+    async (
+      route:
+        | "/dashboard"
+        | "/onboarding"
+        | {
+            pathname: "/country-region";
+            params: { next: "/dashboard" | "/onboarding" };
+          },
+    ) => {
+      if (navigatingRef.current) {
+        return;
+      }
+
+      navigatingRef.current = true;
+
+      try {
+        await waitForBlurredInputs();
+        await settleKeyboard();
+
+        if (hasFocusedInput()) {
+          await waitForBlurredInputs();
+        }
+
+        if (typeof route === "string") {
+          router.replace(route as any);
+          return;
+        }
+
+        router.replace(route as any);
+      } finally {
+        navigatingRef.current = false;
+      }
+    },
+    [hasFocusedInput, router, waitForBlurredInputs],
+  );
 
   useEffect(() => {
     if (
@@ -86,27 +163,27 @@ export default function LoginScreen() {
                 : "/onboarding") as "/dashboard" | "/onboarding";
 
         if (!(await hasSelectedUserCountryRegion())) {
-          router.replace({
+          await navigateAfterAuth({
             pathname: "/country-region",
             params: { next: nextRoute },
-          } as any);
+          });
           return;
         }
 
-        router.replace(nextRoute as any);
+        await navigateAfterAuth(nextRoute);
       } catch (error) {
         if (!cancelled) {
-          const message =
+          setErrorMessage(
             error instanceof Error
               ? error.message
-              : "Unable to finish signing in. Please try again.";
-          setErrorMessage(message);
-          Alert.alert("Login Error", message);
+              : "Unable to finish signing in. Please try again.",
+          );
         }
       } finally {
         if (!cancelled) {
           setPendingNavigationUserId(null);
           setPendingNavigationMode(null);
+          setSubmitting(false);
         }
       }
     }
@@ -119,18 +196,16 @@ export default function LoginScreen() {
   }, [
     authStatus,
     isHydrated,
+    navigateAfterAuth,
     pendingNavigationMode,
     pendingNavigationUserId,
-    router,
     userId,
   ]);
 
   async function signUp() {
     if (!email || !password) {
-      const message = "Enter email and password.";
-      setErrorMessage(message);
-      Alert.alert("Missing Info", message);
-      return;
+      setErrorMessage("Enter email and password.");
+      return false;
     }
 
     const { data, error } = await supabase.auth.signUp({
@@ -140,8 +215,7 @@ export default function LoginScreen() {
 
     if (error) {
       setErrorMessage(error.message);
-      Alert.alert("Sign Up Error", error.message);
-      return;
+      return false;
     }
 
     const signedUpUserId = data.session?.user?.id ?? null;
@@ -149,14 +223,16 @@ export default function LoginScreen() {
     if (signedUpUserId) {
       setPendingNavigationMode("signup");
       setPendingNavigationUserId(signedUpUserId);
-      return;
+      return true;
     }
 
     setErrorMessage("");
-    Alert.alert("Account Created", "Check your email to confirm your account.");
+    setInfoMessage("Check your email to confirm your account.");
+    return false;
   }
 
   async function login() {
+    Keyboard.dismiss();
     const { data, error } = await supabase.auth.signInWithPassword({
       email,
       password,
@@ -164,47 +240,59 @@ export default function LoginScreen() {
 
     if (error) {
       setErrorMessage(error.message);
-      Alert.alert("Login Error", error.message);
-      return;
+      return false;
     }
 
     setErrorMessage("");
     const signedInUserId = data.user?.id ?? data.session?.user?.id ?? null;
 
     if (!signedInUserId) {
-      const message = "Signed in, but the account session was not ready.";
-      setErrorMessage(message);
-      Alert.alert("Login Error", message);
-      return;
+      setErrorMessage("Signed in, but the account session was not ready.");
+      return false;
     }
 
     setPendingNavigationMode("signin");
     setPendingNavigationUserId(signedInUserId);
+    return true;
   }
 
   async function submitAuth() {
-    if (submitting || authStatus === "signingOut") return;
+    if (submitting || authStatus === "signingOut" || navigatingRef.current) {
+      return;
+    }
+
+    blurAuthInputs();
+    setInfoMessage("");
+    setErrorMessage("");
+    await settleKeyboard();
 
     setSubmitting(true);
-    setErrorMessage("");
+    let navigationPending = false;
 
     try {
-      if (authMode === "signin") {
-        await login();
+      navigationPending =
+        authMode === "signin" ? await login() : await signUp();
+
+      if (navigationPending) {
         return;
       }
-
-      await signUp();
     } catch (error) {
-      const message =
+      setErrorMessage(
         error instanceof Error
           ? error.message
-          : "Unable to reach the sign-in service right now.";
-      setErrorMessage(message);
-      Alert.alert("Login Error", message);
+          : "Unable to reach the sign-in service right now.",
+      );
     } finally {
-      setSubmitting(false);
+      if (!navigationPending) {
+        setSubmitting(false);
+      }
     }
+  }
+
+  async function handlePasswordSubmit() {
+    blurAuthInputs();
+    await settleKeyboard();
+    await submitAuth();
   }
 
   return (
@@ -281,6 +369,29 @@ export default function LoginScreen() {
           </View>
         ) : null}
 
+        {infoMessage ? (
+          <View
+            style={{
+              borderWidth: 1,
+              borderColor: "rgba(37,99,235,0.26)",
+              backgroundColor: "rgba(37,99,235,0.10)",
+              borderRadius: 14,
+              padding: 12,
+              marginBottom: 16,
+            }}
+          >
+            <Text
+              style={{
+                color: colors.text,
+                fontWeight: "800",
+                lineHeight: 20,
+              }}
+            >
+              {infoMessage}
+            </Text>
+          </View>
+        ) : null}
+
         {errorMessage ? (
           <View
             style={{
@@ -305,22 +416,56 @@ export default function LoginScreen() {
         ) : null}
 
         <AppTextInput
+          ref={emailRef}
           label="Email"
           value={email}
-          onChangeText={setEmail}
+          onChangeText={(value) => {
+            setEmail(value);
+            setErrorMessage("");
+            setInfoMessage("");
+          }}
           autoCapitalize="none"
           autoCorrect={false}
           keyboardType="email-address"
           placeholder="you@email.com"
+          autoFocus={false}
+          returnKeyType="next"
+          blurOnSubmit={false}
+          onFocus={() => {
+            emailFocusedRef.current = true;
+          }}
+          onBlur={() => {
+            emailFocusedRef.current = false;
+          }}
+          onSubmitEditing={() => {
+            emailRef.current?.blur();
+            passwordRef.current?.focus();
+          }}
         />
 
         <AppTextInput
+          ref={passwordRef}
           label="Password"
           value={password}
-          onChangeText={setPassword}
+          onChangeText={(value) => {
+            setPassword(value);
+            setErrorMessage("");
+            setInfoMessage("");
+          }}
           secureTextEntry
           placeholder="Password"
           containerStyle={{ marginBottom: 20 }}
+          autoFocus={false}
+          returnKeyType={authMode === "signin" ? "done" : "go"}
+          onFocus={() => {
+            passwordFocusedRef.current = true;
+          }}
+          onBlur={() => {
+            passwordFocusedRef.current = false;
+          }}
+          onSubmitEditing={() => {
+            void handlePasswordSubmit();
+          }}
         />
 
         <AppButton
@@ -342,6 +487,7 @@ export default function LoginScreen() {
           disabled={submitting || authStatus === "signingOut"}
           onPress={() => {
             setErrorMessage("");
+            setInfoMessage("");
             setAuthMode((current) =>
               current === "signin" ? "signup" : "signin",
             );

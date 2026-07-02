@@ -1,6 +1,6 @@
 import { Stack, useRouter, useSegments } from "expo-router";
 import { useEffect, useRef, type ReactNode } from "react";
-import { AppState, Linking } from "react-native";
+import { AppState, Keyboard, Linking, TextInput } from "react-native";
 import { GestureHandlerRootView } from "react-native-gesture-handler";
 import { SafeAreaProvider } from "react-native-safe-area-context";
 import { AuthSessionProvider, useAuthSession } from "../lib/authSession";
@@ -109,11 +109,36 @@ function PushNotificationsBootstrap() {
   return null;
 }
 
+async function settleKeyboard() {
+  Keyboard.dismiss();
+  await new Promise((resolve) => setTimeout(resolve, 100));
+  await new Promise<void>((resolve) => {
+    requestAnimationFrame(() => resolve());
+  });
+}
+
+function hasFocusedInput() {
+  return Boolean(TextInput.State.currentlyFocusedInput?.());
+}
+
+async function waitForBlurredInputs() {
+  for (let attempt = 0; attempt < 3; attempt += 1) {
+    const focusedInput = TextInput.State.currentlyFocusedInput?.();
+    focusedInput?.blur?.();
+    await settleKeyboard();
+
+    if (!hasFocusedInput()) {
+      return;
+    }
+  }
+}
+
 function AuthRouteGuard() {
   const router = useRouter();
   const segments = useSegments();
   const routeKey = segments.join("/");
   const { authStatus, isHydrated, userId } = useAuthSession();
+  const redirectingToLoginRef = useRef(false);
 
   useEffect(() => {
     const firstSegment = segments[0];
@@ -131,7 +156,30 @@ function AuthRouteGuard() {
     if (isPublicRoute || !isHydrated) return;
 
     if (authStatus === "unauthenticated" && !userId) {
-      router.replace("/login" as any);
+      if (redirectingToLoginRef.current) {
+        return;
+      }
+
+      let cancelled = false;
+      redirectingToLoginRef.current = true;
+
+      async function redirectToLogin() {
+        try {
+          await waitForBlurredInputs();
+          await settleKeyboard();
+          if (!cancelled) {
+            router.replace("/login" as any);
+          }
+        } finally {
+          redirectingToLoginRef.current = false;
+        }
+      }
+
+      void redirectToLogin();
+
+      return () => {
+        cancelled = true;
+      };
     }
   }, [authStatus, isHydrated, routeKey, router, segments, userId]);
 
