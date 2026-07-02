@@ -2,6 +2,7 @@ import Constants from "expo-constants";
 import * as Notifications from "expo-notifications";
 import * as SecureStore from "expo-secure-store";
 import { Platform } from "react-native";
+import { shouldSkipAuthNativeWork } from "./authNativeIsolation";
 import { emitClientMessageReceived } from "./clientMessageEvents";
 import {
   getClientMessageRouteFromNotification,
@@ -75,6 +76,13 @@ export function configureSchedovaNotificationHandler() {
 
 export async function syncUserTimezone(userId: string) {
   if (!userId) return;
+  if (shouldSkipAuthNativeWork(userId)) {
+    console.log("[AuthNative] skipped push during transition", {
+      operation: "syncUserTimezone",
+      userId,
+    });
+    return;
+  }
 
   const timezone = Intl.DateTimeFormat().resolvedOptions().timeZone;
 
@@ -103,6 +111,13 @@ export async function syncUserTimezone(userId: string) {
 
 export async function registerForPushNotifications(userId: string) {
   if (!userId || Platform.OS === "web") return null;
+  if (shouldSkipAuthNativeWork(userId)) {
+    console.log("[AuthNative] skipped push during transition", {
+      operation: "registerForPushNotifications",
+      userId,
+    });
+    return null;
+  }
 
   configureSchedovaNotificationHandler();
 

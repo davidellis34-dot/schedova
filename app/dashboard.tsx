@@ -30,6 +30,10 @@ import {
   getAppointmentConfirmationStatus,
   type AppointmentReplySummary,
 } from "../lib/appointmentConfirmationStatus";
+import {
+  IOS_AUTH_NATIVE_ISOLATION,
+  scheduleDelayedAuthNativeSync,
+} from "../lib/authNativeIsolation";
 import { useAuthSession } from "../lib/authSession";
 import { sendAppointmentSmsNonBlocking } from "../lib/appointmentSms";
 import { formatClockTime, getCalendarPreferences } from "../lib/calendarPreferences";
@@ -38,8 +42,13 @@ import { confirmDestructiveAction } from "../lib/confirmDestructiveAction";
 import { isSchedovaInternalDebugMode } from "../lib/debugMode";
 import { canUseFeature, useFeatureAccess } from "../lib/featureAccess";
 import { cancelAppointmentReminder } from "../lib/localNotifications";
+import {
+  registerForPushNotifications,
+  syncUserTimezone,
+} from "../lib/pushNotifications";
 import { ENABLE_PRO } from "../lib/proFeatureFlag";
 import { openSchedovaProScreen } from "../lib/proUpsell";
+import { useSubscription } from "../lib/revenuecat/SubscriptionProvider";
 import { supabase } from "../lib/supabase";
 import { useSmsBalance } from "../lib/useSmsBalance";
 import { useAppTheme } from "../lib/useAppTheme";
@@ -69,6 +78,7 @@ export default function Dashboard() {
   const { width } = useWindowDimensions();
   const { authStatus, isHydrated, user, userId } = useAuthSession();
   const featureAccess = useFeatureAccess();
+  const { syncRevenueCatAfterAuthSettle } = useSubscription();
   const [clients, setClients] = useState<any[]>([]);
   const [statusModalOpen, setStatusModalOpen] = useState(false);
   const [selectedStatusAppointment, setSelectedStatusAppointment] = useState<
@@ -133,6 +143,33 @@ export default function Dashboard() {
     userId,
     subscription: featureAccess.subscription,
   });
+
+  useEffect(() => {
+    if (
+      !IOS_AUTH_NATIVE_ISOLATION ||
+      !isHydrated ||
+      authStatus !== "authenticated" ||
+      !userId
+    ) {
+      return;
+    }
+
+    void scheduleDelayedAuthNativeSync({
+      userId,
+      syncRevenueCat: async () => {
+        await syncRevenueCatAfterAuthSettle();
+      },
+      syncPush: async () => {
+        await syncUserTimezone(userId);
+        await registerForPushNotifications(userId);
+      },
+    });
+  }, [
+    authStatus,
+    isHydrated,
+    syncRevenueCatAfterAuthSettle,
+    userId,
+  ]);
 
   useEffect(() => {
     if (authStatus === "authenticated" && userId) {

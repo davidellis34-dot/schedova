@@ -2,6 +2,7 @@ import { Ionicons } from "@expo/vector-icons";
 import AsyncStorage from "@react-native-async-storage/async-storage";
 import { useFocusEffect, useLocalSearchParams, useRouter } from "expo-router";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { Calendar, type DateData } from "react-native-calendars";
 import {
   Alert,
   Modal,
@@ -712,6 +713,37 @@ function formatAppointmentDateLabel(dateText?: string | null) {
   });
 }
 
+function formatCalendarNavDateLabel(dateText?: string | null) {
+  const date = parseDateOnly(String(dateText || ""));
+
+  return date.toLocaleDateString(undefined, {
+    month: "short",
+    day: "numeric",
+  });
+}
+
+function formatCalendarWeekRangeLabel(
+  startDateText?: string | null,
+  endDateText?: string | null,
+) {
+  const start = parseDateOnly(String(startDateText || ""));
+  const end = parseDateOnly(String(endDateText || ""));
+  const sameYear = start.getFullYear() === end.getFullYear();
+
+  const startLabel = start.toLocaleDateString(undefined, {
+    month: "short",
+    day: "numeric",
+    ...(sameYear ? {} : { year: "numeric" as const }),
+  });
+  const endLabel = end.toLocaleDateString(undefined, {
+    month: "short",
+    day: "numeric",
+    ...(sameYear ? {} : { year: "numeric" as const }),
+  });
+
+  return `${startLabel} - ${endLabel}`;
+}
+
 function getAppointmentDisplayPrice(appointment: any, services: any[] = []) {
   if (
     appointment?.final_price !== null &&
@@ -873,6 +905,8 @@ export default function CalendarView() {
   const insets = useSafeAreaInsets();
   const { width, height } = useWindowDimensions();
   const isLandscape = width > height;
+  const isTabletLayout = width >= 768;
+  const isCompactPhone = width < 390;
   const customScheduleAvailable = canUseFeature("customBusinessHours");
   const { selectedDate, selectedTime } = useLocalSearchParams();
 
@@ -908,6 +942,7 @@ export default function CalendarView() {
       : "today",
   );
   const [filterModalVisible, setFilterModalVisible] = useState(false);
+  const [datePickerVisible, setDatePickerVisible] = useState(false);
   const [actionAppointment, setActionAppointment] = useState<any | null>(null);
   const [statusMenuAppointment, setStatusMenuAppointment] =
     useState<any | null>(null);
@@ -973,6 +1008,17 @@ export default function CalendarView() {
   const polishedBorder = isDarkTheme
     ? "rgba(148, 163, 184, 0.28)"
     : "rgba(15, 23, 42, 0.12)";
+  const navigationWeekStart = weekDates[0]?.date;
+  const navigationWeekEnd = weekDates[weekDates.length - 1]?.date;
+  const navigationSideButtonWidth = isTabletLayout
+    ? 118
+    : isCompactPhone
+      ? 84
+      : 92;
+  const datePickerCardWidth = Math.min(
+    width - (isTabletLayout ? 80 : 24),
+    isTabletLayout ? 540 : 380,
+  );
 
   const getStatusColor = (status?: string) => {
     switch (status) {
@@ -1050,6 +1096,31 @@ export default function CalendarView() {
   const selectedGridDate = effectiveSelectedDate;
   const selectedGridDay =
     weekDates.find((item) => item.date === selectedGridDate) || weekDates[0];
+  const navigationCenterLabel = useMemo(() => {
+    if (isTabletLayout && navigationWeekStart && navigationWeekEnd) {
+      return formatCalendarWeekRangeLabel(
+        navigationWeekStart,
+        navigationWeekEnd,
+      );
+    }
+
+    return formatCalendarNavDateLabel(selectedGridDate);
+  }, [
+    isTabletLayout,
+    navigationWeekEnd,
+    navigationWeekStart,
+    selectedGridDate,
+  ]);
+  const markedJumpToDate = useMemo(
+    () => ({
+      [selectedGridDate]: {
+        selected: true,
+        selectedColor: infoAccent,
+        selectedTextColor: "#FFFFFF",
+      },
+    }),
+    [infoAccent, selectedGridDate],
+  );
   const selectedGridAppointments = useMemo(
     () =>
       sortAppointmentsChronologically(
@@ -2115,6 +2186,37 @@ export default function CalendarView() {
       ...current,
       [date]: true,
     }));
+  }
+
+  function closeDatePicker() {
+    setDatePickerVisible(false);
+  }
+
+  function openDatePicker() {
+    try {
+      setDatePickerVisible(true);
+    } catch (error) {
+      if (__DEV__) {
+        console.warn("[Calendar] Unable to open jump-to-date picker", error);
+      }
+    }
+  }
+
+  function jumpToDate(date: string) {
+    hasAutoScrolled.current = false;
+    setSearchQuery("");
+    setSearchFilter("selected_day");
+    selectGridDate(date);
+    closeDatePicker();
+  }
+
+  function handleDatePickerDayPress(day: DateData) {
+    if (!day?.dateString) {
+      closeDatePicker();
+      return;
+    }
+
+    jumpToDate(day.dateString);
   }
 
   function renderGridAppointment(appointment: any, compact = false) {
@@ -3515,21 +3617,30 @@ export default function CalendarView() {
           </View>
         ) : null}
 
-        <View style={{ flexDirection: "row", gap: 10, marginBottom: 16 }}>
+        <View
+          style={{
+            flexDirection: "row",
+            alignItems: "stretch",
+            gap: 10,
+            marginBottom: 12,
+          }}
+        >
           <Pressable
             onPress={() => {
               hasAutoScrolled.current = false;
               setWeekOffset((current) => current - 1);
             }}
             style={{
-              flex: 1,
+              width: navigationSideButtonWidth,
               backgroundColor: "#243047",
               borderWidth: 1,
               borderColor: colors.border,
-              padding: 10,
-              marginBottom: 6,
+              minHeight: isTabletLayout ? 50 : 46,
               borderRadius: 10,
               alignItems: "center",
+              justifyContent: "center",
+              paddingHorizontal: 12,
+              paddingVertical: 10,
             }}
           >
             <Text style={{ color: "#FFFFFF", fontWeight: "bold" }}>
@@ -3538,25 +3649,49 @@ export default function CalendarView() {
           </Pressable>
 
           <Pressable
-            onPress={() => {
-              hasAutoScrolled.current = false;
-              setBaseDate(todayIso());
-              setWeekOffset(0);
-            }}
+            accessibilityRole="button"
+            accessibilityLabel={`Jump to date. Current selection ${navigationCenterLabel}`}
+            onPress={openDatePicker}
             style={{
               flex: 1,
               backgroundColor: "#243047",
               borderWidth: 1,
               borderColor: colors.border,
-              padding: 10,
-              marginBottom: 6,
+              minHeight: isTabletLayout ? 52 : 46,
               borderRadius: 10,
               alignItems: "center",
+              justifyContent: "center",
+              paddingHorizontal: isTabletLayout ? 18 : 12,
+              paddingVertical: 10,
             }}
           >
-            <Text style={{ color: "#FFFFFF", fontWeight: "bold" }}>
-              This Week
-            </Text>
+            <View
+              style={{
+                flexDirection: "row",
+                alignItems: "center",
+                justifyContent: "center",
+                gap: 6,
+                width: "100%",
+              }}
+            >
+              <Text
+                numberOfLines={1}
+                style={{
+                  color: "#FFFFFF",
+                  fontSize: isTabletLayout ? 16 : 14,
+                  fontWeight: "900",
+                  textAlign: "center",
+                  flexShrink: 1,
+                }}
+              >
+                {navigationCenterLabel}
+              </Text>
+              <Ionicons
+                name="chevron-down"
+                size={isTabletLayout ? 18 : 16}
+                color="#FFFFFF"
+              />
+            </View>
           </Pressable>
 
           <Pressable
@@ -3565,14 +3700,16 @@ export default function CalendarView() {
               setWeekOffset((current) => current + 1);
             }}
             style={{
-              flex: 1,
+              width: navigationSideButtonWidth,
               backgroundColor: "#243047",
               borderWidth: 1,
               borderColor: colors.border,
-              padding: 10,
-              marginBottom: 6,
+              minHeight: isTabletLayout ? 50 : 46,
               borderRadius: 10,
               alignItems: "center",
+              justifyContent: "center",
+              paddingHorizontal: 12,
+              paddingVertical: 10,
             }}
           >
             <Text style={{ color: "#FFFFFF", fontWeight: "bold" }}>Next</Text>
@@ -4281,6 +4418,179 @@ export default function CalendarView() {
                 </Pressable>
               );
             })}
+          </Pressable>
+        </Pressable>
+      </Modal>
+
+      <Modal
+        visible={datePickerVisible}
+        transparent
+        animationType="fade"
+        onRequestClose={closeDatePicker}
+      >
+        <Pressable
+          onPress={closeDatePicker}
+          style={{
+            flex: 1,
+            backgroundColor: "rgba(0,0,0,0.55)",
+            justifyContent: isTabletLayout ? "center" : "flex-end",
+            padding: isTabletLayout ? 24 : 16,
+          }}
+        >
+          <Pressable
+            onPress={(event) => event.stopPropagation()}
+            style={{
+              alignSelf: "center",
+              width: datePickerCardWidth,
+              maxWidth: "100%",
+              backgroundColor: colors.card,
+              borderColor: colors.border,
+              borderWidth: 1,
+              borderRadius: isTabletLayout ? 22 : 18,
+              padding: isTabletLayout ? 18 : 14,
+              marginBottom: isTabletLayout ? 0 : insets.bottom + 10,
+            }}
+          >
+            <View
+              style={{
+                flexDirection: "row",
+                alignItems: "center",
+                justifyContent: "space-between",
+                gap: 12,
+                marginBottom: 12,
+              }}
+            >
+              <View style={{ flex: 1 }}>
+                <Text
+                  style={{
+                    color: colors.text,
+                    fontSize: isTabletLayout ? 20 : 18,
+                    fontWeight: "900",
+                  }}
+                >
+                  Jump to date
+                </Text>
+                <Text
+                  style={{
+                    color: colors.mutedText,
+                    fontSize: 13,
+                    fontWeight: "700",
+                    marginTop: 4,
+                  }}
+                >
+                  Pick any day to move the calendar to that week.
+                </Text>
+              </View>
+
+              <Pressable
+                accessibilityLabel="Close jump-to-date picker"
+                onPress={closeDatePicker}
+                style={{
+                  width: 36,
+                  height: 36,
+                  borderRadius: 18,
+                  alignItems: "center",
+                  justifyContent: "center",
+                  backgroundColor: infoAccentSoft,
+                  borderWidth: 1,
+                  borderColor: infoAccentBorder,
+                }}
+              >
+                <Ionicons name="close" size={18} color={infoAccent} />
+              </Pressable>
+            </View>
+
+            <View
+              style={{
+                borderWidth: 1,
+                borderColor: polishedBorder,
+                borderRadius: 16,
+                overflow: "hidden",
+                backgroundColor: colors.background,
+              }}
+            >
+              <Calendar
+                current={selectedGridDate}
+                enableSwipeMonths
+                markedDates={markedJumpToDate}
+                onDayPress={handleDatePickerDayPress}
+                style={{
+                  paddingBottom: isTabletLayout ? 10 : 6,
+                }}
+                theme={{
+                  calendarBackground: colors.background,
+                  monthTextColor: colors.text,
+                  textMonthFontWeight: "900",
+                  textMonthFontSize: isTabletLayout ? 18 : 16,
+                  dayTextColor: colors.text,
+                  textDayFontWeight: "700",
+                  textDayFontSize: isTabletLayout ? 17 : 15,
+                  textDisabledColor: colors.mutedText,
+                  textSectionTitleColor: colors.mutedText,
+                  todayTextColor: infoAccent,
+                  selectedDayBackgroundColor: infoAccent,
+                  selectedDayTextColor: "#FFFFFF",
+                  arrowColor: infoAccent,
+                  indicatorColor: infoAccent,
+                }}
+              />
+            </View>
+
+            <View
+              style={{
+                flexDirection: "row",
+                gap: 10,
+                marginTop: 14,
+              }}
+            >
+              <Pressable
+                onPress={() => jumpToDate(todayIso())}
+                style={{
+                  flex: 1,
+                  minHeight: isTabletLayout ? 48 : 44,
+                  backgroundColor: infoAccentSoft,
+                  borderColor: infoAccentBorder,
+                  borderWidth: 1,
+                  borderRadius: 14,
+                  alignItems: "center",
+                  justifyContent: "center",
+                  paddingHorizontal: 12,
+                }}
+              >
+                <Text
+                  style={{
+                    color: infoAccent,
+                    fontWeight: "900",
+                  }}
+                >
+                  Today
+                </Text>
+              </Pressable>
+
+              <Pressable
+                onPress={closeDatePicker}
+                style={{
+                  flex: 1,
+                  minHeight: isTabletLayout ? 48 : 44,
+                  backgroundColor: colors.background,
+                  borderColor: polishedBorder,
+                  borderWidth: 1,
+                  borderRadius: 14,
+                  alignItems: "center",
+                  justifyContent: "center",
+                  paddingHorizontal: 12,
+                }}
+              >
+                <Text
+                  style={{
+                    color: colors.text,
+                    fontWeight: "900",
+                  }}
+                >
+                  Close
+                </Text>
+              </Pressable>
+            </View>
           </Pressable>
         </Pressable>
       </Modal>

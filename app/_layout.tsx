@@ -3,6 +3,10 @@ import { useEffect, useRef, type ReactNode } from "react";
 import { AppState, Keyboard, Linking, TextInput } from "react-native";
 import { GestureHandlerRootView } from "react-native-gesture-handler";
 import { SafeAreaProvider } from "react-native-safe-area-context";
+import {
+  IOS_AUTH_NATIVE_ISOLATION,
+  beginAuthNativeTransition,
+} from "../lib/authNativeIsolation";
 import { AuthSessionProvider, useAuthSession } from "../lib/authSession";
 import {
   clearFeatureAccess,
@@ -64,9 +68,18 @@ function FeatureAccessBootstrap() {
 function PushNotificationsBootstrap() {
   const router = useRouter();
   const handledInitialNotification = useRef(false);
-  const { isHydrated, userId } = useAuthSession();
+  const { authStatus, isHydrated, userId } = useAuthSession();
 
   useEffect(() => {
+    if (IOS_AUTH_NATIVE_ISOLATION) {
+      console.log("[AuthNative] skipped push during transition", {
+        source: "PushNotificationsBootstrap",
+        authStatus,
+        userId: userId ?? null,
+      });
+      return;
+    }
+
     if (!isHydrated || !userId) return;
 
     void syncUserTimezone(userId).catch((error) => {
@@ -79,7 +92,7 @@ function PushNotificationsBootstrap() {
         console.log("Push registration bootstrap failed", error);
       }
     });
-  }, [isHydrated, userId]);
+  }, [authStatus, isHydrated, userId]);
 
   useEffect(() => {
     const removeListeners = addClientMessageNotificationListeners({
@@ -105,6 +118,31 @@ function PushNotificationsBootstrap() {
 
     return removeListeners;
   }, [router]);
+
+  return null;
+}
+
+function AuthNativeTransitionBootstrap() {
+  const { authStatus, isHydrated, userId } = useAuthSession();
+  const lastAuthKeyRef = useRef<string | null>(null);
+
+  useEffect(() => {
+    if (!IOS_AUTH_NATIVE_ISOLATION || !isHydrated) {
+      return;
+    }
+
+    const authKey = `${authStatus}:${userId ?? "none"}`;
+
+    if (lastAuthKeyRef.current === authKey) {
+      return;
+    }
+
+    lastAuthKeyRef.current = authKey;
+    beginAuthNativeTransition(
+      `auth-state:${authStatus}`,
+      authStatus === "authenticated" ? userId ?? null : null,
+    );
+  }, [authStatus, isHydrated, userId]);
 
   return null;
 }
@@ -229,6 +267,7 @@ export default function RootLayout() {
       <GestureHandlerRootView style={{ flex: 1 }}>
         <SafeAreaProvider>
           <RevenueCatBootstrap>
+            <AuthNativeTransitionBootstrap />
             <FeatureAccessBootstrap />
             <PushNotificationsBootstrap />
             <AuthRouteGuard />

@@ -13,6 +13,10 @@ import { Alert } from "react-native";
 import type { CustomerInfo } from "react-native-purchases";
 
 import {
+  IOS_AUTH_NATIVE_ISOLATION,
+  shouldSkipAuthNativeWork,
+} from "../authNativeIsolation";
+import {
   refreshFeatureAccess,
   setRevenueCatFeatureAccess,
   useFeatureAccess,
@@ -65,6 +69,7 @@ type SubscriptionContextValue = {
   prefetchSubscriptionData: () => Promise<CustomerInfo | null>;
   refresh: () => Promise<CustomerInfo | null>;
   forceRevenueCatRefresh: () => Promise<CustomerInfo | null>;
+  syncRevenueCatAfterAuthSettle: () => Promise<CustomerInfo | null>;
   recoverProForCurrentUser: () => Promise<boolean>;
   restore: () => Promise<boolean>;
   showPaywall: () => Promise<boolean>;
@@ -168,10 +173,14 @@ export function SubscriptionProvider({
   const activeUserIdRef = useRef<string | null>(null);
   const cachedRevenueCatUserIdRef = useRef<string | null>(null);
   const lastKnownProByUserRef = useRef<Record<string, boolean>>({});
-  const latestAuthReadyRef = useRef(authReady);
   const latestUserIdRef = useRef<string | null>(userId ?? null);
   const initRunIdRef = useRef(0);
   const customerInfoListenerRunIdRef = useRef(0);
+  const customerInfoListenerRemoveRef = useRef<(() => void) | null>(null);
+  const delayedAuthSyncPromiseRef = useRef<Promise<CustomerInfo | null> | null>(
+    null,
+  );
+  const delayedAuthSyncRunIdRef = useRef(0);
 
   const lastKnownProForCurrentUser =
     Boolean(userId) &&
@@ -182,8 +191,43 @@ export function SubscriptionProvider({
   const activeSupabaseSchedovaPro = hasSchedovaProAccess(
     featureAccess.subscription,
   );
-  latestAuthReadyRef.current = authReady;
   latestUserIdRef.current = userId ?? null;
+
+  const shouldSkipRevenueCatDuringTransition = useCallback(
+    (source: string, targetUserId?: string | null) => {
+      const activeUserId = targetUserId ?? userId ?? null;
+
+      if (
+        !IOS_AUTH_NATIVE_ISOLATION ||
+        !shouldSkipAuthNativeWork(activeUserId)
+      ) {
+        return false;
+      }
+
+      console.log("[AuthNative] skipped RevenueCat during transition", {
+        source,
+        userId: activeUserId,
+      });
+      return true;
+    },
+    [userId],
+  );
+
+  const clearLocalRevenueCatState = useCallback((source: string) => {
+    activeUserIdRef.current = null;
+    cachedRevenueCatUserIdRef.current =
+      source === "revenuecat:user-switch" ? userId ?? null : null;
+    setCachedRevenueCatIsPro(false);
+    customerInfoRef.current = null;
+    setCustomerInfo(null);
+    setRevenueCatFeatureAccess(false, source);
+    clearLastRevenueCatErrorDetails();
+    setLastRevenueCatError(null);
+    setLastRestoreAt(null);
+    setLastCustomerInfoRefreshAt(null);
+    lastCustomerInfoRefreshAtRef.current = null;
+    setCustomerInfoFetchStatus("idle");
+  }, [userId]);
 
   const applyCustomerInfo = useCallback(
     async (
@@ -390,6 +434,10 @@ export function SubscriptionProvider({
       info: CustomerInfo | null;
       inactiveConfirmed: boolean;
     }> => {
+      if (shouldSkipRevenueCatDuringTransition(source, activeUserId)) {
+        return { info, inactiveConfirmed: false };
+      }
+
       if (hasSchedovaPro(info)) {
         return { info, inactiveConfirmed: false };
       }
@@ -458,13 +506,18 @@ export function SubscriptionProvider({
         return { info, inactiveConfirmed: false };
       }
     },
-    [activeSupabaseSchedovaPro],
+    [activeSupabaseSchedovaPro, shouldSkipRevenueCatDuringTransition],
   );
 
   const refresh = useCallback(async () => {
     if (!revenueCatSupported) {
       setCustomerInfoFetchStatus("unsupported");
       return null;
+    }
+
+    if (shouldSkipRevenueCatDuringTransition("revenuecat:refresh")) {
+      setCustomerInfoFetchStatus("idle");
+      return customerInfoRef.current;
     }
 
     if (!authReady) {
@@ -510,6 +563,7 @@ export function SubscriptionProvider({
     authReady,
     resolvePotentialInactiveCustomerInfo,
     revenueCatSupported,
+    shouldSkipRevenueCatDuringTransition,
     userId,
   ]);
 
@@ -530,10 +584,81 @@ export function SubscriptionProvider({
     return refresh();
   }, [refresh]);
 
+  const attachCustomerInfoListener = useCallback(
+    async (targetUserId: string) => {
+      if (
+        !revenueCatSupported ||
+        !authReady ||
+        !targetUserId ||
+        shouldSkipRevenueCatDuringTransition(
+          "revenuecat:add-customer-info-listener",
+          targetUserId,
+        )
+      ) {
+        return;
+      }
+
+      customerInfoListenerRemoveRef.current?.();
+      customerInfoListenerRemoveRef.current = null;
+
+      const runId = ++customerInfoListenerRunIdRef.current;
+      const nextRemoveListener = await addCustomerInfoUpdateListener((info) => {
+        void (async () => {
+          try {
+            const { info: resolvedInfo, inactiveConfirmed } =
+              await resolvePotentialInactiveCustomerInfo(
+                info,
+                targetUserId,
+                "revenuecat:update",
+              );
+
+            if (
+              runId !== customerInfoListenerRunIdRef.current ||
+              latestUserIdRef.current !== targetUserId
+            ) {
+              return;
+            }
+
+            await applyCustomerInfo(resolvedInfo, "revenuecat:update", {
+              allowKnownProDowngrade: inactiveConfirmed,
+              allowInactiveSync: inactiveConfirmed,
+            });
+          } catch (error) {
+            logRevenueCatError("RevenueCat customer info update failed", error);
+            setLastRevenueCatError(getRevenueCatErrorDetails(error));
+            setCustomerInfoFetchStatus("error");
+          }
+        })();
+      });
+
+      if (
+        runId !== customerInfoListenerRunIdRef.current ||
+        latestUserIdRef.current !== targetUserId
+      ) {
+        nextRemoveListener();
+        return;
+      }
+
+      customerInfoListenerRemoveRef.current = nextRemoveListener;
+    },
+    [
+      applyCustomerInfo,
+      authReady,
+      resolvePotentialInactiveCustomerInfo,
+      revenueCatSupported,
+      shouldSkipRevenueCatDuringTransition,
+    ],
+  );
+
   const forceRevenueCatRefresh = useCallback(async () => {
     if (!revenueCatSupported) {
       setCustomerInfoFetchStatus("unsupported");
       return null;
+    }
+
+    if (shouldSkipRevenueCatDuringTransition("revenuecat:force-refresh")) {
+      setCustomerInfoFetchStatus("idle");
+      return customerInfoRef.current;
     }
 
     if (!authReady || !userId) {
@@ -587,6 +712,83 @@ export function SubscriptionProvider({
     authReady,
     resolvePotentialInactiveCustomerInfo,
     revenueCatSupported,
+    shouldSkipRevenueCatDuringTransition,
+    userId,
+  ]);
+
+  const syncRevenueCatAfterAuthSettle = useCallback(async () => {
+    if (!revenueCatSupported || !authReady || !userId) {
+      return customerInfoRef.current;
+    }
+
+    if (delayedAuthSyncPromiseRef.current) {
+      return delayedAuthSyncPromiseRef.current;
+    }
+
+    const runId = ++delayedAuthSyncRunIdRef.current;
+
+    const syncPromise = (async () => {
+      setLoading(true);
+      setCustomerInfoFetchStatus("loading");
+
+      try {
+        const loginInfo = await logInRevenueCatUser(userId);
+
+        if (
+          latestUserIdRef.current !== userId ||
+          runId !== delayedAuthSyncRunIdRef.current
+        ) {
+          return customerInfoRef.current;
+        }
+
+        const { info, inactiveConfirmed } =
+          await resolvePotentialInactiveCustomerInfo(
+            loginInfo,
+            userId,
+            "revenuecat:delayed-auth-sync",
+          );
+
+        if (
+          latestUserIdRef.current !== userId ||
+          runId !== delayedAuthSyncRunIdRef.current
+        ) {
+          return customerInfoRef.current;
+        }
+
+        activeUserIdRef.current = userId;
+        await applyCustomerInfo(info, "revenuecat:delayed-auth-sync", {
+          allowKnownProDowngrade: inactiveConfirmed,
+          allowInactiveSync: inactiveConfirmed,
+        });
+        await attachCustomerInfoListener(userId);
+        void logRevenueCatDebugStatus(info);
+
+        return info;
+      } catch (error) {
+        logRevenueCatError("Delayed RevenueCat auth sync failed", error);
+        setLastRevenueCatError(getRevenueCatErrorDetails(error));
+        setCustomerInfoFetchStatus("error");
+        return customerInfoRef.current;
+      } finally {
+        if (
+          latestUserIdRef.current === userId &&
+          runId === delayedAuthSyncRunIdRef.current
+        ) {
+          setLoading(false);
+        }
+
+        delayedAuthSyncPromiseRef.current = null;
+      }
+    })();
+
+    delayedAuthSyncPromiseRef.current = syncPromise;
+    return syncPromise;
+  }, [
+    applyCustomerInfo,
+    attachCustomerInfoListener,
+    authReady,
+    resolvePotentialInactiveCustomerInfo,
+    revenueCatSupported,
     userId,
   ]);
 
@@ -604,6 +806,12 @@ export function SubscriptionProvider({
         "Recovery unavailable",
         "Please sign in before recovering Schedova Pro.",
       );
+      return false;
+    }
+
+    if (
+      shouldSkipRevenueCatDuringTransition("revenuecat:debug-recovery", userId)
+    ) {
       return false;
     }
 
@@ -669,7 +877,13 @@ export function SubscriptionProvider({
       );
       return false;
     }
-  }, [applyCustomerInfo, authReady, revenueCatSupported, userId]);
+  }, [
+    applyCustomerInfo,
+    authReady,
+    revenueCatSupported,
+    shouldSkipRevenueCatDuringTransition,
+    userId,
+  ]);
 
   const prefetchSubscriptionData = useCallback(async () => {
     return getFreshCustomerInfo();
@@ -700,24 +914,17 @@ export function SubscriptionProvider({
             console.log("[RevenueCat] logout called");
           }
 
-          activeUserIdRef.current = null;
-          cachedRevenueCatUserIdRef.current = null;
-          setCachedRevenueCatIsPro(false);
-          customerInfoRef.current = null;
-          setCustomerInfo(null);
-          setRevenueCatFeatureAccess(false, "revenuecat:logout");
-          clearLastRevenueCatErrorDetails();
-          setLastRevenueCatError(null);
-          setLastRestoreAt(null);
+          clearLocalRevenueCatState("revenuecat:logout");
           if (__DEV__) {
             console.log("[RevenueCat] Local subscription state cleared");
           }
-          await logOutRevenueCatUser();
+
+          if (!shouldSkipRevenueCatDuringTransition("revenuecat:logout")) {
+            await logOutRevenueCatUser();
+          }
 
           if (mounted && runId === initRunIdRef.current) {
             setCustomerInfoFetchStatus("idle");
-            setLastCustomerInfoRefreshAt(null);
-            lastCustomerInfoRefreshAtRef.current = null;
           }
 
           return;
@@ -728,14 +935,14 @@ export function SubscriptionProvider({
             console.log("[RevenueCat] Supabase user ID changed:", userId);
           }
 
-          cachedRevenueCatUserIdRef.current = userId;
-          setCachedRevenueCatIsPro(false);
-          customerInfoRef.current = null;
-          setCustomerInfo(null);
-          setRevenueCatFeatureAccess(false, "revenuecat:user-switch");
-          clearLastRevenueCatErrorDetails();
-          setLastRevenueCatError(null);
-          setLastRestoreAt(null);
+          clearLocalRevenueCatState("revenuecat:user-switch");
+        }
+
+        if (shouldSkipRevenueCatDuringTransition("revenuecat:init", userId)) {
+          if (mounted && runId === initRunIdRef.current) {
+            setCustomerInfoFetchStatus("idle");
+          }
+          return;
         }
 
         if (__DEV__) {
@@ -787,76 +994,33 @@ export function SubscriptionProvider({
   }, [
     applyCustomerInfo,
     authReady,
+    clearLocalRevenueCatState,
     resolvePotentialInactiveCustomerInfo,
     revenueCatSupported,
+    shouldSkipRevenueCatDuringTransition,
     userId,
   ]);
 
   useEffect(() => {
-    let removeListener: (() => void) | null = null;
-    let mounted = true;
-    const runId = ++customerInfoListenerRunIdRef.current;
-
-    async function listenForUpdates() {
-      if (!revenueCatSupported || !authReady || !userId) return;
-
-      const nextRemoveListener = await addCustomerInfoUpdateListener((info) => {
-        if (!mounted) return;
-        void (async () => {
-          try {
-            const { info: resolvedInfo, inactiveConfirmed } =
-              await resolvePotentialInactiveCustomerInfo(
-                info,
-                userId,
-                "revenuecat:update",
-              );
-
-            if (
-              !mounted ||
-              runId !== customerInfoListenerRunIdRef.current ||
-              latestUserIdRef.current !== userId
-            ) {
-              return;
-            }
-
-            await applyCustomerInfo(resolvedInfo, "revenuecat:update", {
-              allowKnownProDowngrade: inactiveConfirmed,
-              allowInactiveSync: inactiveConfirmed,
-            });
-          } catch (error) {
-            logRevenueCatError("RevenueCat customer info update failed", error);
-            setLastRevenueCatError(getRevenueCatErrorDetails(error));
-            setCustomerInfoFetchStatus("error");
-          }
-        })();
-      });
-
-      if (
-        !mounted ||
-        runId !== customerInfoListenerRunIdRef.current ||
-        latestUserIdRef.current !== userId
-      ) {
-        nextRemoveListener();
-        return;
-      }
-
-      removeListener = nextRemoveListener;
+    if (!revenueCatSupported || !authReady || !userId) {
+      customerInfoListenerRemoveRef.current?.();
+      customerInfoListenerRemoveRef.current = null;
+      return;
     }
 
-    void listenForUpdates().catch((error) => {
+    void attachCustomerInfoListener(userId).catch((error) => {
       logRevenueCatError("RevenueCat listener attach failed", error);
       setLastRevenueCatError(getRevenueCatErrorDetails(error));
       setCustomerInfoFetchStatus("error");
     });
 
     return () => {
-      mounted = false;
-      removeListener?.();
+      customerInfoListenerRemoveRef.current?.();
+      customerInfoListenerRemoveRef.current = null;
     };
   }, [
-    applyCustomerInfo,
+    attachCustomerInfoListener,
     authReady,
-    resolvePotentialInactiveCustomerInfo,
     revenueCatSupported,
     userId,
   ]);
@@ -875,6 +1039,10 @@ export function SubscriptionProvider({
         "Subscription unavailable",
         "Please sign in before managing Schedova Pro.",
       );
+      return false;
+    }
+
+    if (shouldSkipRevenueCatDuringTransition("revenuecat:restore", userId)) {
       return false;
     }
 
@@ -938,7 +1106,13 @@ export function SubscriptionProvider({
       );
       return false;
     }
-  }, [applyCustomerInfo, authReady, revenueCatSupported, userId]);
+  }, [
+    applyCustomerInfo,
+    authReady,
+    revenueCatSupported,
+    shouldSkipRevenueCatDuringTransition,
+    userId,
+  ]);
 
   const showPaywall = useCallback(async () => {
     if (!ENABLE_PRO) {
@@ -961,6 +1135,10 @@ export function SubscriptionProvider({
         "Subscription unavailable",
         "Please sign in before upgrading to Schedova Pro.",
       );
+      return false;
+    }
+
+    if (shouldSkipRevenueCatDuringTransition("revenuecat:show-paywall", userId)) {
       return false;
     }
 
@@ -1019,6 +1197,7 @@ export function SubscriptionProvider({
     getFreshCustomerInfo,
     resolvePotentialInactiveCustomerInfo,
     revenueCatSupported,
+    shouldSkipRevenueCatDuringTransition,
     userId,
   ]);
 
@@ -1045,6 +1224,15 @@ export function SubscriptionProvider({
         "Schedova Pro",
         "Please sign in before upgrading to Schedova Pro.",
       );
+      return false;
+    }
+
+    if (
+      shouldSkipRevenueCatDuringTransition(
+        "revenuecat:show-paywall-if-needed",
+        userId,
+      )
+    ) {
       return false;
     }
 
@@ -1103,6 +1291,7 @@ export function SubscriptionProvider({
     getFreshCustomerInfo,
     resolvePotentialInactiveCustomerInfo,
     revenueCatSupported,
+    shouldSkipRevenueCatDuringTransition,
     userId,
   ]);
 
@@ -1120,6 +1309,15 @@ export function SubscriptionProvider({
         "Subscription management unavailable",
         "Please sign in before managing your subscription.",
       );
+      return;
+    }
+
+    if (
+      shouldSkipRevenueCatDuringTransition(
+        "revenuecat:show-customer-center",
+        userId,
+      )
+    ) {
       return;
     }
 
@@ -1157,6 +1355,7 @@ export function SubscriptionProvider({
     getFreshCustomerInfo,
     refresh,
     revenueCatSupported,
+    shouldSkipRevenueCatDuringTransition,
     userId,
   ]);
 
@@ -1176,6 +1375,7 @@ export function SubscriptionProvider({
       prefetchSubscriptionData,
       refresh,
       forceRevenueCatRefresh,
+      syncRevenueCatAfterAuthSettle,
       recoverProForCurrentUser,
       restore,
       showPaywall,
@@ -1197,6 +1397,7 @@ export function SubscriptionProvider({
       prefetchSubscriptionData,
       refresh,
       forceRevenueCatRefresh,
+      syncRevenueCatAfterAuthSettle,
       recoverProForCurrentUser,
       restore,
       showPaywall,
