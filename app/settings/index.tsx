@@ -14,6 +14,7 @@ import { isSchedovaInternalDebugMode } from "../../lib/debugMode";
 import { isDemoScreenshotModeAvailable } from "../../lib/demoData";
 import { useAuthSession } from "../../lib/authSession";
 import { useFeatureAccess } from "../../lib/featureAccess";
+import { canChangePassword } from "../../lib/mobileAuth";
 import { ENABLE_PRO } from "../../lib/proFeatureFlag";
 import {
   getSchedovaProFriendlyStatus,
@@ -42,6 +43,7 @@ export default function SettingsScreen() {
     authStatus,
     isAuthTransitioning,
     signOut,
+    user,
     userEmail: authUserEmail,
     userId: authUserId,
   } = useAuthSession();
@@ -71,6 +73,7 @@ export default function SettingsScreen() {
     ? "rgba(148, 163, 184, 0.28)"
     : "rgba(15, 23, 42, 0.12)";
   const hasLifetimeAccess = hasAdminLifetimeSchedovaProAccess(subscription);
+  const passwordChangeVisible = canChangePassword(user);
   const proUiVisible = true;
   const proSubtitle = hasLifetimeAccess
     ? "Lifetime access"
@@ -375,6 +378,16 @@ export default function SettingsScreen() {
           }
           style={rowStyle()}
         />
+        {passwordChangeVisible ? (
+          <ListRow
+            title="Change Password"
+            subtitle="Update the password for this Schedova account."
+            leftIcon={<IconBadge name="key-outline" />}
+            right={<Chevron />}
+            onPress={() => router.push("/settings/change-password" as any)}
+            style={rowStyle()}
+          />
+        ) : null}
         <ListRow
           title="Sign Out / Switch Account"
           subtitle={

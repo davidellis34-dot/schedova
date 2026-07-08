@@ -60,7 +60,6 @@ export default function ClientsScreen() {
         if (!userId) {
           setClients([]);
           setLoadingClients(false);
-          router.replace("/login" as any);
           return;
         }
 
@@ -88,7 +87,7 @@ export default function ClientsScreen() {
       return () => {
         isActive = false;
       };
-    }, [isHydrated, router, userId]),
+    }, [isHydrated, userId]),
   );
 
   const filteredClients = clients.filter((client) => {

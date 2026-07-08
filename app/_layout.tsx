@@ -1,6 +1,13 @@
 import { Stack, useRouter, useSegments } from "expo-router";
 import { useEffect, useRef, type ReactNode } from "react";
-import { AppState, Keyboard, Linking, TextInput } from "react-native";
+import {
+  AppState,
+  InteractionManager,
+  Keyboard,
+  Linking,
+  Platform,
+  TextInput,
+} from "react-native";
 import { GestureHandlerRootView } from "react-native-gesture-handler";
 import { SafeAreaProvider } from "react-native-safe-area-context";
 import {
@@ -8,6 +15,10 @@ import {
   beginAuthNativeTransition,
 } from "../lib/authNativeIsolation";
 import { AuthSessionProvider, useAuthSession } from "../lib/authSession";
+import {
+  getAuthRouteKey,
+  resolveAuthenticatedAppRoute,
+} from "../lib/authRouting";
 import {
   clearFeatureAccess,
   refreshFeatureAccess,
@@ -171,55 +182,142 @@ async function waitForBlurredInputs() {
   }
 }
 
-function AuthRouteGuard() {
+async function waitForAuthNavigationWindow() {
+  await new Promise<void>((resolve) => {
+    InteractionManager.runAfterInteractions(() => resolve());
+  });
+
+  if (Platform.OS === "ios") {
+    await new Promise((resolve) => setTimeout(resolve, 180));
+  }
+
+  await new Promise<void>((resolve) => {
+    requestAnimationFrame(() => resolve());
+  });
+}
+
+function AuthNavigationCoordinator() {
   const router = useRouter();
   const segments = useSegments();
   const routeKey = segments.join("/");
-  const { authStatus, isHydrated, userId } = useAuthSession();
-  const redirectingToLoginRef = useRef(false);
+  const {
+    authStatus,
+    authTransitionState,
+    isHydrated,
+    userId,
+  } = useAuthSession();
+  const pendingTargetRef = useRef<string | null>(null);
+  const mountedRef = useRef(true);
+
+  useEffect(() => {
+    return () => {
+      mountedRef.current = false;
+    };
+  }, []);
+
+  useEffect(() => {
+    pendingTargetRef.current = null;
+  }, [routeKey]);
 
   useEffect(() => {
     const firstSegment = segments[0];
+    const isAuthEntryRoute =
+      !firstSegment || firstSegment === "index" || firstSegment === "login";
     const isPublicRoute =
-      !firstSegment ||
-      firstSegment === "index" ||
-      firstSegment === "login" ||
+      isAuthEntryRoute ||
       firstSegment === "preview" ||
-      firstSegment === "country-region" ||
       firstSegment === "privacy-policy" ||
-      firstSegment === "delete-account" ||
+      firstSegment === "reset-password" ||
       firstSegment === "terms" ||
       firstSegment === "+not-found";
 
-    if (isPublicRoute || !isHydrated) return;
+    if (!isHydrated || authStatus === "loading") {
+      return;
+    }
 
-    if (authStatus === "unauthenticated" && !userId) {
-      if (redirectingToLoginRef.current) {
+    let cancelled = false;
+
+    async function replaceRoute(
+      target:
+        | "/login"
+        | "/dashboard"
+        | "/onboarding"
+        | {
+            pathname: "/country-region";
+            params: { next: "/dashboard" | "/onboarding" };
+          },
+    ) {
+      const targetKey = getAuthRouteKey(target);
+
+      if (routeKey === targetKey || pendingTargetRef.current === targetKey) {
         return;
       }
 
-      let cancelled = false;
-      redirectingToLoginRef.current = true;
+      pendingTargetRef.current = targetKey;
 
-      async function redirectToLogin() {
-        try {
-          await waitForBlurredInputs();
-          await settleKeyboard();
-          if (!cancelled) {
-            router.replace("/login" as any);
-          }
-        } finally {
-          redirectingToLoginRef.current = false;
-        }
+      if (__DEV__) {
+        console.log("[AuthNavigation] replace scheduled", {
+          authStatus,
+          authTransitionState,
+          from: routeKey || "index",
+          to: targetKey,
+        });
       }
 
-      void redirectToLogin();
+      try {
+        await waitForBlurredInputs();
+        await settleKeyboard();
+        await waitForAuthNavigationWindow();
+
+        if (cancelled || !mountedRef.current) {
+          return;
+        }
+
+        router.replace(target as any);
+      } finally {
+        if ((cancelled || !mountedRef.current) && pendingTargetRef.current === targetKey) {
+          pendingTargetRef.current = null;
+        }
+      }
+    }
+
+    if (authStatus === "unauthenticated" && !userId) {
+      if (authTransitionState === "signingIn" || isPublicRoute) {
+        return;
+      }
+
+      void replaceRoute("/login");
+      return () => {
+        cancelled = true;
+      };
+    }
+
+    if (authStatus === "authenticated" && userId && isAuthEntryRoute) {
+      async function redirectAuthenticatedUser() {
+        const targetRoute = await resolveAuthenticatedAppRoute();
+
+        if (cancelled) {
+          return;
+        }
+
+        await replaceRoute(targetRoute);
+      }
+
+      void redirectAuthenticatedUser();
 
       return () => {
         cancelled = true;
       };
     }
-  }, [authStatus, isHydrated, routeKey, router, segments, userId]);
+  }, [
+    authStatus,
+    authTransitionState,
+    isHydrated,
+    routeKey,
+    router,
+    segments,
+    userId,
+  ]);
 
   return null;
 }
@@ -270,14 +368,23 @@ export default function RootLayout() {
             <AuthNativeTransitionBootstrap />
             <FeatureAccessBootstrap />
             <PushNotificationsBootstrap />
-            <AuthRouteGuard />
+            <AuthNavigationCoordinator />
             <SchedovaDeepLinkHandler />
-            <Stack screenOptions={{ headerShown: false }}>
+            <Stack
+              screenOptions={{
+                freezeOnBlur: Platform.OS === "ios" ? false : undefined,
+                headerShown: false,
+              }}
+            >
               <Stack.Screen name="dashboard" options={{ headerShown: false }} />
               <Stack.Screen name="demo-data" options={{ headerShown: false }} />
               <Stack.Screen name="index" options={{ headerShown: false }} />
               <Stack.Screen name="login" options={{ headerShown: false }} />
               <Stack.Screen name="preview" options={{ headerShown: false }} />
+              <Stack.Screen
+                name="reset-password"
+                options={{ headerShown: false }}
+              />
               <Stack.Screen
                 name="book-appointment"
                 options={{ headerShown: false }}
@@ -295,6 +402,10 @@ export default function RootLayout() {
               />
               <Stack.Screen
                 name="settings/index"
+                options={{ headerShown: false }}
+              />
+              <Stack.Screen
+                name="settings/change-password"
                 options={{ headerShown: false }}
               />
               <Stack.Screen

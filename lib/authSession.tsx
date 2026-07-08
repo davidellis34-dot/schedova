@@ -20,15 +20,20 @@ type AuthStatus =
   | "unauthenticated"
   | "signingOut";
 
+type AuthTransitionState = "idle" | "signingIn" | "signingOut";
+
 type AuthSessionContextValue = {
   isHydrated: boolean;
   authStatus: AuthStatus;
+  authTransitionState: AuthTransitionState;
   isAuthenticated: boolean;
   isAuthTransitioning: boolean;
   session: Session | null;
   user: User | null;
   userId: string | null;
   userEmail: string | null;
+  beginSignInTransition: () => void;
+  cancelAuthTransition: () => void;
   signOut: () => Promise<{ error: Error | null }>;
 };
 
@@ -38,6 +43,8 @@ export function AuthSessionProvider({ children }: { children: ReactNode }) {
   const [isHydrated, setIsHydrated] = useState(false);
   const [session, setSession] = useState<Session | null>(null);
   const [authStatus, setAuthStatus] = useState<AuthStatus>("loading");
+  const [authTransitionState, setAuthTransitionState] =
+    useState<AuthTransitionState>("idle");
   const signOutPromiseRef = useRef<Promise<{ error: Error | null }> | null>(
     null,
   );
@@ -72,6 +79,7 @@ export function AuthSessionProvider({ children }: { children: ReactNode }) {
       setSession(nextSession);
       setIsHydrated(true);
       setAuthStatus(nextSession ? "authenticated" : "unauthenticated");
+      setAuthTransitionState("idle");
 
       if (!nextSession) {
         resolvePendingSignOuts();
@@ -79,6 +87,18 @@ export function AuthSessionProvider({ children }: { children: ReactNode }) {
     },
     [resolvePendingSignOuts],
   );
+
+  const beginSignInTransition = useCallback(() => {
+    setAuthTransitionState((current) =>
+      current === "signingOut" ? current : "signingIn",
+    );
+  }, []);
+
+  const cancelAuthTransition = useCallback(() => {
+    setAuthTransitionState((current) =>
+      current === "signingOut" ? current : "idle",
+    );
+  }, []);
 
   useEffect(() => {
     let mounted = true;
@@ -162,6 +182,7 @@ export function AuthSessionProvider({ children }: { children: ReactNode }) {
     setAuthStatus((current) =>
       current === "unauthenticated" ? current : "signingOut",
     );
+    setAuthTransitionState("signingOut");
     clearFeatureAccess("auth:signing-out");
 
     const signOutPromise = (async () => {
@@ -214,15 +235,27 @@ export function AuthSessionProvider({ children }: { children: ReactNode }) {
     () => ({
       isHydrated,
       authStatus,
+      authTransitionState,
       isAuthenticated: authStatus === "authenticated",
-      isAuthTransitioning: authStatus === "signingOut",
+      isAuthTransitioning:
+        authStatus === "loading" || authTransitionState !== "idle",
       session: exposedSession,
       user: exposedSession?.user ?? null,
       userId: exposedSession?.user?.id ?? null,
       userEmail: exposedSession?.user?.email ?? null,
+      beginSignInTransition,
+      cancelAuthTransition,
       signOut,
     }),
-    [authStatus, exposedSession, isHydrated, signOut],
+    [
+      authStatus,
+      authTransitionState,
+      beginSignInTransition,
+      cancelAuthTransition,
+      exposedSession,
+      isHydrated,
+      signOut,
+    ],
   );
 
   return (

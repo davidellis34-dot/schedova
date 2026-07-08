@@ -1,6 +1,16 @@
+import Constants from "expo-constants";
+import { Ionicons } from "@expo/vector-icons";
+import * as ExpoLinking from "expo-linking";
 import { useLocalSearchParams, useRouter } from "expo-router";
 import { useCallback, useEffect, useRef, useState } from "react";
-import { Keyboard, Text, TextInput, View } from "react-native";
+import {
+  Keyboard,
+  Platform,
+  Pressable,
+  Text,
+  TextInput,
+  View,
+} from "react-native";
 import {
   AppButton,
   AppCard,
@@ -10,8 +20,7 @@ import {
   createSchedovaUiTheme,
 } from "../components/ui";
 import { useAuthSession } from "../lib/authSession";
-import { hasSelectedUserCountryRegion } from "../lib/countrySettings";
-import { refreshFeatureAccess } from "../lib/featureAccess";
+import { isSchedovaInternalDebugMode } from "../lib/debugMode";
 import {
   PRIVACY_POLICY_URL,
   SUPPORT_EMAIL,
@@ -19,38 +28,62 @@ import {
   openExternalWebsite,
   openSupportEmail,
 } from "../lib/legalLinks";
-import { hasCompletedOnboarding } from "../lib/onboarding";
+import {
+  beginNativeAppleSignIn,
+  beginSocialAuth,
+  completeAuthSessionFromUrl,
+  getAuthCallbackMetadata,
+  getSessionUserId,
+  getGoogleOAuthRedirectUri,
+  isNativeAppleAuthAvailable,
+  LOGIN_AUTH_REDIRECT_PATH,
+  matchesAuthRedirectPath,
+  sendPasswordResetEmail,
+} from "../lib/mobileAuth";
 import { supabase } from "../lib/supabase";
 import { useAppTheme } from "../lib/useAppTheme";
 
 export default function LoginScreen() {
   const router = useRouter();
-  const { authStatus, isHydrated, userId } = useAuthSession();
+  const {
+    authStatus,
+    beginSignInTransition,
+    cancelAuthTransition,
+  } = useAuthSession();
   const params = useLocalSearchParams<{
+    authMessage?: string;
     mode?: string;
     previewMessage?: string;
   }>();
+  const linkingUrl = ExpoLinking.useLinkingURL();
   const { colors } = useAppTheme();
   const uiColors = createSchedovaUiTheme(colors).colors;
+  const envBuildProfile = process.env.EXPO_PUBLIC_EAS_BUILD_PROFILE;
   const emailRef = useRef<TextInput | null>(null);
   const passwordRef = useRef<TextInput | null>(null);
   const emailFocusedRef = useRef(false);
   const passwordFocusedRef = useRef(false);
-  const navigatingRef = useRef(false);
+  const handledAuthUrlRef = useRef<string | null>(null);
 
   const [email, setEmail] = useState("");
   const [password, setPassword] = useState("");
   const [authMode, setAuthMode] = useState<"signin" | "signup">("signin");
   const [submitting, setSubmitting] = useState(false);
+  const [activeAuthAction, setActiveAuthAction] = useState<
+    "apple" | "email" | "google" | "reset" | null
+  >(null);
   const [errorMessage, setErrorMessage] = useState("");
   const [infoMessage, setInfoMessage] = useState("");
   const [previewMessage, setPreviewMessage] = useState("");
-  const [pendingNavigationUserId, setPendingNavigationUserId] = useState<
-    string | null
-  >(null);
-  const [pendingNavigationMode, setPendingNavigationMode] = useState<
-    "signin" | "signup" | null
-  >(null);
+  const [appleAuthAvailable, setAppleAuthAvailable] = useState(false);
+  const [googleProviderRedirectPreview, setGoogleProviderRedirectPreview] =
+    useState<string | null>(null);
+  const googleRedirectPreview = getGoogleOAuthRedirectUri();
+  const authDebugVisible =
+    isSchedovaInternalDebugMode() ||
+    (typeof envBuildProfile === "string" &&
+      envBuildProfile.trim().length > 0 &&
+      envBuildProfile.trim() !== "production");
 
   useEffect(() => {
     if (params.mode === "signup") {
@@ -62,7 +95,36 @@ export default function LoginScreen() {
     if (typeof params.previewMessage === "string") {
       setPreviewMessage(params.previewMessage);
     }
-  }, [params.mode, params.previewMessage]);
+
+    if (typeof params.authMessage === "string") {
+      setInfoMessage(params.authMessage);
+    }
+  }, [params.authMessage, params.mode, params.previewMessage]);
+
+  useEffect(() => {
+    if (Platform.OS !== "ios") {
+      setAppleAuthAvailable(false);
+      return;
+    }
+
+    let cancelled = false;
+
+    void isNativeAppleAuthAvailable()
+      .then((available) => {
+        if (!cancelled) {
+          setAppleAuthAvailable(available);
+        }
+      })
+      .catch(() => {
+        if (!cancelled) {
+          setAppleAuthAvailable(false);
+        }
+      });
+
+    return () => {
+      cancelled = true;
+    };
+  }, []);
 
   async function settleKeyboard() {
     Keyboard.dismiss();
@@ -79,167 +141,145 @@ export default function LoginScreen() {
     passwordRef.current?.blur();
   }, []);
 
-  const hasFocusedInput = useCallback(() => {
-    return (
-      emailFocusedRef.current ||
-      passwordFocusedRef.current ||
-      Boolean(TextInput.State.currentlyFocusedInput?.())
-    );
+  const clearMessages = useCallback(() => {
+    setErrorMessage("");
+    setInfoMessage("");
   }, []);
 
-  const waitForBlurredInputs = useCallback(async () => {
-    for (let attempt = 0; attempt < 3; attempt += 1) {
-      blurAuthInputs();
-      await settleKeyboard();
+  const handleAuthCallbackUrl = useCallback(
+    async (url: string) => {
+      const callbackReceived = matchesAuthRedirectPath(
+        url,
+        LOGIN_AUTH_REDIRECT_PATH,
+      );
+      const callbackMetadata = getAuthCallbackMetadata(url);
 
-      if (!hasFocusedInput()) {
-        return;
-      }
-    }
-  }, [blurAuthInputs, hasFocusedInput]);
-
-  const navigateAfterAuth = useCallback(
-    async (
-      route:
-        | "/dashboard"
-        | "/onboarding"
-        | {
-            pathname: "/country-region";
-            params: { next: "/dashboard" | "/onboarding" };
-          },
-    ) => {
-      if (navigatingRef.current) {
-        return;
+      if (__DEV__) {
+        console.log("[GoogleOAuth] callback received", callbackReceived);
+        console.log("[GoogleOAuth] callback has code", callbackMetadata.hasCode);
       }
 
-      navigatingRef.current = true;
-
-      try {
-        await waitForBlurredInputs();
-        await settleKeyboard();
-
-        if (hasFocusedInput()) {
-          await waitForBlurredInputs();
-        }
-
-        if (typeof route === "string") {
-          router.replace(route as any);
-          return;
-        }
-
-        router.replace(route as any);
-      } finally {
-        navigatingRef.current = false;
+      if (!callbackReceived) {
+        return false;
       }
+
+      if (handledAuthUrlRef.current === url) {
+        return false;
+      }
+
+      handledAuthUrlRef.current = url;
+
+      const { session } = await completeAuthSessionFromUrl(url, "GoogleOAuth");
+      const callbackUserId = getSessionUserId(session);
+
+      if (!callbackUserId) {
+        setInfoMessage(
+          "The sign-in flow finished, but Schedova did not receive a session.",
+        );
+        cancelAuthTransition();
+        return false;
+      }
+
+      setErrorMessage("");
+      setInfoMessage("Sign-in complete. Opening Schedova...");
+      return true;
     },
-    [hasFocusedInput, router, waitForBlurredInputs],
+    [cancelAuthTransition],
   );
 
   useEffect(() => {
-    if (
-      !pendingNavigationUserId ||
-      !pendingNavigationMode ||
-      !isHydrated ||
-      authStatus !== "authenticated" ||
-      userId !== pendingNavigationUserId
-    ) {
+    if (!linkingUrl || !matchesAuthRedirectPath(linkingUrl, LOGIN_AUTH_REDIRECT_PATH)) {
+      return;
+    }
+
+    if (handledAuthUrlRef.current === linkingUrl) {
       return;
     }
 
     let cancelled = false;
 
-    async function completePostAuthNavigation() {
-      const navigationSource =
-        pendingNavigationMode === "signup" ? "signup" : "signin";
+    async function completeLinkedSignIn() {
+      const callbackUrl = linkingUrl;
+
+      if (!callbackUrl) {
+        return;
+      }
+
+      setSubmitting(true);
 
       try {
-        await refreshFeatureAccess(pendingNavigationUserId, navigationSource);
+        const navigationPending = await handleAuthCallbackUrl(callbackUrl);
 
-        const nextRoute =
-          navigationSource === "signup"
-            ? ("/onboarding" as const)
-            : ((await hasCompletedOnboarding())
-                ? "/dashboard"
-                : "/onboarding") as "/dashboard" | "/onboarding";
-
-        if (!(await hasSelectedUserCountryRegion())) {
-          await navigateAfterAuth({
-            pathname: "/country-region",
-            params: { next: nextRoute },
-          });
-          return;
+        if (!navigationPending && !cancelled) {
+          setSubmitting(false);
+          setActiveAuthAction(null);
         }
-
-        await navigateAfterAuth(nextRoute);
       } catch (error) {
         if (!cancelled) {
           setErrorMessage(
             error instanceof Error
               ? error.message
-              : "Unable to finish signing in. Please try again.",
+              : "Social sign-in could not be completed.",
           );
-        }
-      } finally {
-        if (!cancelled) {
-          setPendingNavigationUserId(null);
-          setPendingNavigationMode(null);
+          cancelAuthTransition();
           setSubmitting(false);
+          setActiveAuthAction(null);
         }
       }
     }
 
-    void completePostAuthNavigation();
+    void completeLinkedSignIn();
 
     return () => {
       cancelled = true;
     };
-  }, [
-    authStatus,
-    isHydrated,
-    navigateAfterAuth,
-    pendingNavigationMode,
-    pendingNavigationUserId,
-    userId,
-  ]);
+  }, [cancelAuthTransition, handleAuthCallbackUrl, linkingUrl]);
 
   async function signUp() {
-    if (!email || !password) {
+    const normalizedEmail = email.trim();
+
+    if (!normalizedEmail || !password) {
       setErrorMessage("Enter email and password.");
+      cancelAuthTransition();
       return false;
     }
 
     const { data, error } = await supabase.auth.signUp({
-      email,
+      email: normalizedEmail,
       password,
     });
 
     if (error) {
       setErrorMessage(error.message);
+      cancelAuthTransition();
       return false;
     }
 
     const signedUpUserId = data.session?.user?.id ?? null;
 
     if (signedUpUserId) {
-      setPendingNavigationMode("signup");
-      setPendingNavigationUserId(signedUpUserId);
+      setInfoMessage("Account ready. Opening Schedova...");
       return true;
     }
 
     setErrorMessage("");
     setInfoMessage("Check your email to confirm your account.");
+    cancelAuthTransition();
     return false;
   }
 
   async function login() {
+    const normalizedEmail = email.trim();
+
     Keyboard.dismiss();
     const { data, error } = await supabase.auth.signInWithPassword({
-      email,
+      email: normalizedEmail,
       password,
     });
 
     if (error) {
       setErrorMessage(error.message);
+      cancelAuthTransition();
       return false;
     }
 
@@ -248,24 +288,25 @@ export default function LoginScreen() {
 
     if (!signedInUserId) {
       setErrorMessage("Signed in, but the account session was not ready.");
+      cancelAuthTransition();
       return false;
     }
 
-    setPendingNavigationMode("signin");
-    setPendingNavigationUserId(signedInUserId);
+    setInfoMessage("Sign-in complete. Opening Schedova...");
     return true;
   }
 
   async function submitAuth() {
-    if (submitting || authStatus === "signingOut" || navigatingRef.current) {
+    if (submitting || authStatus === "signingOut") {
       return;
     }
 
     blurAuthInputs();
-    setInfoMessage("");
-    setErrorMessage("");
+    clearMessages();
     await settleKeyboard();
 
+    beginSignInTransition();
+    setActiveAuthAction("email");
     setSubmitting(true);
     let navigationPending = false;
 
@@ -282,10 +323,51 @@ export default function LoginScreen() {
           ? error.message
           : "Unable to reach the sign-in service right now.",
       );
+      cancelAuthTransition();
     } finally {
       if (!navigationPending) {
         setSubmitting(false);
       }
+    }
+  }
+
+  async function handleForgotPassword() {
+    if (submitting || authStatus === "signingOut") {
+      return;
+    }
+
+    const normalizedEmail = email.trim();
+
+    if (!normalizedEmail) {
+      setErrorMessage("Enter your email first so we can send the reset link.");
+      return;
+    }
+
+    blurAuthInputs();
+    await settleKeyboard();
+    clearMessages();
+    setActiveAuthAction("reset");
+    setSubmitting(true);
+
+    try {
+      const { error } = await sendPasswordResetEmail(normalizedEmail);
+
+      if (error) {
+        throw error;
+      }
+
+      setInfoMessage(
+        `We sent a password reset link to ${normalizedEmail}. Open it on this device to continue in Schedova.`,
+      );
+    } catch (error) {
+      setErrorMessage(
+        error instanceof Error
+          ? error.message
+          : "Password reset could not be started right now.",
+      );
+    } finally {
+      setSubmitting(false);
+      setActiveAuthAction(null);
     }
   }
 
@@ -294,6 +376,108 @@ export default function LoginScreen() {
     await settleKeyboard();
     await submitAuth();
   }
+
+  async function handleGoogleAuth() {
+    if (submitting || authStatus === "signingOut") {
+      return;
+    }
+
+    blurAuthInputs();
+    await settleKeyboard();
+    clearMessages();
+    setGoogleProviderRedirectPreview(null);
+    beginSignInTransition();
+    setActiveAuthAction("google");
+    setSubmitting(true);
+
+    let navigationPending = false;
+
+    try {
+      const { providerUrlRedirectTo, result } = await beginSocialAuth("google");
+      setGoogleProviderRedirectPreview(providerUrlRedirectTo);
+      const callbackUrl =
+        result.type === "success" ? (result.url ?? null) : null;
+
+      if (!callbackUrl) {
+        if (__DEV__) {
+          console.log("[GoogleOAuth] callback received", false);
+          console.log("[GoogleOAuth] callback has code", false);
+        }
+        setInfoMessage("Google sign-in was canceled before it finished.");
+        cancelAuthTransition();
+        return;
+      }
+
+      navigationPending = await handleAuthCallbackUrl(callbackUrl);
+    } catch (error) {
+      setErrorMessage(
+        error instanceof Error
+          ? error.message
+          : "Social sign-in could not be completed.",
+      );
+      cancelAuthTransition();
+    } finally {
+      if (!navigationPending) {
+        setSubmitting(false);
+        setActiveAuthAction(null);
+      }
+    }
+  }
+
+  async function handleAppleAuth() {
+    if (
+      Platform.OS !== "ios" ||
+      !appleAuthAvailable ||
+      submitting ||
+      authStatus === "signingOut"
+    ) {
+      return;
+    }
+
+    blurAuthInputs();
+    await settleKeyboard();
+    clearMessages();
+    beginSignInTransition();
+    setActiveAuthAction("apple");
+    setSubmitting(true);
+
+    let navigationPending = false;
+
+    try {
+      const { cancelled, session } = await beginNativeAppleSignIn();
+
+      if (cancelled) {
+        setInfoMessage("Apple sign-in was canceled.");
+        cancelAuthTransition();
+        return;
+      }
+
+      const signedInUserId = getSessionUserId(session);
+
+      if (!signedInUserId) {
+        setErrorMessage("Apple sign-in completed, but the session was not ready.");
+        cancelAuthTransition();
+        return;
+      }
+
+      setInfoMessage("Sign-in complete. Opening Schedova...");
+      navigationPending = true;
+    } catch (error) {
+      setErrorMessage(
+        error instanceof Error
+          ? error.message
+          : "Apple sign-in could not be completed.",
+      );
+      cancelAuthTransition();
+    } finally {
+      if (!navigationPending) {
+        setSubmitting(false);
+        setActiveAuthAction(null);
+      }
+    }
+  }
+
+  const isAuthBusy = submitting || authStatus === "signingOut";
 
   return (
     <AppScreen
@@ -344,6 +528,108 @@ export default function LoginScreen() {
               ? "Sign in to manage your appointments."
               : "Start setting up your booking workspace."}
           </Text>
+        </View>
+
+        <View style={{ gap: 10, marginBottom: 18 }}>
+          <AppButton
+            title="Continue with Google"
+            variant="secondary"
+            onPress={() => {
+              void handleGoogleAuth();
+            }}
+            loading={submitting && activeAuthAction === "google"}
+            disabled={isAuthBusy}
+            leftAccessory={
+              <Ionicons
+                name="logo-google"
+                size={18}
+                color={uiColors.text}
+              />
+            }
+          />
+
+          {Platform.OS === "ios" && appleAuthAvailable ? (
+            <AppButton
+              title="Continue with Apple"
+              variant="secondary"
+              onPress={() => {
+                void handleAppleAuth();
+              }}
+              loading={submitting && activeAuthAction === "apple"}
+              disabled={isAuthBusy}
+              leftAccessory={
+                <Ionicons
+                  name="logo-apple"
+                  size={18}
+                  color={uiColors.text}
+                />
+              }
+            />
+          ) : null}
+        </View>
+
+        {authDebugVisible ? (
+          <View
+            style={{
+              backgroundColor: uiColors.surfaceMuted,
+              borderColor: uiColors.border,
+              borderRadius: 14,
+              borderWidth: 1,
+              marginBottom: 18,
+              padding: 12,
+            }}
+          >
+            <Text
+              style={{
+                color: colors.text,
+                fontSize: 12,
+                fontWeight: "800",
+                marginBottom: 6,
+              }}
+            >
+              Google OAuth Debug
+            </Text>
+            <Text style={{ color: colors.mutedText, fontSize: 12, lineHeight: 18 }}>
+              Platform: {Platform.OS}
+            </Text>
+            <Text style={{ color: colors.mutedText, fontSize: 12, lineHeight: 18 }}>
+              Redirect: {googleRedirectPreview}
+            </Text>
+            <Text style={{ color: colors.mutedText, fontSize: 12, lineHeight: 18 }}>
+              Env: {Constants.executionEnvironment}
+            </Text>
+            <Text style={{ color: colors.mutedText, fontSize: 12, lineHeight: 18 }}>
+              Build profile: {envBuildProfile || "unset"}
+            </Text>
+            <Text style={{ color: colors.mutedText, fontSize: 12, lineHeight: 18 }}>
+              Provider redirect: {googleProviderRedirectPreview || "not opened yet"}
+            </Text>
+          </View>
+        ) : null}
+
+        <View
+          style={{
+            alignItems: "center",
+            flexDirection: "row",
+            gap: 12,
+            marginBottom: 18,
+          }}
+        >
+          <View
+            style={{ backgroundColor: uiColors.border, flex: 1, height: 1 }}
+          />
+          <Text
+            style={{
+              color: colors.mutedText,
+              fontSize: 13,
+              fontWeight: "800",
+            }}
+          >
+            or use email
+          </Text>
+          <View
+            style={{ backgroundColor: uiColors.border, flex: 1, height: 1 }}
+          />
         </View>
 
         {previewMessage ? (
@@ -468,13 +754,34 @@ export default function LoginScreen() {
           }}
         />
 
+        {authMode === "signin" ? (
+          <View style={{ alignItems: "flex-end", marginBottom: 18, marginTop: -8 }}>
+            <Pressable
+              accessibilityRole="button"
+              disabled={isAuthBusy}
+              onPress={() => {
+                void handleForgotPassword();
+              }}
+            >
+              <Text
+                style={{
+                  color: isAuthBusy ? colors.mutedText : colors.primary,
+                  fontWeight: "800",
+                }}
+              >
+                Forgot password?
+              </Text>
+            </Pressable>
+          </View>
+        ) : null}
+
         <AppButton
           title={authMode === "signin" ? "Sign In" : "Create Account"}
           onPress={() => {
             void submitAuth();
           }}
-          loading={submitting}
-          disabled={submitting || authStatus === "signingOut"}
+          loading={submitting && activeAuthAction === "email"}
+          disabled={isAuthBusy}
         />
 
         <AppButton
@@ -484,7 +791,7 @@ export default function LoginScreen() {
               : "Already have an account? Sign in"
           }
           variant="ghost"
-          disabled={submitting || authStatus === "signingOut"}
+          disabled={isAuthBusy}
           onPress={() => {
             setErrorMessage("");
             setInfoMessage("");

@@ -1,10 +1,7 @@
 import { useRouter } from "expo-router";
-import { useCallback, useEffect, useState } from "react";
 import { ActivityIndicator, Pressable, Text, View } from "react-native";
 import { AppScreen } from "../components/layout/AppScreen";
 import { useAuthSession } from "../lib/authSession";
-import { hasSelectedUserCountryRegion } from "../lib/countrySettings";
-import { refreshFeatureAccess } from "../lib/featureAccess";
 import {
   PRIVACY_POLICY_URL,
   SUPPORT_EMAIL,
@@ -12,42 +9,16 @@ import {
   openExternalWebsite,
   openSupportEmail,
 } from "../lib/legalLinks";
-import { hasCompletedOnboarding } from "../lib/onboarding";
 
 export default function SplashScreen() {
   const router = useRouter();
-  const { isHydrated, userId } = useAuthSession();
-  const [loading, setLoading] = useState(true);
-
-  const checkSession = useCallback(async () => {
-    if (!isHydrated) {
-      setLoading(true);
-      return;
-    }
-
-    if (userId) {
-      await refreshFeatureAccess(userId, "splash-session");
-      const nextRoute = (await hasCompletedOnboarding()
-        ? "/dashboard"
-        : "/onboarding") as "/dashboard" | "/onboarding";
-
-      if (!(await hasSelectedUserCountryRegion())) {
-        router.replace({
-          pathname: "/country-region",
-          params: { next: nextRoute },
-        } as any);
-        return;
-      }
-
-      router.replace(nextRoute as any);
-    } else {
-      setLoading(false);
-    }
-  }, [isHydrated, router, userId]);
-
-  useEffect(() => {
-    void checkSession();
-  }, [checkSession]);
+  const { authStatus, isAuthTransitioning, isHydrated, userId } =
+    useAuthSession();
+  const loading =
+    !isHydrated ||
+    authStatus === "loading" ||
+    isAuthTransitioning ||
+    Boolean(userId);
 
   if (loading) {
     return (

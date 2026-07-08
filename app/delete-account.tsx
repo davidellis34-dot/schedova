@@ -1,5 +1,5 @@
 import { Ionicons } from "@expo/vector-icons";
-import { router } from "expo-router";
+import { useRouter } from "expo-router";
 import { useState } from "react";
 import { Alert, Pressable, Text, View } from "react-native";
 import {
@@ -25,6 +25,7 @@ type DeleteAccountResult = {
 };
 
 export default function DeleteAccountScreen() {
+  const router = useRouter();
   const { colors: appColors } = useAppTheme();
   const theme = createSchedovaUiTheme(appColors);
   const { colors, spacing, typography, radii } = theme;
@@ -89,17 +90,6 @@ export default function DeleteAccountScreen() {
       } catch {
         // The Edge Function may already have deleted the auth user.
       }
-
-      Alert.alert(
-        "Account deleted",
-        "Your Schedova account and app data were deleted. This device has been signed out.",
-        [
-          {
-            text: "OK",
-            onPress: () => router.replace("/login"),
-          },
-        ],
-      );
     } catch {
       Alert.alert(
         "Unable to delete account",

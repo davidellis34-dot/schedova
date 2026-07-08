@@ -40,7 +40,6 @@ export default function BusinessSetup() {
           "Login Required",
           "Please log in before setting up a business.",
         );
-        router.replace("/login" as any);
         return;
       }
       if (!businessName.trim()) {
