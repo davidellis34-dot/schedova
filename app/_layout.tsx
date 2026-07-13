@@ -1,12 +1,16 @@
 import { Stack, useRouter, useSegments } from "expo-router";
-import { useEffect, useRef, type ReactNode } from "react";
+import { useEffect, useRef, useState, type ReactNode } from "react";
 import {
+  ActivityIndicator,
   AppState,
   InteractionManager,
   Keyboard,
   Linking,
   Platform,
+  StyleSheet,
+  Text,
   TextInput,
+  View,
 } from "react-native";
 import { GestureHandlerRootView } from "react-native-gesture-handler";
 import { SafeAreaProvider } from "react-native-safe-area-context";
@@ -26,12 +30,49 @@ import {
 import { recordAuthDiagnosticEvent } from "../lib/authDiagnostics";
 import { SubscriptionProvider } from "../lib/revenuecat/SubscriptionProvider";
 import { getSchedovaBookingRouteParamsFromUrl } from "../lib/schedovaLinks";
+import { useAppTheme } from "../lib/useAppTheme";
 import {
   addClientMessageNotificationListeners,
   getLastClientMessageNotificationRoute,
   registerForPushNotifications,
   syncUserTimezone,
 } from "../lib/pushNotifications";
+
+const IOS_AUTH_STACK_SWITCH_DELAY_MS = 520;
+
+function AuthTransitionScreen({ message }: { message: string }) {
+  const { colors } = useAppTheme();
+
+  return (
+    <View
+      pointerEvents="auto"
+      style={[
+        StyleSheet.absoluteFillObject,
+        {
+          alignItems: "center",
+          backgroundColor: colors.background,
+          justifyContent: "center",
+          paddingHorizontal: 24,
+          zIndex: 1000,
+        },
+      ]}
+    >
+      <View style={{ alignItems: "center", gap: 14 }}>
+        <ActivityIndicator color={colors.primary} size="small" />
+        <Text
+          style={{
+            color: colors.text,
+            fontSize: 17,
+            fontWeight: "800",
+            textAlign: "center",
+          }}
+        >
+          {message}
+        </Text>
+      </View>
+    </View>
+  );
+}
 
 function RevenueCatBootstrap({ children }: { children: ReactNode }) {
   const { isHydrated, userId } = useAuthSession();
@@ -206,7 +247,9 @@ function AuthNavigationCoordinator() {
     isHydrated,
     userId,
   } = useAuthSession();
+  const [bridgeMessage, setBridgeMessage] = useState<string | null>(null);
   const pendingTargetRef = useRef<string | null>(null);
+  const transitionRunIdRef = useRef(0);
   const mountedRef = useRef(true);
 
   useEffect(() => {
@@ -217,6 +260,7 @@ function AuthNavigationCoordinator() {
 
   useEffect(() => {
     pendingTargetRef.current = null;
+    setBridgeMessage(null);
   }, [routeKey]);
 
   useEffect(() => {
@@ -246,19 +290,25 @@ function AuthNavigationCoordinator() {
             pathname: "/country-region";
             params: { next: "/dashboard" | "/onboarding" };
           },
+      transitionMessage: string,
     ) {
       const targetKey = getAuthRouteKey(target);
 
       if (routeKey === targetKey || pendingTargetRef.current === targetKey) {
+        setBridgeMessage(null);
         return;
       }
 
+      const transitionRunId = transitionRunIdRef.current + 1;
+      transitionRunIdRef.current = transitionRunId;
       pendingTargetRef.current = targetKey;
+      setBridgeMessage(transitionMessage);
 
       if (__DEV__) {
-        console.log("[AuthNavigation] replace scheduled", {
+        console.log("[AuthNavigation] transition scheduled", {
           authStatus,
           authTransitionState,
+          bridgeMessage: transitionMessage,
           from: routeKey || "index",
           to: targetKey,
         });
@@ -269,7 +319,17 @@ function AuthNavigationCoordinator() {
         await settleKeyboard();
         await waitForAuthNavigationWindow();
 
-        if (cancelled || !mountedRef.current) {
+        if (Platform.OS === "ios") {
+          await new Promise((resolve) =>
+            setTimeout(resolve, IOS_AUTH_STACK_SWITCH_DELAY_MS),
+          );
+        }
+
+        if (
+          cancelled ||
+          !mountedRef.current ||
+          transitionRunIdRef.current !== transitionRunId
+        ) {
           return;
         }
 
@@ -286,7 +346,7 @@ function AuthNavigationCoordinator() {
         return;
       }
 
-      void replaceRoute("/login");
+      void replaceRoute("/login", "Returning to sign in...");
       return () => {
         cancelled = true;
       };
@@ -300,7 +360,7 @@ function AuthNavigationCoordinator() {
           return;
         }
 
-        await replaceRoute(targetRoute);
+        await replaceRoute(targetRoute, "Opening Schedova...");
       }
 
       void redirectAuthenticatedUser();
@@ -319,7 +379,7 @@ function AuthNavigationCoordinator() {
     userId,
   ]);
 
-  return null;
+  return bridgeMessage ? <AuthTransitionScreen message={bridgeMessage} /> : null;
 }
 
 function SchedovaDeepLinkHandler() {
@@ -372,7 +432,8 @@ export default function RootLayout() {
             <SchedovaDeepLinkHandler />
             <Stack
               screenOptions={{
-                freezeOnBlur: Platform.OS === "ios" ? false : undefined,
+                animation: Platform.OS === "ios" ? "none" : undefined,
+                freezeOnBlur: false,
                 headerShown: false,
               }}
             >

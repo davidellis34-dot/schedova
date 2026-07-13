@@ -10,6 +10,17 @@ import {
   sendAppointmentSms,
   sendAppointmentSmsNonBlocking,
 } from "../../lib/appointmentSms";
+import {
+  sendAppointmentEmail,
+  sendAppointmentEmailNonBlocking,
+  shouldSendEmail,
+  shouldSendText,
+  type AppointmentDeliveryChoice,
+} from "../../lib/appointmentEmail";
+import {
+  saveAppointmentCommunicationRecipients,
+  type CommunicationRecipient,
+} from "../../lib/communicationRecipients";
 import { getCalendarPreferences } from "../../lib/calendarPreferences";
 import { normalizePhoneForSmsWithUserDefault } from "../../lib/countrySettings";
 import {
@@ -404,6 +415,7 @@ export function useBookAppointmentForm({
   const [loading, setLoading] = useState(true);
   const [saving, setSaving] = useState(false);
   const savingRef = useRef(false);
+  const baseDataLoadedRef = useRef(false);
   const [editLoaded, setEditLoaded] = useState(false);
 
   const [clients, setClients] = useState<Client[]>([]);
@@ -532,9 +544,13 @@ export function useBookAppointmentForm({
     setCalendarIntervalMinutes(preferences.intervalMinutes);
   }
 
-  async function fetchBaseData() {
-    setLoading(true);
-    setEditLoaded(false);
+  async function fetchBaseData(options?: { preserveForm?: boolean }) {
+    const preserveForm = Boolean(options?.preserveForm);
+
+    if (!preserveForm) {
+      setLoading(true);
+      setEditLoaded(false);
+    }
 
     try {
       const { data: userData } = await supabase.auth.getUser();
@@ -574,14 +590,17 @@ export function useBookAppointmentForm({
           id: normalizeId(service.id),
         })),
       );
+      baseDataLoadedRef.current = true;
     } finally {
-      setLoading(false);
+      if (!preserveForm) {
+        setLoading(false);
+      }
     }
   }
 
   useFocusEffect(
     useCallback(() => {
-      fetchBaseData();
+      void fetchBaseData({ preserveForm: baseDataLoadedRef.current });
       void loadCalendarPreferences();
     }, []),
   );
@@ -1013,7 +1032,10 @@ export function useBookAppointmentForm({
     });
   }
 
-  async function saveEntry() {
+  async function saveEntry(options?: {
+    deliveryChoice?: AppointmentDeliveryChoice;
+    recipients?: CommunicationRecipient[];
+  }) {
     if (savingRef.current) {
       logSaveContext("DUPLICATE TAP BLOCKED");
       return false;
@@ -1052,7 +1074,10 @@ export function useBookAppointmentForm({
 
       const saved =
         entryType === "appointment"
-          ? await saveAppointment(currentUserId, safeDate)
+          ? await saveAppointment(currentUserId, safeDate, {
+              deliveryChoice: options?.deliveryChoice,
+              recipients: options?.recipients,
+            })
           : await saveCalendarBlock(currentUserId, safeDate);
 
       if (!saved) {
@@ -1120,6 +1145,7 @@ export function useBookAppointmentForm({
   async function scheduleAppointmentSideEffects(
     savedAppointments: SavedAppointmentForSideEffects[],
     messageType: "confirmation" | "update",
+    deliveryChoice: AppointmentDeliveryChoice = "text",
   ) {
     const safeSavedAppointments = savedAppointments.filter(
       (appointment) =>
@@ -1164,45 +1190,78 @@ export function useBookAppointmentForm({
     if (
       messageType === "update" &&
       firstAppointment?.id &&
-      canUseProFeature("smsAutomation")
+      canUseProFeature("smsAutomation") &&
+      shouldSendText(deliveryChoice)
     ) {
       void sendAppointmentSmsNonBlocking(firstAppointment.id, messageType);
+    }
+
+    if (
+      messageType === "update" &&
+      firstAppointment?.id &&
+      canUseProFeature("emailMessaging") &&
+      shouldSendEmail(deliveryChoice)
+    ) {
+      void sendAppointmentEmailNonBlocking(firstAppointment.id, messageType);
     }
   }
 
   async function sendAppointmentConfirmationAfterCreate(
     newAppointment: SavedAppointmentForSideEffects | null | undefined,
+    deliveryChoice: AppointmentDeliveryChoice = "text",
   ) {
-    // Free users should never hit the SMS function from the app; the backend
-    // still enforces the same Pro check as a safety net.
-    if (!canUseProFeature("smsAutomation")) {
+    if (deliveryChoice === "none") {
       return;
     }
 
     if (!newAppointment?.id) {
-      console.log("SMS function error", "Missing saved appointment ID");
+      console.log("Message send skipped", "Missing saved appointment ID");
       return;
     }
 
-    const payload = {
-      appointment_id: newAppointment.id,
-      client_id: newAppointment.client_id || null,
-      message_type: "confirmation" as const,
-    };
-
     console.log("Appointment created", newAppointment);
-    console.log("Calling send-appointment-sms");
-    console.log("SMS payload", payload);
 
-    try {
-      const data = await sendAppointmentSms(newAppointment.id, "confirmation");
-      console.log("SMS function data", data);
+    if (shouldSendText(deliveryChoice) && canUseProFeature("smsAutomation")) {
+      const payload = {
+        appointment_id: newAppointment.id,
+        client_id: newAppointment.client_id || null,
+        message_type: "confirmation" as const,
+      };
 
-      if (!data.ok && !data.skipped) {
-        console.log("SMS function error", data.message || data.code);
+      console.log("Calling send-appointment-sms");
+      console.log("SMS payload", payload);
+
+      try {
+        const data = await sendAppointmentSms(newAppointment.id, "confirmation");
+        console.log("SMS function data", data);
+
+        if (!data.ok && !data.skipped) {
+          console.log("SMS function error", data.message || data.code);
+        }
+      } catch (exception) {
+        console.log("SMS exception", exception);
       }
-    } catch (exception) {
-      console.log("SMS exception", exception);
+    }
+
+    if (shouldSendEmail(deliveryChoice) && canUseProFeature("emailMessaging")) {
+      try {
+        const data = await sendAppointmentEmail(
+          newAppointment.id,
+          "confirmation",
+        );
+        console.log("Email function data", {
+          ok: data.ok,
+          skipped: data.skipped,
+          code: data.code,
+          providerMessageId: data.providerMessageId,
+        });
+
+        if (!data.ok && !data.skipped) {
+          console.log("Email function error", data.message || data.code);
+        }
+      } catch (exception) {
+        console.log("Email exception", exception);
+      }
     }
   }
 
@@ -1274,7 +1333,17 @@ export function useBookAppointmentForm({
     return true;
   }
 
-  async function saveAppointment(currentUserId: string, safeDate: string) {
+  async function saveAppointment(
+    currentUserId: string,
+    safeDate: string,
+    options?: {
+      deliveryChoice?: AppointmentDeliveryChoice;
+      recipients?: CommunicationRecipient[];
+    },
+  ) {
+    const deliveryChoice = options?.deliveryChoice || "text";
+    const messageRecipients = options?.recipients || [];
+
     if (!currentUserId) {
       logSaveContext("MISSING USER ID");
       Alert.alert("Login Required", "Please sign in again.");
@@ -1563,16 +1632,31 @@ export function useBookAppointmentForm({
         return false;
       }
 
+      if (messageRecipients.length > 0) {
+        try {
+          await saveAppointmentCommunicationRecipients({
+            userId: currentUserId,
+            clientId: baseAppointmentData.client_id,
+            appointmentId,
+            recipients: messageRecipients,
+          });
+        } catch (recipientError) {
+          console.log("Appointment recipients save failed", recipientError);
+        }
+      }
+
       await scheduleAppointmentSideEffects(
         [
           {
             id: appointmentId,
+            client_id: baseAppointmentData.client_id,
             appointment_date: safeDate,
             appointment_time: newStartTime,
             client_name: baseAppointmentData.client_name,
           },
         ],
         "update",
+        deliveryChoice,
       );
 
       await resolveReplyAfterAppointmentSave(currentUserId);
@@ -1610,11 +1694,28 @@ export function useBookAppointmentForm({
       []) as SavedAppointmentForSideEffects[];
     const newAppointment = createdAppointments[0];
 
-    if (canUseProFeature("smsAutomation")) {
-      await sendAppointmentConfirmationAfterCreate(newAppointment);
+    if (messageRecipients.length > 0) {
+      await Promise.all(
+        createdAppointments.map((appointment) =>
+          saveAppointmentCommunicationRecipients({
+            userId: currentUserId,
+            clientId: baseAppointmentData.client_id,
+            appointmentId: appointment.id,
+            recipients: messageRecipients,
+          }).catch((recipientError) => {
+            console.log("Appointment recipients save failed", recipientError);
+          }),
+        ),
+      );
     }
 
-    await scheduleAppointmentSideEffects(createdAppointments, "confirmation");
+    await sendAppointmentConfirmationAfterCreate(newAppointment, deliveryChoice);
+
+    await scheduleAppointmentSideEffects(
+      createdAppointments,
+      "confirmation",
+      deliveryChoice,
+    );
 
     await resolveReplyAfterAppointmentSave(currentUserId);
 
@@ -1803,6 +1904,7 @@ export function useBookAppointmentForm({
     totalPrice,
     clientDropdownData,
     serviceDropdownData,
+    clients,
     services,
 
     showQuickClient,

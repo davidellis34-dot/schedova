@@ -64,6 +64,8 @@ export default function LoginScreen() {
   const emailFocusedRef = useRef(false);
   const passwordFocusedRef = useRef(false);
   const handledAuthUrlRef = useRef<string | null>(null);
+  const mountedRef = useRef(true);
+  const appleAuthInFlightRef = useRef(false);
 
   const [email, setEmail] = useState("");
   const [password, setPassword] = useState("");
@@ -84,6 +86,12 @@ export default function LoginScreen() {
     (typeof envBuildProfile === "string" &&
       envBuildProfile.trim().length > 0 &&
       envBuildProfile.trim() !== "production");
+
+  useEffect(() => {
+    return () => {
+      mountedRef.current = false;
+    };
+  }, []);
 
   useEffect(() => {
     if (params.mode === "signup") {
@@ -125,6 +133,15 @@ export default function LoginScreen() {
       cancelled = true;
     };
   }, []);
+
+  useEffect(() => {
+    if (authStatus !== "authenticated" || !mountedRef.current) {
+      return;
+    }
+
+    setSubmitting(false);
+    setActiveAuthAction(null);
+  }, [authStatus]);
 
   async function settleKeyboard() {
     Keyboard.dismiss();
@@ -170,6 +187,11 @@ export default function LoginScreen() {
       handledAuthUrlRef.current = url;
 
       const { session } = await completeAuthSessionFromUrl(url, "GoogleOAuth");
+
+      if (!mountedRef.current) {
+        return false;
+      }
+
       const callbackUserId = getSessionUserId(session);
 
       if (!callbackUserId) {
@@ -249,6 +271,10 @@ export default function LoginScreen() {
       password,
     });
 
+    if (!mountedRef.current) {
+      return false;
+    }
+
     if (error) {
       setErrorMessage(error.message);
       cancelAuthTransition();
@@ -276,6 +302,10 @@ export default function LoginScreen() {
       email: normalizedEmail,
       password,
     });
+
+    if (!mountedRef.current) {
+      return false;
+    }
 
     if (error) {
       setErrorMessage(error.message);
@@ -305,6 +335,10 @@ export default function LoginScreen() {
     clearMessages();
     await settleKeyboard();
 
+    if (!mountedRef.current) {
+      return;
+    }
+
     beginSignInTransition();
     setActiveAuthAction("email");
     setSubmitting(true);
@@ -318,6 +352,10 @@ export default function LoginScreen() {
         return;
       }
     } catch (error) {
+      if (!mountedRef.current) {
+        return;
+      }
+
       setErrorMessage(
         error instanceof Error
           ? error.message
@@ -325,7 +363,7 @@ export default function LoginScreen() {
       );
       cancelAuthTransition();
     } finally {
-      if (!navigationPending) {
+      if (!navigationPending && mountedRef.current) {
         setSubmitting(false);
       }
     }
@@ -345,12 +383,21 @@ export default function LoginScreen() {
 
     blurAuthInputs();
     await settleKeyboard();
+
+    if (!mountedRef.current) {
+      return;
+    }
+
     clearMessages();
     setActiveAuthAction("reset");
     setSubmitting(true);
 
     try {
       const { error } = await sendPasswordResetEmail(normalizedEmail);
+
+      if (!mountedRef.current) {
+        return;
+      }
 
       if (error) {
         throw error;
@@ -360,14 +407,20 @@ export default function LoginScreen() {
         `We sent a password reset link to ${normalizedEmail}. Open it on this device to continue in Schedova.`,
       );
     } catch (error) {
+      if (!mountedRef.current) {
+        return;
+      }
+
       setErrorMessage(
         error instanceof Error
           ? error.message
           : "Password reset could not be started right now.",
       );
     } finally {
-      setSubmitting(false);
-      setActiveAuthAction(null);
+      if (mountedRef.current) {
+        setSubmitting(false);
+        setActiveAuthAction(null);
+      }
     }
   }
 
@@ -384,6 +437,11 @@ export default function LoginScreen() {
 
     blurAuthInputs();
     await settleKeyboard();
+
+    if (!mountedRef.current) {
+      return;
+    }
+
     clearMessages();
     setGoogleProviderRedirectPreview(null);
     beginSignInTransition();
@@ -394,6 +452,11 @@ export default function LoginScreen() {
 
     try {
       const { providerUrlRedirectTo, result } = await beginSocialAuth("google");
+
+      if (!mountedRef.current) {
+        return;
+      }
+
       setGoogleProviderRedirectPreview(providerUrlRedirectTo);
       const callbackUrl =
         result.type === "success" ? (result.url ?? null) : null;
@@ -410,6 +473,10 @@ export default function LoginScreen() {
 
       navigationPending = await handleAuthCallbackUrl(callbackUrl);
     } catch (error) {
+      if (!mountedRef.current) {
+        return;
+      }
+
       setErrorMessage(
         error instanceof Error
           ? error.message
@@ -417,7 +484,7 @@ export default function LoginScreen() {
       );
       cancelAuthTransition();
     } finally {
-      if (!navigationPending) {
+      if (!navigationPending && mountedRef.current) {
         setSubmitting(false);
         setActiveAuthAction(null);
       }
@@ -429,25 +496,36 @@ export default function LoginScreen() {
       Platform.OS !== "ios" ||
       !appleAuthAvailable ||
       submitting ||
-      authStatus === "signingOut"
+      authStatus === "signingOut" ||
+      appleAuthInFlightRef.current
     ) {
       return;
     }
 
     blurAuthInputs();
     await settleKeyboard();
+
+    if (!mountedRef.current) {
+      return;
+    }
+
     clearMessages();
     beginSignInTransition();
     setActiveAuthAction("apple");
     setSubmitting(true);
+    appleAuthInFlightRef.current = true;
 
     let navigationPending = false;
 
     try {
       const { cancelled, session } = await beginNativeAppleSignIn();
 
+      if (!mountedRef.current) {
+        return;
+      }
+
       if (cancelled) {
-        setInfoMessage("Apple sign-in was canceled.");
+        setInfoMessage("");
         cancelAuthTransition();
         return;
       }
@@ -463,6 +541,10 @@ export default function LoginScreen() {
       setInfoMessage("Sign-in complete. Opening Schedova...");
       navigationPending = true;
     } catch (error) {
+      if (!mountedRef.current) {
+        return;
+      }
+
       setErrorMessage(
         error instanceof Error
           ? error.message
@@ -470,7 +552,9 @@ export default function LoginScreen() {
       );
       cancelAuthTransition();
     } finally {
-      if (!navigationPending) {
+      appleAuthInFlightRef.current = false;
+
+      if (!navigationPending && mountedRef.current) {
         setSubmitting(false);
         setActiveAuthAction(null);
       }

@@ -3,7 +3,7 @@
     "name": "Schedova",
     "slug": "schedova",
     "scheme": "schedova",
-    "version": "1.2.0",
+    "version": "1.2.1",
     "orientation": "default",
     "icon": "./assets/images/app-icon.png",
     "userInterfaceStyle": "light",
@@ -11,7 +11,7 @@
     "ios": {
       "supportsTablet": true,
       "usesAppleSignIn": true,
-      "buildNumber": "24",
+      "buildNumber": "25",
       "bundleIdentifier": "com.davidellis34.schedova",
       "infoPlist": {
         "ITSAppUsesNonExemptEncryption": false
@@ -24,7 +24,7 @@
         "monochromeImage": "./assets/images/adaptive-icon-monochrome.png"
       },
       "package": "com.davidellis34.schedova",
-      "versionCode": 24
+      "versionCode": 25
     },
     "web": {
       "favicon": "./assets/images/favicon.png"

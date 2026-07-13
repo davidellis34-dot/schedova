@@ -1,6 +1,6 @@
 import * as Haptics from "expo-haptics";
 import { useRouter } from "expo-router";
-import { useMemo, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import {
   Alert,
   Dimensions,
@@ -23,6 +23,7 @@ import {
   type AndroidTabletSmsFallback,
 } from "../components/AndroidTabletSmsFallbackSheet";
 import { blockTitleFor, normalizeId } from "../components/booking/bookingUtils";
+import { CommunicationRecipientsSection } from "../components/clients/CommunicationRecipientsSection";
 import { DatePickerField } from "../components/booking/DatePickerField";
 import { DurationStepper } from "../components/booking/DurationStepper";
 import { EntryTypePicker } from "../components/booking/EntryTypePicker";
@@ -34,7 +35,16 @@ import { TimeDropdown } from "../components/booking/TimeDropdown";
 import type { ThemeColors } from "../components/booking/types";
 import { useBookAppointmentForm } from "../components/booking/useBookAppointmentForm";
 import { AppButton, AppCard, AppScreen, ScreenHeader } from "../components/ui";
-import { sendAppointmentSmsNonBlocking } from "../lib/appointmentSms";
+import {
+  sendManualClientEmail,
+  shouldSendEmail,
+  shouldSendText,
+  type AppointmentDeliveryChoice,
+} from "../lib/appointmentEmail";
+import {
+  sendAppointmentSmsNonBlocking,
+  sendManualClientSms,
+} from "../lib/appointmentSms";
 import { copyTextToClipboard } from "../lib/clipboard";
 import { confirmDestructiveAction } from "../lib/confirmDestructiveAction";
 import { canUseFeature, useFeatureAccess } from "../lib/featureAccess";
@@ -54,6 +64,14 @@ import {
 import { buildSchedovaBookingLink } from "../lib/schedovaLinks";
 import { supabase } from "../lib/supabase";
 import { useAppTheme } from "../lib/useAppTheme";
+import {
+  createPrimaryRecipient,
+  fetchClientCommunicationRecipients,
+  getEmailRecipientCount,
+  getSmsRecipientCount,
+  sendConsentRequests,
+  type CommunicationRecipient,
+} from "../lib/communicationRecipients";
 
 const FALLBACK_COLORS: ThemeColors = {
   background: "#FFFFFF",
@@ -157,10 +175,14 @@ type AppointmentMessageClient = {
   id: string;
   name: string | null;
   phone: string | null;
+  email?: string | null;
   phone_number?: string | null;
   phoneNumber?: string | null;
   sms_opt_in: boolean | null;
+  email_opt_in?: boolean | null;
 };
+
+type ManualMessageChannel = "text" | "email" | "both";
 
 function formatTemplateDate(value?: string | null) {
   if (!value) return null;
@@ -219,8 +241,20 @@ function getClientPhone(client: any, appointment?: any) {
   );
 }
 
+function getClientEmail(client?: any) {
+  return String(client?.email || "").trim();
+}
+
 function getTemplateBody(template: any) {
   return template?.body || template?.message || template?.content || "";
+}
+
+function getInitialManualMessageChannel(client: AppointmentMessageClient | null) {
+  const canText = Boolean(normalizePhoneNumber(getClientPhone(client))) &&
+    Boolean(client?.sms_opt_in);
+  const canEmail = Boolean(getClientEmail(client)) && Boolean(client?.email_opt_in);
+
+  return canText ? "text" : canEmail ? "email" : "text";
 }
 
 function buildSmsUrls(phone: string, message: string) {
@@ -350,6 +384,17 @@ export default function BookAppointmentScreen() {
   const [selectedTemplateId, setSelectedTemplateId] = useState(
     BUILT_IN_MESSAGE_TEMPLATES[0]?.id ?? "",
   );
+  const [appointmentDeliveryChoice, setAppointmentDeliveryChoice] =
+    useState<AppointmentDeliveryChoice>("text");
+  const [manualEmailSending, setManualEmailSending] = useState(false);
+  const [manualMessageChannel, setManualMessageChannel] =
+    useState<ManualMessageChannel>("text");
+  const [manualEmailSubject, setManualEmailSubject] =
+    useState("Appointment message");
+  const [recipientManagerVisible, setRecipientManagerVisible] = useState(false);
+  const [appointmentRecipients, setAppointmentRecipients] = useState<
+    CommunicationRecipient[]
+  >([]);
   const [appointmentMessageClient, setAppointmentMessageClient] =
     useState<AppointmentMessageClient | null>(null);
   const [androidTabletSmsFallback, setAndroidTabletSmsFallback] =
@@ -393,6 +438,124 @@ export default function BookAppointmentScreen() {
     clientDropdownData.find(
       (clientOption) => normalizeId(clientOption.value) === form.selectedClient,
     )?.label || "Client";
+  const selectedClientRecord = useMemo(
+    () =>
+      Array.isArray(form.clients)
+        ? form.clients.find(
+            (client: any) =>
+              normalizeId(client?.id) === normalizeId(form.selectedClient),
+          ) || null
+        : null,
+    [form.clients, form.selectedClient],
+  );
+  const selectedClientPhone = getClientPhone(selectedClientRecord);
+  const selectedClientEmail = getClientEmail(selectedClientRecord);
+  const selectedClientCanReceiveText =
+    Boolean(normalizePhoneNumber(selectedClientPhone)) &&
+    Boolean(selectedClientRecord?.sms_opt_in);
+  const selectedClientCanReceiveEmail =
+    Boolean(selectedClientEmail) && Boolean(selectedClientRecord?.email_opt_in);
+  const deliveryNeedsText = shouldSendText(appointmentDeliveryChoice);
+  const deliveryNeedsEmail = shouldSendEmail(appointmentDeliveryChoice);
+  const selectedRecipientSmsCount = getSmsRecipientCount(appointmentRecipients);
+  const selectedRecipientEmailCount =
+    getEmailRecipientCount(appointmentRecipients);
+  const missingDeliveryContactWarning =
+    appointmentDeliveryChoice === "none"
+      ? ""
+      : [
+          deliveryNeedsText &&
+          selectedRecipientSmsCount === 0 &&
+          !selectedClientCanReceiveText
+            ? "Text needs a phone number and SMS opt-in."
+            : "",
+          deliveryNeedsEmail &&
+          selectedRecipientEmailCount === 0 &&
+          !selectedClientCanReceiveEmail
+            ? "Email needs an email address and email opt-in."
+            : "",
+        ]
+          .filter(Boolean)
+          .join(" ");
+  const appointmentSmsRecipientCount =
+    appointmentDeliveryChoice === "none"
+      ? 0
+      : shouldSendText(appointmentDeliveryChoice)
+        ? getSmsRecipientCount(appointmentRecipients)
+        : 0;
+  const appointmentEmailRecipientCount =
+    appointmentDeliveryChoice === "none"
+      ? 0
+      : shouldSendEmail(appointmentDeliveryChoice)
+        ? getEmailRecipientCount(appointmentRecipients)
+        : 0;
+
+  useEffect(() => {
+    let active = true;
+
+    async function loadRecipients() {
+      if (!form.selectedClient || !form.userId) {
+        setAppointmentRecipients([]);
+        return;
+      }
+
+      try {
+        const loaded = await fetchClientCommunicationRecipients({
+          userId: form.userId,
+          clientId: form.selectedClient,
+          primary: {
+            name: selectedClientRecord?.name || selectedClientLabel,
+            phone: selectedClientRecord?.phone,
+            email: selectedClientRecord?.email,
+            smsOptIn: selectedClientRecord?.sms_opt_in,
+            emailOptIn: selectedClientRecord?.email_opt_in,
+          },
+        });
+
+        if (active) setAppointmentRecipients(loaded);
+      } catch (error) {
+        console.log("Appointment recipients load failed", error);
+        if (active) {
+          setAppointmentRecipients([
+            createPrimaryRecipient({
+              clientId: form.selectedClient,
+              name: selectedClientRecord?.name || selectedClientLabel,
+              phone: selectedClientRecord?.phone,
+              email: selectedClientRecord?.email,
+              smsOptIn: selectedClientRecord?.sms_opt_in,
+              emailOptIn: selectedClientRecord?.email_opt_in,
+            }),
+          ]);
+        }
+      }
+    }
+
+    void loadRecipients();
+
+    return () => {
+      active = false;
+    };
+  }, [
+    form.selectedClient,
+    form.userId,
+    selectedClientLabel,
+    selectedClientRecord?.email,
+    selectedClientRecord?.email_opt_in,
+    selectedClientRecord?.name,
+    selectedClientRecord?.phone,
+    selectedClientRecord?.sms_opt_in,
+  ]);
+
+  function openEditSelectedClient() {
+    const clientId = String(form.selectedClient || "").trim();
+    if (!clientId) return;
+
+    router.push({
+      pathname: "/edit-client",
+      params: { clientId, returnTo: "book-appointment" },
+    } as any);
+  }
+
   const selectedTemplate =
     messageTemplates.find((template) => template.id === selectedTemplateId) ||
     messageTemplates[0] ||
@@ -476,30 +639,24 @@ export default function BookAppointmentScreen() {
       setSelectedTemplateId(
         (currentId) => currentId || nextTemplates[0]?.id || "",
       );
-      setAppointmentMessageClient(
+      const nextMessageClient =
         (clientData as AppointmentMessageClient | null) ?? {
           id: form.selectedClient,
           name: selectedClientLabel,
           phone: null,
+          email: null,
           sms_opt_in: false,
-        },
-      );
+          email_opt_in: false,
+        };
+
+      setAppointmentMessageClient(nextMessageClient);
+      setManualMessageChannel(getInitialManualMessageChannel(nextMessageClient));
+      setManualEmailSubject(selectedTemplate?.title || "Appointment message");
     } catch (error) {
       console.log("APPOINTMENT MESSAGE TEMPLATE LOAD ERROR:", error);
       setMessageTemplates(BUILT_IN_MESSAGE_TEMPLATES);
     } finally {
       setMessageTemplatesLoading(false);
-    }
-  }
-
-  async function copyAppointmentMessage() {
-    if (!renderedAppointmentMessage) return;
-
-    try {
-      await copyTextToClipboard(renderedAppointmentMessage);
-    } catch (error) {
-      console.error("Clipboard copy failed:", error);
-      Alert.alert("Copy failed", "Unable to copy message. Please try again.");
     }
   }
 
@@ -558,32 +715,203 @@ export default function BookAppointmentScreen() {
     });
   }
 
-  async function openAppointmentSmsApp() {
+  function manualTextIssue() {
     const phoneNumber = getClientPhone(appointmentMessageClient);
 
-    if (!normalizePhoneNumber(phoneNumber)) {
-      await openAppointmentSmsUrl(phoneNumber);
-      return;
-    }
-
+    if (!normalizePhoneNumber(phoneNumber)) return "Add a phone number before sending by text.";
     if (!appointmentMessageClient?.sms_opt_in) {
-      Alert.alert(
-        "SMS opt-in required",
-        "This client has not opted in to appointment texts.",
-        [
-          { text: "Cancel", style: "cancel" },
-          {
-            text: "Open SMS App",
-            onPress: () => {
-              void openAppointmentSmsWithTabletFallback(phoneNumber);
-            },
-          },
-        ],
-      );
+      return "Turn on SMS appointment messages before sending by text.";
+    }
+
+    return "";
+  }
+
+  function manualEmailIssue() {
+    if (!getClientEmail(appointmentMessageClient)) {
+      return "Add an email address before sending by email.";
+    }
+    if (!appointmentMessageClient?.email_opt_in) {
+      return "Turn on email appointment messages before sending by email.";
+    }
+
+    return "";
+  }
+
+  async function requestAppointmentMessageConsent() {
+    if (!appointmentMessageClient?.id) {
+      Alert.alert("Select a client", "Select a client before requesting consent.");
       return;
     }
 
-    await openAppointmentSmsWithTabletFallback(phoneNumber);
+    try {
+      const result = await sendConsentRequests({
+        clientId: appointmentMessageClient.id,
+        recipients: [
+          createPrimaryRecipient({
+            clientId: appointmentMessageClient.id,
+            name: appointmentMessageClient.name,
+            phone: getClientPhone(appointmentMessageClient),
+            email: getClientEmail(appointmentMessageClient),
+            smsOptIn: true,
+            emailOptIn: true,
+          }),
+        ],
+      });
+
+      if (!result.ok && result.code === "no_recipients") {
+        Alert.alert(
+          "Contact info required",
+          "Add a phone number or email address before requesting consent.",
+        );
+        return;
+      }
+
+      Alert.alert(
+        "Consent request sent",
+        `${result.sent || 0} consent request${result.sent === 1 ? "" : "s"} sent.`,
+      );
+    } catch (error) {
+      console.log("Appointment consent request failed", error);
+      Alert.alert("Consent request failed", "Please try again.");
+    }
+  }
+
+  async function sendAppointmentManualMessage() {
+    if (manualEmailSending) return;
+
+    const sendsText = manualMessageChannel === "text" || manualMessageChannel === "both";
+    const sendsEmail = manualMessageChannel === "email" || manualMessageChannel === "both";
+    const textIssue = sendsText ? manualTextIssue() : "";
+    const emailIssue = sendsEmail ? manualEmailIssue() : "";
+
+    if (sendsEmail && !canUseFeature("emailMessaging")) {
+      showProUpgradePrompt(PRO_UPSELL_COPY.emailMessaging);
+      return;
+    }
+
+    if (!appointmentMessageClient?.id) {
+      Alert.alert("Select a client", "Select a client before sending a message.");
+      return;
+    }
+
+    if (textIssue || emailIssue) {
+      Alert.alert("Update client contact info", [textIssue, emailIssue].filter(Boolean).join("\n"), [
+        { text: "Cancel", style: "cancel" },
+        {
+          text: "Edit Client",
+          onPress: () => {
+            setMessageModalVisible(false);
+            openEditSelectedClient();
+          },
+        },
+        {
+          text: "Request Consent",
+          onPress: () => {
+            void requestAppointmentMessageConsent();
+          },
+        },
+      ]);
+      return;
+    }
+
+    if (!renderedAppointmentMessage) {
+      Alert.alert("Choose a template", "Choose a message template first.");
+      return;
+    }
+
+    setManualEmailSending(true);
+    const results: string[] = [];
+    let textFailed = false;
+    const phoneNumber = getClientPhone(appointmentMessageClient);
+
+    try {
+      if (sendsText) {
+        const smsResult = await sendManualClientSms({
+          clientId: appointmentMessageClient.id,
+          appointmentId: form.appointmentId || null,
+          messageBody: renderedAppointmentMessage,
+        });
+
+        if (smsResult.ok) {
+          results.push("Text sent");
+        } else {
+          textFailed = true;
+          results.push(`Text failed: ${smsResult.message || "Please try again."}`);
+        }
+      }
+
+      if (sendsEmail) {
+        const emailResult = await sendManualClientEmail({
+          clientId: appointmentMessageClient.id,
+          appointmentId: form.appointmentId || null,
+          subject:
+            manualEmailSubject.trim() ||
+            selectedTemplate?.title ||
+            "Appointment message",
+          messageBody: renderedAppointmentMessage,
+        });
+
+        if (emailResult.ok) {
+          results.push("Email sent");
+        } else {
+          if (emailResult.code === "not_paid") {
+            showProUpgradePrompt(PRO_UPSELL_COPY.emailMessaging);
+            return;
+          }
+
+          results.push(`Email failed: ${emailResult.message || "Please try again."}`);
+        }
+      }
+
+      const allSucceeded = results.every((result) => result.endsWith("sent"));
+      const title =
+        manualMessageChannel === "both" && allSucceeded
+          ? "Text and email sent"
+          : manualMessageChannel === "email" && allSucceeded
+            ? "Email sent"
+            : manualMessageChannel === "text" && allSucceeded
+              ? "Text sent"
+              : "Message result";
+
+      Alert.alert(title, results.join("\n"), [
+        ...(textFailed
+          ? [
+              {
+                text: "Open SMS App",
+                onPress: () => {
+                  void openAppointmentSmsWithTabletFallback(phoneNumber);
+                },
+              },
+            ]
+          : []),
+        { text: "OK" },
+      ]);
+
+      if (allSucceeded) {
+        setMessageModalVisible(false);
+      }
+    } catch (error) {
+      console.log("Manual appointment message failed", error);
+      Alert.alert("Message not sent", "Please try again.");
+    } finally {
+      setManualEmailSending(false);
+    }
+  }
+
+  function confirmDeliveryContactsReady() {
+    if (form.entryType !== "appointment") return true;
+    if (appointmentDeliveryChoice === "none") return true;
+    if (!form.selectedClient || !missingDeliveryContactWarning) return true;
+
+    Alert.alert("Update client contact info", missingDeliveryContactWarning, [
+      { text: "Cancel", style: "cancel" },
+      {
+        text: "Edit Client",
+        onPress: openEditSelectedClient,
+      },
+    ]);
+
+    return false;
   }
 
   async function handleDeleteAppointment() {
@@ -686,6 +1014,35 @@ export default function BookAppointmentScreen() {
     backgroundColor: fieldBackground,
     borderColor: polishedBorder,
   };
+  const deliveryOptions: {
+    label: string;
+    value: AppointmentDeliveryChoice;
+  }[] = [
+    { label: "Text", value: "text" },
+    { label: "Email", value: "email" },
+    { label: "Text + Email", value: "both" },
+    { label: "None", value: "none" },
+  ];
+  function getDeliveryDisabledReason(choice: AppointmentDeliveryChoice) {
+    if (choice === "none") return "";
+
+    const needsText = shouldSendText(choice);
+    const needsEmail = shouldSendEmail(choice);
+    const hasTextRecipient =
+      selectedRecipientSmsCount > 0 || selectedClientCanReceiveText;
+    const hasEmailRecipient =
+      selectedRecipientEmailCount > 0 || selectedClientCanReceiveEmail;
+
+    if (needsText && !hasTextRecipient) {
+      return "Text needs a phone number and SMS opt-in.";
+    }
+
+    if (needsEmail && !hasEmailRecipient) {
+      return "Email needs an email address and email opt-in.";
+    }
+
+    return "";
+  }
 
   return (
     <GestureHandlerRootView style={{ flex: 1 }}>
@@ -838,6 +1195,162 @@ export default function BookAppointmentScreen() {
                   }}
                 />
               </PickerBox>
+
+              {form.selectedClient ? (
+                <AppButton
+                  title="Edit Client"
+                  variant="secondary"
+                  onPress={openEditSelectedClient}
+                  style={{ marginTop: 12 }}
+                />
+              ) : null}
+
+              {form.selectedClient ? (
+                <View style={{ marginTop: 16 }}>
+                  <Text
+                    style={{
+                      color: colors.text,
+                      fontSize: 16,
+                      fontWeight: "900",
+                      marginBottom: 10,
+                    }}
+                  >
+                    Send appointment message by:
+                  </Text>
+
+                  <View
+                    style={{
+                      flexDirection: "row",
+                      flexWrap: "wrap",
+                      gap: 10,
+                      marginBottom: missingDeliveryContactWarning ? 12 : 0,
+                    }}
+                  >
+                    {deliveryOptions.map((option) => {
+                      const selected = appointmentDeliveryChoice === option.value;
+                      const disabledReason = getDeliveryDisabledReason(option.value);
+                      const disabled = Boolean(disabledReason);
+
+                      return (
+                        <Pressable
+                          key={option.value}
+                          accessibilityRole="button"
+                          disabled={disabled}
+                          onPress={() => {
+                            if (
+                              shouldSendEmail(option.value) &&
+                              !canUseFeature("emailMessaging")
+                            ) {
+                              showProUpgradePrompt(PRO_UPSELL_COPY.emailMessaging);
+                              return;
+                            }
+
+                            if (
+                              shouldSendText(option.value) &&
+                              !canUseFeature("smsAutomation")
+                            ) {
+                              showProUpgradePrompt(PRO_UPSELL_COPY.sms);
+                              return;
+                            }
+
+                            setAppointmentDeliveryChoice(option.value);
+                          }}
+                          style={{
+                            minHeight: 44,
+                            paddingHorizontal: 14,
+                            paddingVertical: 10,
+                            borderRadius: 14,
+                            borderWidth: 1,
+                            borderColor: selected
+                              ? colors.primary
+                              : disabled
+                                ? colors.border
+                                : polishedBorder,
+                            backgroundColor: selected
+                              ? colors.primary
+                              : fieldBackground,
+                            opacity: disabled ? 0.48 : 1,
+                          }}
+                        >
+                          <Text
+                            style={{
+                              color: selected ? "#FFFFFF" : colors.text,
+                              fontWeight: "900",
+                            }}
+                          >
+                            {option.label}
+                          </Text>
+                        </Pressable>
+                      );
+                    })}
+                  </View>
+
+                  {missingDeliveryContactWarning ? (
+                    <View style={subtleInfoPanelStyle}>
+                      <Text style={{ color: colors.text, fontWeight: "900" }}>
+                        Contact info needed
+                      </Text>
+                      <Text
+                        style={{
+                          color: colors.mutedText,
+                          lineHeight: 20,
+                          marginTop: 6,
+                          marginBottom: 12,
+                        }}
+                      >
+                        {missingDeliveryContactWarning}
+                      </Text>
+                      <AppButton
+                        title="Edit Client"
+                        variant="secondary"
+                        onPress={openEditSelectedClient}
+                      />
+                    </View>
+                  ) : null}
+
+                  <Pressable
+                    accessibilityRole="button"
+                    onPress={() => setRecipientManagerVisible(true)}
+                    style={{
+                      marginTop: 12,
+                      padding: 14,
+                      borderRadius: 14,
+                      borderWidth: 1,
+                      borderColor: polishedBorder,
+                      backgroundColor: fieldBackground,
+                    }}
+                  >
+                    <Text
+                      style={{
+                        color: colors.text,
+                        fontWeight: "900",
+                        marginBottom: 6,
+                      }}
+                    >
+                      Sending to
+                    </Text>
+                    <Text style={{ color: colors.mutedText, lineHeight: 20 }}>
+                      {appointmentSmsRecipientCount}{" "}
+                      {appointmentSmsRecipientCount === 1 ? "person" : "people"} by
+                      text
+                    </Text>
+                    <Text style={{ color: colors.mutedText, lineHeight: 20 }}>
+                      {appointmentEmailRecipientCount}{" "}
+                      {appointmentEmailRecipientCount === 1 ? "person" : "people"} by
+                      email
+                    </Text>
+                    <Text
+                      style={{
+                        color: colors.primary,
+                        fontWeight: "900",
+                        marginTop: 8,
+                      }}
+                    >
+                      Change recipients
+                    </Text>
+                  </Pressable>
+                </View>
+              ) : null}
             </AppCard>
 
             <AppCard style={primaryCardStyle}>
@@ -1119,7 +1632,7 @@ export default function BookAppointmentScreen() {
           <AppCard style={infoCardStyle}>
             <SectionHeading
               title="Message client"
-              subtitle="Use a saved template, then copy it or open your SMS app."
+              subtitle="Use a saved template, then copy it or send a manual text or email."
               colors={colors}
               accentColor={infoAccent}
               accentSoft={infoAccentSoft}
@@ -1140,8 +1653,12 @@ export default function BookAppointmentScreen() {
           disabled={form.saving || form.loading}
           onPress={async () => {
             if (form.saving || form.loading) return;
+            if (!confirmDeliveryContactsReady()) return;
 
-            const saved = await form.saveEntry();
+            const saved = await form.saveEntry({
+              deliveryChoice: appointmentDeliveryChoice,
+              recipients: appointmentRecipients,
+            });
 
             if (saved) {
               void Haptics.notificationAsync(
@@ -1280,7 +1797,7 @@ export default function BookAppointmentScreen() {
             <ScrollView keyboardShouldPersistTaps="handled">
               <AppCard style={{ marginBottom: 12 }}>
                 <Text style={{ color: colors.text, fontWeight: "900" }}>
-                  SMS opt-in
+                  Delivery readiness
                 </Text>
                 <Text
                   style={{
@@ -1295,6 +1812,34 @@ export default function BookAppointmentScreen() {
                     ? "Client agreed to appointment texts."
                     : "This client has not opted in to appointment texts."}
                 </Text>
+                <Text
+                  style={{
+                    color: getClientEmail(appointmentMessageClient)
+                      ? colors.mutedText
+                      : "#F59E0B",
+                    lineHeight: 20,
+                    marginTop: 6,
+                  }}
+                >
+                  {getClientEmail(appointmentMessageClient)
+                    ? appointmentMessageClient?.email_opt_in
+                      ? `Email enabled: ${getClientEmail(appointmentMessageClient)}`
+                      : "This client has an email address but has not opted into appointment emails."
+                    : "This client does not have an email address."}
+                </Text>
+                {!getClientEmail(appointmentMessageClient) ||
+                !appointmentMessageClient?.sms_opt_in ||
+                !appointmentMessageClient?.email_opt_in ? (
+                  <AppButton
+                    title="Edit Client"
+                    variant="secondary"
+                    onPress={() => {
+                      setMessageModalVisible(false);
+                      openEditSelectedClient();
+                    }}
+                    style={{ marginTop: 12 }}
+                  />
+                ) : null}
               </AppCard>
 
               <Text
@@ -1415,6 +1960,119 @@ export default function BookAppointmentScreen() {
                 </Text>
               </AppCard>
 
+              <AppCard style={{ marginBottom: 12 }}>
+                <Text
+                  style={{
+                    color: colors.text,
+                    fontWeight: "900",
+                    marginBottom: 10,
+                  }}
+                >
+                  Send by:
+                </Text>
+                <View
+                  style={{
+                    flexDirection: "row",
+                    flexWrap: "wrap",
+                    gap: 8,
+                    marginBottom:
+                      manualMessageChannel === "email" ||
+                      manualMessageChannel === "both"
+                        ? 12
+                        : 0,
+                  }}
+                >
+                  {[
+                    {
+                      label: "Text",
+                      value: "text" as const,
+                      disabled: Boolean(manualTextIssue()),
+                    },
+                    {
+                      label: "Email",
+                      value: "email" as const,
+                      disabled: Boolean(manualEmailIssue()),
+                    },
+                    {
+                      label: "Both",
+                      value: "both" as const,
+                      disabled: Boolean(manualTextIssue() || manualEmailIssue()),
+                    },
+                  ].map((option) => {
+                    const selected = manualMessageChannel === option.value;
+
+                    return (
+                      <Pressable
+                        key={option.value}
+                        accessibilityRole="button"
+                        disabled={option.disabled}
+                        onPress={() => setManualMessageChannel(option.value)}
+                        style={{
+                          minHeight: 42,
+                          paddingHorizontal: 14,
+                          borderRadius: 999,
+                          alignItems: "center",
+                          justifyContent: "center",
+                          borderWidth: 1,
+                          borderColor: selected ? colors.primary : colors.border,
+                          backgroundColor: selected ? colors.primary : colors.card,
+                          opacity: option.disabled ? 0.45 : 1,
+                        }}
+                      >
+                        <Text
+                          style={{
+                            color: selected ? "#FFFFFF" : colors.text,
+                            fontWeight: "900",
+                          }}
+                        >
+                          {option.label}
+                        </Text>
+                      </Pressable>
+                    );
+                  })}
+                </View>
+                {manualMessageChannel === "email" ||
+                manualMessageChannel === "both" ? (
+                  <TextInput
+                    value={manualEmailSubject}
+                    onChangeText={setManualEmailSubject}
+                    placeholder="Email subject"
+                    placeholderTextColor={colors.mutedText}
+                    style={textInputStyle(colors)}
+                  />
+                ) : null}
+                {manualTextIssue() || manualEmailIssue() ? (
+                  <View style={{ gap: 8, marginTop: 10 }}>
+                    <Text style={{ color: colors.mutedText, lineHeight: 20 }}>
+                      {[manualTextIssue(), manualEmailIssue()]
+                        .filter(Boolean)
+                        .join("\n")}
+                    </Text>
+                    <View style={{ flexDirection: "row", flexWrap: "wrap", gap: 8 }}>
+                      <AppButton
+                        title="Edit Client"
+                        variant="secondary"
+                        onPress={() => {
+                          setMessageModalVisible(false);
+                          openEditSelectedClient();
+                        }}
+                        fullWidth={false}
+                        style={{ flexGrow: 1, flexBasis: 140 }}
+                      />
+                      <AppButton
+                        title="Request Consent"
+                        variant="secondary"
+                        onPress={() => {
+                          void requestAppointmentMessageConsent();
+                        }}
+                        fullWidth={false}
+                        style={{ flexGrow: 1, flexBasis: 140 }}
+                      />
+                    </View>
+                  </View>
+                ) : null}
+              </AppCard>
+
               <View
                 style={{
                   flexDirection: "row",
@@ -1424,19 +2082,12 @@ export default function BookAppointmentScreen() {
                 }}
               >
                 <AppButton
-                  title="Copy Message"
+                  title={manualEmailSending ? "Sending..." : "Send Message"}
                   onPress={() => {
-                    void copyAppointmentMessage();
+                    void sendAppointmentManualMessage();
                   }}
-                  fullWidth={false}
-                  style={{ flexGrow: 1, flexBasis: 150 }}
-                />
-                <AppButton
-                  title="Open SMS App"
-                  variant="secondary"
-                  onPress={() => {
-                    void openAppointmentSmsApp();
-                  }}
+                  loading={manualEmailSending}
+                  disabled={manualEmailSending}
                   fullWidth={false}
                   style={{ flexGrow: 1, flexBasis: 150 }}
                 />
@@ -1459,6 +2110,64 @@ export default function BookAppointmentScreen() {
           void shareAndroidTabletSmsFallback();
         }}
       />
+
+      <Modal
+        visible={recipientManagerVisible}
+        transparent
+        animationType="slide"
+        onRequestClose={() => setRecipientManagerVisible(false)}
+      >
+        <View
+          style={{
+            flex: 1,
+            backgroundColor: "rgba(0,0,0,0.58)",
+            justifyContent: "flex-end",
+          }}
+        >
+          <View
+            style={{
+              backgroundColor: colors.background,
+              borderTopLeftRadius: 24,
+              borderTopRightRadius: 24,
+              borderWidth: 1,
+              borderColor: colors.border,
+              maxHeight: "88%",
+              padding: 18,
+            }}
+          >
+            <View
+              style={{
+                flexDirection: "row",
+                alignItems: "center",
+                justifyContent: "space-between",
+                gap: 12,
+                marginBottom: 12,
+              }}
+            >
+              <Text style={{ color: colors.text, fontSize: 22, fontWeight: "900" }}>
+                Recipients
+              </Text>
+              <Pressable
+                accessibilityRole="button"
+                onPress={() => setRecipientManagerVisible(false)}
+                hitSlop={10}
+              >
+                <Text style={{ color: colors.mutedText, fontWeight: "900" }}>
+                  Done
+                </Text>
+              </Pressable>
+            </View>
+            <ScrollView keyboardShouldPersistTaps="handled">
+              <CommunicationRecipientsSection
+                clientId={form.selectedClient}
+                colors={colors}
+                recipients={appointmentRecipients}
+                onChange={setAppointmentRecipients}
+              />
+            </ScrollView>
+          </View>
+        </View>
+      </Modal>
     </GestureHandlerRootView>
   );
 }

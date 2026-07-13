@@ -7,6 +7,8 @@ let lastProNavigationAt = 0;
 
 export const PRO_UPSELL_COPY = {
   sms: "SMS appointment texts are included with Schedova Pro.",
+  emailMessaging:
+    "Email appointment messages and client replies are included with Schedova Pro.",
   reports: "Reports are included with Schedova Pro.",
   blockedTime: "Blocked time is included with Schedova Pro.",
   vacationBlocks: "Vacation blocks are included with Schedova Pro.",

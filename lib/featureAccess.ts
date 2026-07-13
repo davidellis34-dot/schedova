@@ -19,6 +19,7 @@ export const FREE_TIER_LIMITS = {
 
 export const PRO_FEATURE_HIGHLIGHTS = [
   "SMS appointment texts and confirmations",
+  "Email appointment messages and client replies",
   "Smart rebooking and follow-up reminders",
   "Reports and business insights",
   "Advanced client history timeline",
@@ -42,6 +43,7 @@ export type FeatureKey =
   | "unlimitedMessageTemplates"
   | "customTagsStatusesColors"
   | "smsAutomation"
+  | "emailMessaging"
   | "smartReminders"
   | "waitlist"
   | "noShowTracker"
@@ -340,6 +342,7 @@ export function canUseFeature(feature: FeatureKey) {
     case "unlimitedMessageTemplates":
     case "customTagsStatusesColors":
     case "smsAutomation":
+    case "emailMessaging":
     case "smartReminders":
     case "waitlist":
     case "noShowTracker":

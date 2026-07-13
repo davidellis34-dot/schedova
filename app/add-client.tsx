@@ -1,8 +1,9 @@
 import { Ionicons } from "@expo/vector-icons";
 import { useRouter } from "expo-router";
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import { Alert, Switch, Text, View } from "react-native";
 import { ClientTagPicker } from "../components/ClientTagPicker";
+import { CommunicationRecipientsSection } from "../components/clients/CommunicationRecipientsSection";
 import {
   AppButton,
   AppCard,
@@ -11,6 +12,11 @@ import {
   ScreenHeader,
 } from "../components/ui";
 import type { ClientTag } from "../lib/clientTags";
+import {
+  createPrimaryRecipient,
+  saveClientCommunicationRecipients,
+  type CommunicationRecipient,
+} from "../lib/communicationRecipients";
 import { normalizePhoneForSmsWithUserDefault } from "../lib/countrySettings";
 import {
   canUseFeature,
@@ -71,9 +77,31 @@ export default function AddClientScreen() {
   const [birthday, setBirthday] = useState("");
   const [rebookingWeeks, setRebookingWeeks] = useState("6");
   const [smsOptIn, setSmsOptIn] = useState(false);
+  const [recipients, setRecipients] = useState<CommunicationRecipient[]>([
+    createPrimaryRecipient({}),
+  ]);
   const [clientTag, setClientTag] = useState<ClientTag>("New");
   const [saving, setSaving] = useState(false);
   const [errorMessage, setErrorMessage] = useState("");
+
+  useEffect(() => {
+    setRecipients((current) => {
+      const next = current.length > 0 ? [...current] : [createPrimaryRecipient({})];
+      const primary = next[0];
+
+      next[0] = {
+        ...primary,
+        name: primary.name || name,
+        phone: primary.phone || phone,
+        email: primary.email || email,
+        smsEnabled: primary.smsEnabled || smsOptIn,
+        emailEnabled: primary.emailEnabled || Boolean(email.trim()),
+        isPrimary: true,
+      };
+
+      return next;
+    });
+  }, [email, name, phone, smsOptIn]);
 
   async function saveClient() {
     if (saving) return;
@@ -136,22 +164,47 @@ export default function AddClientScreen() {
         }
       }
 
-      const { error } = await supabase.from("clients").insert({
-        user_id: user.id,
-        name: displayName,
-        phone: trimmedPhone || null,
-        email: trimmedEmail || null,
-        notes: trimmedNotes || null,
-        birthday: trimmedBirthday || null,
-        rebooking_weeks: parseRebookingWeeks(rebookingWeeks),
-        client_tag: clientTag,
-        sms_opt_in: smsOptIn,
-      });
+      const { data: insertedClient, error } = await supabase
+        .from("clients")
+        .insert({
+          user_id: user.id,
+          name: displayName,
+          phone: trimmedPhone || null,
+          email: trimmedEmail || null,
+          notes: trimmedNotes || null,
+          birthday: trimmedBirthday || null,
+          rebooking_weeks: parseRebookingWeeks(rebookingWeeks),
+          client_tag: clientTag,
+          sms_opt_in: smsOptIn,
+        })
+        .select("id")
+        .single();
 
       if (error) {
         setErrorMessage(error.message);
         Alert.alert("Error", error.message);
         return;
+      }
+
+      const clientId = String(insertedClient?.id || "");
+      if (clientId) {
+        await saveClientCommunicationRecipients({
+          userId: user.id,
+          clientId,
+          recipients: recipients.map((recipient, index) =>
+            index === 0
+              ? {
+                  ...recipient,
+                  name: recipient.name || displayName,
+                  phone: recipient.phone || trimmedPhone,
+                  email: recipient.email || trimmedEmail,
+                  smsEnabled: recipient.smsEnabled || smsOptIn,
+                  emailEnabled: recipient.emailEnabled || Boolean(trimmedEmail),
+                  isPrimary: true,
+                }
+              : recipient,
+          ),
+        });
       }
 
       router.replace("/clients" as any);
@@ -370,6 +423,12 @@ export default function AddClientScreen() {
           containerStyle={{ marginBottom: 0 }}
         />
       </AppCard>
+
+      <CommunicationRecipientsSection
+        colors={colors}
+        recipients={recipients}
+        onChange={setRecipients}
+      />
 
       <AppButton
         title="Save Client"

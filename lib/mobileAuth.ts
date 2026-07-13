@@ -228,11 +228,19 @@ function buildAppleFullName(
 }
 
 function isAppleAuthCancellation(error: unknown) {
-  return (
+  const code =
     typeof error === "object" &&
     error !== null &&
     "code" in error &&
-    error.code === "ERR_REQUEST_CANCELED"
+    typeof error.code === "string"
+      ? error.code
+      : "";
+
+  return (
+    code === "ERR_REQUEST_CANCELED" ||
+    code === "ERR_CANCELED" ||
+    code === "ERR_REQUEST_CANCELLED" ||
+    code === "ERR_CANCELED_BY_USER"
   );
 }
 
@@ -240,19 +248,33 @@ export async function isNativeAppleAuthAvailable() {
   return await AppleAuthentication.isAvailableAsync();
 }
 
+export async function generateSecureNonce(length = 32) {
+  const charset =
+    "0123456789ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz-._";
+  const randomBytes = await Crypto.getRandomBytesAsync(length);
+
+  return Array.from(randomBytes)
+    .map((byte) => charset[byte % charset.length])
+    .join("");
+}
+
+export async function sha256(value: string) {
+  return await Crypto.digestStringAsync(
+    Crypto.CryptoDigestAlgorithm.SHA256,
+    value,
+    { encoding: Crypto.CryptoEncoding.HEX },
+  );
+}
+
 export async function beginNativeAppleSignIn(): Promise<NativeAppleSignInResult> {
   try {
-    const rawNonce = Crypto.randomUUID();
-    const hashedNonce = await Crypto.digestStringAsync(
-      Crypto.CryptoDigestAlgorithm.SHA256,
-      rawNonce,
-      { encoding: Crypto.CryptoEncoding.HEX },
-    );
+    const rawNonce = await generateSecureNonce();
+    const hashedNonce = await sha256(rawNonce);
     const state = Crypto.randomUUID();
 
     if (__DEV__) {
-      console.log("Apple nonce generated: true");
-      console.log("Apple hashed nonce generated: true");
+      console.log("[AppleAuth] nonce generated", true);
+      console.log("[AppleAuth] hashed nonce generated", true);
     }
 
     const credential = await AppleAuthentication.signInAsync({
@@ -264,13 +286,20 @@ export async function beginNativeAppleSignIn(): Promise<NativeAppleSignInResult>
       state,
     });
 
+    if (__DEV__) {
+      console.log("[AppleAuth] credential returned", true);
+      console.log(
+        "[AppleAuth] identity token present",
+        Boolean(credential.identityToken),
+      );
+    }
+
     if (!credential.identityToken) {
       throw new Error("Apple did not return a sign-in token.");
     }
 
     if (__DEV__) {
-      console.log("Apple identity token present: true");
-      console.log("Supabase signInWithIdToken called with raw nonce: true");
+      console.log("[AppleAuth] Supabase signInWithIdToken raw nonce supplied", true);
     }
 
     const { data, error } = await supabase.auth.signInWithIdToken({
@@ -280,7 +309,28 @@ export async function beginNativeAppleSignIn(): Promise<NativeAppleSignInResult>
     });
 
     if (error) {
+      if (__DEV__) {
+        console.log("[AppleAuth] Supabase auth error", {
+          code:
+            "code" in error && typeof error.code === "string"
+              ? error.code
+              : null,
+          message: error.message,
+        });
+      }
       throw error;
+    }
+
+    const confirmedSession =
+      data.session ?? (await supabase.auth.getSession()).data.session ?? null;
+
+    if (__DEV__) {
+      console.log("[AppleAuth] session created", Boolean(confirmedSession?.user));
+      console.log("[AppleAuth] user email if available", confirmedSession?.user?.email ?? null);
+    }
+
+    if (!confirmedSession?.user) {
+      throw new Error("Apple sign-in completed, but no session was created.");
     }
 
     const fullName = buildAppleFullName(credential.fullName);
@@ -308,10 +358,13 @@ export async function beginNativeAppleSignIn(): Promise<NativeAppleSignInResult>
 
     return {
       cancelled: false,
-      session: data.session,
+      session: confirmedSession,
     };
   } catch (error) {
     if (isAppleAuthCancellation(error)) {
+      if (__DEV__) {
+        console.log("[AppleAuth] cancelled", true);
+      }
       return {
         cancelled: true,
         session: null,

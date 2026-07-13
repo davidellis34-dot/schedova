@@ -25,6 +25,8 @@ export function getFriendlySmsMessage(code?: string | null) {
       return "This client does not have a phone number.";
     case "invalid_phone":
       return "Please check the client's phone number.";
+    case "client_not_opted_in":
+      return "This client has not opted into appointment texts.";
     case "insufficient_credits":
       return "You are out of SMS credits. Buy a message pack to keep sending texts.";
     case "sms_provider_failed":
@@ -225,4 +227,69 @@ export async function sendAppointmentSmsNonBlocking(
       message: SMS_SEND_FRIENDLY_ERROR,
     } satisfies AppointmentSmsResult;
   }
+}
+
+export async function sendManualClientSms(input: {
+  clientId: string;
+  appointmentId?: string | null;
+  conversationId?: string | null;
+  messageBody: string;
+}): Promise<
+  AppointmentSmsResult & {
+    messageId?: string | null;
+    providerMessageId?: string | null;
+    conversationId?: string | null;
+    balance?: number | null;
+  }
+> {
+  const { data, error } = await supabase.functions.invoke(
+    "send-manual-client-sms",
+    {
+      body: input,
+    },
+  );
+
+  if (error) {
+    const context = (error as { context?: Response }).context;
+    const errorDetails = await readFunctionErrorDetails(error);
+    const code =
+      typeof errorDetails === "object" &&
+      errorDetails &&
+      "code" in errorDetails &&
+      typeof (errorDetails as { code?: unknown }).code === "string"
+        ? (errorDetails as { code: string }).code
+        : context?.status === 402
+          ? "insufficient_credits"
+          : "function_error";
+
+    if (__DEV__) {
+      console.log("Manual SMS function error", {
+        status: context?.status,
+        details: errorDetails,
+      });
+    }
+
+    return {
+      ok: false,
+      status: context?.status,
+      code,
+      message: getFriendlySmsMessage(code),
+    };
+  }
+
+  const result = {
+    ok: true,
+    ...(typeof data === "object" && data ? data : {}),
+  } as AppointmentSmsResult & {
+    messageId?: string | null;
+    providerMessageId?: string | null;
+    conversationId?: string | null;
+    balance?: number | null;
+  };
+
+  if (result.ok && !result.skipped) {
+    emitSmsBalanceUpdated();
+  }
+
+  return result;
 }

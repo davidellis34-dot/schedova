@@ -649,6 +649,24 @@ export default function Dashboard() {
     } as any);
   }
 
+  function openEditClientForAppointment(appointment: any) {
+    const clientId = String(appointment?.client_id || "").trim();
+
+    if (!clientId) {
+      Alert.alert(
+        "Client not found",
+        "This appointment is not linked to an editable client.",
+      );
+      return;
+    }
+
+    setActionAppointment(null);
+    router.push({
+      pathname: "/edit-client",
+      params: { clientId },
+    } as any);
+  }
+
   function shouldIgnoreAppointmentPress(appointmentId: string) {
     if (longPressHandledAppointmentId.current !== appointmentId) {
       return false;
@@ -1188,6 +1206,14 @@ export default function Dashboard() {
             variant="primary"
             fullWidth={false}
             onPress={() => openAppointmentEdit(appointment)}
+            style={{ flex: 1 }}
+            textStyle={{ fontSize: getFontSize(13) }}
+          />
+          <AppButton
+            title="Edit Client"
+            variant="secondary"
+            fullWidth={false}
+            onPress={() => openEditClientForAppointment(appointment)}
             style={{ flex: 1 }}
             textStyle={{ fontSize: getFontSize(13) }}
           />

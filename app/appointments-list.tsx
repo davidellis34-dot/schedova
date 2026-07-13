@@ -233,6 +233,39 @@ export default function AppointmentsList() {
     return clients.find((client) => client?.name === name);
   }
 
+  function getClientForAppointment(appointment?: any | null) {
+    if (!appointment) return null;
+
+    const appointmentClientId = String(appointment.client_id || "").trim();
+
+    return (
+      clients.find(
+        (client) => String(client?.id || "").trim() === appointmentClientId,
+      ) ||
+      getClientByName(appointment.client_name) ||
+      null
+    );
+  }
+
+  function openEditClientForAppointment(appointment?: any | null) {
+    const client = getClientForAppointment(appointment);
+    const clientId =
+      String(appointment?.client_id || "").trim() ||
+      String(client?.id || "").trim();
+
+    if (!clientId) {
+      Alert.alert("Client not found", "This appointment is not linked to an editable client.");
+      return;
+    }
+
+    setActionAppointment(null);
+    setSelectedAppointment(null);
+    router.push({
+      pathname: "/edit-client",
+      params: { clientId },
+    } as any);
+  }
+
   function formatLocalDate(date: Date) {
     return (
       `${date.getFullYear()}-` +
@@ -648,7 +681,7 @@ export default function AppointmentsList() {
     : [];
 
   const selectedClient = selectedAppointment
-    ? getClientByName(selectedAppointment.client_name)
+    ? getClientForAppointment(selectedAppointment)
     : null;
 
   const selectedRebookDate =
@@ -1071,6 +1104,23 @@ export default function AppointmentsList() {
               >
                 <Text style={{ color: "#fff", fontWeight: "bold" }}>
                   Edit Appointment
+                </Text>
+              </Pressable>
+
+              <Pressable
+                onPress={() => openEditClientForAppointment(selectedAppointment)}
+                style={{
+                  backgroundColor: colors.card,
+                  borderWidth: 1,
+                  borderColor: polishedBorder,
+                  padding: 14,
+                  borderRadius: 12,
+                  alignItems: "center",
+                  marginBottom: 18,
+                }}
+              >
+                <Text style={{ color: colors.text, fontWeight: "bold" }}>
+                  Edit Client
                 </Text>
               </Pressable>
 

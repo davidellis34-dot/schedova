@@ -854,7 +854,69 @@ Deno.serve(async (req) => {
     });
   }
 
-  const toPhone = normalizePhoneForSms(client.phone, countryRegion);
+  const { data: smsRecipientRows, error: smsRecipientError } = await serviceClient
+    .from("appointment_message_recipients")
+    .select("contact_name, phone, send_sms")
+    .eq("appointment_id", appointment.id)
+    .eq("user_id", user.id)
+    .eq("send_sms", true);
+
+  if (smsRecipientError) {
+    console.error("sms recipient lookup failure", {
+      error: smsRecipientError,
+      userId: user.id,
+      appointmentId: appointment.id,
+    });
+  }
+
+  const smsRecipients = ((smsRecipientRows || []) as JsonObject[])
+    .map((recipient) => ({
+      name: asTrimmedString(recipient.contact_name),
+      toPhone: normalizePhoneForSms(asTrimmedString(recipient.phone), countryRegion),
+    }))
+    .filter((recipient) => recipient.toPhone);
+  const hasSavedSmsRecipients = smsRecipients.length > 0;
+  const fallbackPhone = normalizePhoneForSms(client.phone, countryRegion);
+
+  if (smsRecipients.length === 0) {
+    if (fallbackPhone && client.sms_opt_in) {
+      smsRecipients.push({
+        name: asTrimmedString(client.name || appointment.client_name),
+        toPhone: fallbackPhone,
+      });
+    }
+  }
+
+  const toPhone = smsRecipients[0]?.toPhone || "";
+
+  if (!hasSavedSmsRecipients && fallbackPhone && !client.sms_opt_in) {
+    console.error("sms_opt_in skipped", {
+      userId: user.id,
+      appointmentId: appointment.id,
+      clientId: client.id,
+      toPhone: fallbackPhone,
+    });
+    await tryInsertSmsLog(
+      serviceClient,
+      buildSmsLogPayload({
+        userId: user.id,
+        appointmentId: appointment.id,
+        clientId: client.id,
+        messageType,
+        toPhone: fallbackPhone,
+        status: "skipped",
+        fromNumber: telnyxFromNumber || null,
+        errorMessage: "Client has not opted in to SMS",
+      }),
+      "sms_opt_in",
+    );
+    return jsonResponse({
+      ok: true,
+      skipped: true,
+      step: "sms_opt_in",
+      code: "client_not_opted_in",
+    });
+  }
 
   if (!toPhone) {
     await tryInsertSmsLog(
@@ -875,35 +937,6 @@ Deno.serve(async (req) => {
       skipped: true,
       step: "phone_normalization",
       code: "missing_phone",
-    });
-  }
-
-  if (!client.sms_opt_in) {
-    console.error("sms_opt_in skipped", {
-      userId: user.id,
-      appointmentId: appointment.id,
-      clientId: client.id,
-      toPhone,
-    });
-    await tryInsertSmsLog(
-      serviceClient,
-      buildSmsLogPayload({
-        userId: user.id,
-        appointmentId: appointment.id,
-        clientId: client.id,
-        messageType,
-        toPhone,
-        status: "skipped",
-        fromNumber: telnyxFromNumber || null,
-        errorMessage: "Client has not opted in to SMS",
-      }),
-      "sms_opt_in",
-    );
-    return jsonResponse({
-      ok: true,
-      skipped: true,
-      step: "sms_opt_in",
-      code: "client_not_opted_in",
     });
   }
 
@@ -970,6 +1003,210 @@ Deno.serve(async (req) => {
         message: SMS_SEND_FRIENDLY_ERROR,
       },
     );
+  }
+
+  if (smsRecipients.length > 1) {
+    const sentResults: JsonObject[] = [];
+    const failedResults: JsonObject[] = [];
+
+    for (const recipient of smsRecipients) {
+      const recipientPhone = recipient.toPhone;
+      const payloadForRecipient = (input: {
+        status: string;
+        providerMessageId?: string | null;
+        providerResponse?: unknown;
+        errorMessage?: string | null;
+      }) =>
+        buildSmsLogPayload({
+          userId: user.id,
+          appointmentId: appointment.id,
+          clientId: client.id,
+          messageType,
+          toPhone: recipientPhone,
+          smsBody,
+          status: input.status,
+          fromNumber: telnyxFromNumber || null,
+          providerMessageId: input.providerMessageId || null,
+          providerResponse: input.providerResponse || null,
+          errorMessage: input.errorMessage || null,
+        });
+
+      const reservation = await reserveMessageCredit(serviceClient, {
+        userId: user.id,
+        appointmentId: appointment.id,
+        clientId: client.id,
+        messageType,
+        reason: "sms_send",
+        metadata: {
+          function: "send-appointment-sms",
+          appointmentId: appointment.id,
+          clientId: client.id,
+          messageType,
+          recipientPhone,
+        },
+      });
+
+      if (reservation.error || !reservation.data.ok || !reservation.data.reserved) {
+        failedResults.push({
+          toPhone: recipientPhone,
+          code: reservation.error ? "reservation_error" : "insufficient_credits",
+        });
+        await tryInsertSmsLog(
+          serviceClient,
+          payloadForRecipient({
+            status: "failed",
+            errorMessage: reservation.error
+              ? "Message credit reservation failed"
+              : "Insufficient message credits",
+          }),
+          "message_credit_reservation",
+        );
+        continue;
+      }
+
+      const reservationId = asTrimmedString(reservation.data.eventId);
+      const queuedLogId = await tryInsertSmsLog(
+        serviceClient,
+        payloadForRecipient({ status: "queued" }),
+        "sms_message_logs_insert",
+      );
+
+      if (!queuedLogId) {
+        if (reservationId) {
+          await refundMessageCreditReservation(serviceClient, {
+            eventId: reservationId,
+            refundReason: "sms_log_insert_failed",
+          });
+        }
+        failedResults.push({ toPhone: recipientPhone, code: "sms_log_insert_failed" });
+        continue;
+      }
+
+      const telnyxRequestBody = {
+        from: telnyxFromNumber,
+        to: recipientPhone,
+        text: smsBody,
+        messaging_profile_id: telnyxMessagingProfileId,
+      };
+
+      try {
+        const telnyxResponse = await fetch(TELNYX_MESSAGES_URL, {
+          method: "POST",
+          headers: {
+            Authorization: `Bearer ${telnyxApiKey}`,
+            "Content-Type": "application/json",
+          },
+          body: JSON.stringify(telnyxRequestBody),
+        });
+        const telnyxResponseText = await telnyxResponse.text();
+        const telnyxResponseBody =
+          safeParseJson(telnyxResponseText) || { raw: telnyxResponseText };
+        const providerMessageId =
+          extractTelnyxProviderMessageId(telnyxResponseBody);
+
+        if (!telnyxResponse.ok) {
+          const telnyxErrorMessage = extractTelnyxErrorMessage(
+            telnyxResponseBody,
+            telnyxResponse.status,
+          );
+          await tryUpdateSmsLog(
+            serviceClient,
+            queuedLogId,
+            payloadForRecipient({
+              status: "failed",
+              providerMessageId,
+              providerResponse: telnyxResponseBody,
+              errorMessage: telnyxErrorMessage,
+            }),
+            "telnyx_send_failed",
+          );
+          if (reservationId) {
+            await refundMessageCreditReservation(serviceClient, {
+              eventId: reservationId,
+              refundReason: "telnyx_send_failed",
+              smsMessageLogId: queuedLogId,
+            });
+          }
+          failedResults.push({ toPhone: recipientPhone, code: "sms_provider_failed" });
+          continue;
+        }
+
+        const providerStatus = extractTelnyxMessageStatus(telnyxResponseBody);
+        let messageCreditWarning: string | null = null;
+
+        if (reservationId) {
+          const confirmationResult = await confirmMessageCreditReservation(
+            serviceClient,
+            {
+              eventId: reservationId,
+              smsMessageLogId: queuedLogId,
+            },
+          );
+
+          if (
+            confirmationResult.error ||
+            (!confirmationResult.data.ok &&
+              confirmationResult.data.reason !== "already_confirmed")
+          ) {
+            messageCreditWarning =
+              "SMS sent, but message credit confirmation needs review.";
+          }
+        }
+
+        await tryUpdateSmsLog(
+          serviceClient,
+          queuedLogId,
+          payloadForRecipient({
+            status: providerStatus,
+            providerMessageId,
+            providerResponse: telnyxResponseBody,
+            errorMessage: messageCreditWarning,
+          }),
+          "telnyx_send_success",
+        );
+        sentResults.push({
+          toPhone: recipientPhone,
+          providerMessageId,
+          providerStatus,
+        });
+      } catch (error) {
+        await tryUpdateSmsLog(
+          serviceClient,
+          queuedLogId,
+          payloadForRecipient({
+            status: "failed",
+            providerResponse: serializeDetails(error),
+            errorMessage: getErrorMessage(error),
+          }),
+          "telnyx_send_exception",
+        );
+        if (reservationId) {
+          await refundMessageCreditReservation(serviceClient, {
+            eventId: reservationId,
+            refundReason: "telnyx_send_exception",
+            smsMessageLogId: queuedLogId,
+          });
+        }
+        failedResults.push({ toPhone: recipientPhone, code: "sms_provider_failed" });
+      }
+    }
+
+    const sentAtColumn = appointmentSentAtColumn(messageType);
+    if (sentResults.length > 0 && sentAtColumn) {
+      await serviceClient
+        .from("appointments")
+        .update({ [sentAtColumn]: new Date().toISOString() })
+        .eq("id", appointment.id)
+        .eq("user_id", user.id);
+    }
+
+    return jsonResponse({
+      ok: sentResults.length > 0,
+      step: "telnyx_send",
+      sent: sentResults.length,
+      failed: failedResults,
+      results: sentResults,
+    }, sentResults.length > 0 ? 200 : 402);
   }
 
   const queuedLogPayload = logPayloadFor({ status: "queued" });

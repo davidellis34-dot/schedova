@@ -1,5 +1,5 @@
-import { useLocalSearchParams, useRouter } from "expo-router";
-import { useCallback, useEffect, useMemo, useState } from "react";
+import { useFocusEffect, useLocalSearchParams, useRouter } from "expo-router";
+import { useCallback, useMemo, useState } from "react";
 import {
   Alert,
   Dimensions,
@@ -10,6 +10,7 @@ import {
   ScrollView,
   Share,
   Text,
+  TextInput,
   View,
 } from "react-native";
 
@@ -32,8 +33,14 @@ import {
   getAppointmentServices,
   getAppointmentServiceTotal,
 } from "../lib/appointmentServices";
+import { sendManualClientEmail } from "../lib/appointmentEmail";
+import { sendManualClientSms } from "../lib/appointmentSms";
 import { normalizeClientTag } from "../lib/clientTags";
 import { copyTextToClipboard } from "../lib/clipboard";
+import {
+  createPrimaryRecipient,
+  sendConsentRequests,
+} from "../lib/communicationRecipients";
 import {
   canUseFeature,
   FREE_TIER_LIMITS,
@@ -73,9 +80,12 @@ type ClientRecord = {
   notes?: string | null;
   client_tag?: string | null;
   sms_opt_in?: boolean | null;
+  email_opt_in?: boolean | null;
   rebooking_weeks?: number | null;
   no_show_count?: number | null;
 };
+
+type ManualMessageChannel = "text" | "email" | "both";
 
 type AppointmentRecord = {
   id: string;
@@ -220,8 +230,21 @@ function getClientPhone(clientRecord: any, appointment?: any) {
   );
 }
 
+function getClientEmail(clientRecord: any) {
+  return String(clientRecord?.email || "").trim();
+}
+
 function getTemplateBody(template: any) {
   return template?.body || template?.message || template?.content || "";
+}
+
+function getInitialManualMessageChannel(clientRecord: ClientRecord | null) {
+  const canText = Boolean(normalizePhoneNumber(getClientPhone(clientRecord))) &&
+    Boolean(clientRecord?.sms_opt_in);
+  const canEmail = Boolean(getClientEmail(clientRecord)) &&
+    Boolean(clientRecord?.email_opt_in);
+
+  return canText ? "text" : canEmail ? "email" : "text";
 }
 
 function buildSmsUrls(phone: string, message: string) {
@@ -389,7 +412,7 @@ export default function ClientDetailsScreen() {
   const router = useRouter();
   const { colors, themeName } = useAppTheme();
   const theme = createSchedovaUiTheme(colors);
-  useFeatureAccess();
+  const featureAccess = useFeatureAccess();
   const isDarkTheme = themeName === "dark" || themeName === "black";
   const infoAccent = isDarkTheme ? "#60A5FA" : "#2563EB";
   const infoAccentBorder = isDarkTheme
@@ -419,6 +442,11 @@ export default function ClientDetailsScreen() {
     BUILT_IN_MESSAGE_TEMPLATES[0]?.id ?? "",
   );
   const [messageTemplatesLoading, setMessageTemplatesLoading] = useState(false);
+  const [manualMessageChannel, setManualMessageChannel] =
+    useState<ManualMessageChannel>("text");
+  const [manualEmailSubject, setManualEmailSubject] =
+    useState("Appointment message");
+  const [manualMessageSending, setManualMessageSending] = useState(false);
   const [androidTabletSmsFallback, setAndroidTabletSmsFallback] =
     useState<AndroidTabletSmsFallback | null>(null);
 
@@ -506,9 +534,11 @@ export default function ClientDetailsScreen() {
     }
   }, [clientIdValue]);
 
-  useEffect(() => {
-    void fetchData();
-  }, [fetchData]);
+  useFocusEffect(
+    useCallback(() => {
+      void fetchData();
+    }, [fetchData]),
+  );
 
   const clientAppointments = useMemo(
     () => normalizeAppointments(appointments),
@@ -593,11 +623,13 @@ export default function ClientDetailsScreen() {
   const suggestedRebookDate = getSuggestedRebookDate();
 
   const openEditClient = () => {
-    if (!clientIdValue) {
+    const clientId = String(clientIdValue || "").trim();
+
+    if (!clientId) {
       return;
     }
 
-    router.push({ pathname: "/edit-client", params: { clientId: clientIdValue } });
+    router.push({ pathname: "/edit-client", params: { clientId } });
   };
 
   const openBookAppointment = () => {
@@ -690,6 +722,8 @@ export default function ClientDetailsScreen() {
       return;
     }
 
+    setManualMessageChannel(getInitialManualMessageChannel(client));
+    setManualEmailSubject(selectedTemplate?.title || "Appointment message");
     setMessageModalVisible(true);
 
     if (messageTemplates.length > BUILT_IN_MESSAGE_TEMPLATES.length) {
@@ -722,17 +756,6 @@ export default function ClientDetailsScreen() {
       setMessageTemplates(BUILT_IN_MESSAGE_TEMPLATES);
     } finally {
       setMessageTemplatesLoading(false);
-    }
-  }
-
-  async function copySelectedMessage() {
-    if (!renderedMessage) return;
-
-    try {
-      await copyTextToClipboard(renderedMessage);
-    } catch (error) {
-      console.error("Clipboard copy failed:", error);
-      Alert.alert("Copy failed", "Unable to copy message. Please try again.");
     }
   }
 
@@ -791,35 +814,186 @@ export default function ClientDetailsScreen() {
     });
   }
 
-  async function openSmsApp() {
+  function manualTextIssue() {
     const phoneNumber = getClientPhone(client, messageAppointment);
 
     if (!normalizePhoneNumber(phoneNumber)) {
-      Alert.alert(
-        "Missing phone number",
-        "Add a phone number for this client before sending a message.",
-      );
-      return;
+      return "Add a phone number before sending by text.";
     }
-
     if (!client?.sms_opt_in) {
-      Alert.alert(
-        "SMS opt-in required",
-        "This client has not opted in to appointment texts.",
-        [
-          { text: "Cancel", style: "cancel" },
-          {
-            text: "Open SMS App",
-            onPress: () => {
-              void openSmsWithTabletFallback(phoneNumber);
-            },
-          },
-        ],
-      );
+      return "Turn on SMS appointment messages before sending by text.";
+    }
+
+    return "";
+  }
+
+  function manualEmailIssue() {
+    if (!getClientEmail(client)) {
+      return "Add an email address before sending by email.";
+    }
+    if (!client?.email_opt_in) {
+      return "Turn on email appointment messages before sending by email.";
+    }
+
+    return "";
+  }
+
+  async function requestClientMessageConsent() {
+    const cleanClientId = String(clientIdValue || "").trim();
+
+    if (!cleanClientId || !client) {
+      Alert.alert("Client required", "This client could not be loaded.");
       return;
     }
 
-    await openSmsWithTabletFallback(phoneNumber);
+    try {
+      const result = await sendConsentRequests({
+        clientId: cleanClientId,
+        recipients: [
+          createPrimaryRecipient({
+            clientId: cleanClientId,
+            name: client.name,
+            phone: getClientPhone(client, messageAppointment),
+            email: getClientEmail(client),
+            smsOptIn: true,
+            emailOptIn: true,
+          }),
+        ],
+      });
+
+      if (!result.ok && result.code === "no_recipients") {
+        Alert.alert(
+          "Contact info required",
+          "Add a phone number or email address before requesting consent.",
+        );
+        return;
+      }
+
+      Alert.alert(
+        "Consent request sent",
+        `${result.sent || 0} consent request${result.sent === 1 ? "" : "s"} sent.`,
+      );
+    } catch (error) {
+      console.log("Client consent request failed", error);
+      Alert.alert("Consent request failed", "Please try again.");
+    }
+  }
+
+  async function sendClientManualMessage() {
+    if (manualMessageSending) return;
+
+    const cleanClientId = String(clientIdValue || "").trim();
+    const sendsText = manualMessageChannel === "text" || manualMessageChannel === "both";
+    const sendsEmail = manualMessageChannel === "email" || manualMessageChannel === "both";
+    const textIssue = sendsText ? manualTextIssue() : "";
+    const emailIssue = sendsEmail ? manualEmailIssue() : "";
+
+    if (sendsEmail && !canUseFeature("emailMessaging")) {
+      showProUpgradePrompt(PRO_UPSELL_COPY.emailMessaging);
+      return;
+    }
+
+    if (!cleanClientId) {
+      Alert.alert("Client required", "This client could not be loaded.");
+      return;
+    }
+
+    if (!renderedMessage) {
+      Alert.alert("Choose a template", "Choose a message template first.");
+      return;
+    }
+
+    if (textIssue || emailIssue) {
+      Alert.alert("Update client contact info", [textIssue, emailIssue].filter(Boolean).join("\n"), [
+        { text: "Cancel", style: "cancel" },
+        { text: "Edit Client", onPress: openEditClient },
+        {
+          text: "Request Consent",
+          onPress: () => {
+            void requestClientMessageConsent();
+          },
+        },
+      ]);
+      return;
+    }
+
+    setManualMessageSending(true);
+    const results: string[] = [];
+    let textFailed = false;
+    const phoneNumber = getClientPhone(client, messageAppointment);
+
+    try {
+      if (sendsText) {
+        const smsResult = await sendManualClientSms({
+          clientId: cleanClientId,
+          appointmentId: messageAppointment?.id || null,
+          messageBody: renderedMessage,
+        });
+
+        if (smsResult.ok) {
+          results.push("Text sent");
+        } else {
+          textFailed = true;
+          results.push(`Text failed: ${smsResult.message || "Please try again."}`);
+        }
+      }
+
+      if (sendsEmail) {
+        const emailResult = await sendManualClientEmail({
+          clientId: cleanClientId,
+          appointmentId: messageAppointment?.id || null,
+          subject:
+            manualEmailSubject.trim() ||
+            selectedTemplate?.title ||
+            "Appointment message",
+          messageBody: renderedMessage,
+        });
+
+        if (emailResult.ok) {
+          results.push("Email sent");
+        } else {
+          if (emailResult.code === "not_paid") {
+            showProUpgradePrompt(PRO_UPSELL_COPY.emailMessaging);
+            return;
+          }
+
+          results.push(`Email failed: ${emailResult.message || "Please try again."}`);
+        }
+      }
+
+      const allSucceeded = results.every((result) => result.endsWith("sent"));
+      const title =
+        manualMessageChannel === "both" && allSucceeded
+          ? "Text and email sent"
+          : manualMessageChannel === "email" && allSucceeded
+            ? "Email sent"
+            : manualMessageChannel === "text" && allSucceeded
+              ? "Text sent"
+              : "Message result";
+
+      Alert.alert(title, results.join("\n"), [
+        ...(textFailed
+          ? [
+              {
+                text: "Open SMS App",
+                onPress: () => {
+                  void openSmsWithTabletFallback(phoneNumber);
+                },
+              },
+            ]
+          : []),
+        { text: "OK" },
+      ]);
+
+      if (allSucceeded) {
+        setMessageModalVisible(false);
+      }
+    } catch (error) {
+      console.log("Manual client message failed", error);
+      Alert.alert("Message not sent", "Please try again.");
+    } finally {
+      setManualMessageSending(false);
+    }
   }
 
   if (loading) {
@@ -839,6 +1013,59 @@ export default function ClientDetailsScreen() {
           message={error}
           actionLabel="Try Again"
           onAction={fetchData}
+        />
+      </AppScreen>
+    );
+  }
+
+  if (featureAccess.loading && !featureAccess.loadedAt) {
+    return (
+      <AppScreen scroll backgroundColor={colors.background} bottomPadding={72}>
+        <ScreenHeader
+          title={clientName}
+          subtitle="Checking Client Profile access..."
+          showBack
+        />
+        <AppButton
+          title="Edit Client"
+          onPress={openEditClient}
+          style={{ marginBottom: theme.spacing.lg }}
+        />
+        <AppCard>
+          <Text style={{ color: colors.mutedText, fontWeight: "800" }}>
+            Loading Schedova Pro access...
+          </Text>
+        </AppCard>
+      </AppScreen>
+    );
+  }
+
+  if (!fullHistoryAvailable) {
+    return (
+      <AppScreen scroll backgroundColor={colors.background} bottomPadding={72}>
+        <ScreenHeader
+          title={clientName}
+          subtitle="Client Profile is included with Schedova Pro."
+          showBack
+        />
+
+        <AppButton
+          title="Edit Client"
+          onPress={openEditClient}
+          style={{ marginBottom: theme.spacing.lg }}
+        />
+
+        <ProGateCard
+          title="Client Profile"
+          message={PRO_UPSELL_COPY.clientHistory}
+          features={[
+            "Appointment history",
+            "Client notes and service context",
+            "Rebooking and follow-up insights",
+            "Client value and visit summaries",
+          ]}
+          ctaLabel="Upgrade to Schedova Pro"
+          onPress={openSchedovaProScreen}
         />
       </AppScreen>
     );
@@ -1440,6 +1667,143 @@ export default function ClientDetailsScreen() {
                 </Text>
               </AppCard>
 
+              <AppCard style={{ marginBottom: theme.spacing.md }}>
+                <Text
+                  style={{
+                    color: theme.colors.text,
+                    fontWeight: theme.typography.weights.heavy,
+                    marginBottom: theme.spacing.sm,
+                  }}
+                >
+                  Send by:
+                </Text>
+                <View
+                  style={{
+                    flexDirection: "row",
+                    flexWrap: "wrap",
+                    gap: theme.spacing.sm,
+                    marginBottom:
+                      manualMessageChannel === "email" ||
+                      manualMessageChannel === "both"
+                        ? theme.spacing.sm
+                        : 0,
+                  }}
+                >
+                  {[
+                    {
+                      label: "Text",
+                      value: "text" as const,
+                      disabled: Boolean(manualTextIssue()),
+                    },
+                    {
+                      label: "Email",
+                      value: "email" as const,
+                      disabled: Boolean(manualEmailIssue()),
+                    },
+                    {
+                      label: "Both",
+                      value: "both" as const,
+                      disabled: Boolean(manualTextIssue() || manualEmailIssue()),
+                    },
+                  ].map((option) => {
+                    const selected = manualMessageChannel === option.value;
+
+                    return (
+                      <Pressable
+                        key={option.value}
+                        accessibilityRole="button"
+                        disabled={option.disabled}
+                        onPress={() => setManualMessageChannel(option.value)}
+                        style={{
+                          minHeight: 42,
+                          paddingHorizontal: 14,
+                          borderRadius: 999,
+                          alignItems: "center",
+                          justifyContent: "center",
+                          borderWidth: 1,
+                          borderColor: selected
+                            ? theme.colors.primary
+                            : theme.colors.border,
+                          backgroundColor: selected
+                            ? theme.colors.primary
+                            : theme.colors.card,
+                          opacity: option.disabled ? 0.45 : 1,
+                        }}
+                      >
+                        <Text
+                          style={{
+                            color: selected ? "#FFFFFF" : theme.colors.text,
+                            fontWeight: theme.typography.weights.heavy,
+                          }}
+                        >
+                          {option.label}
+                        </Text>
+                      </Pressable>
+                    );
+                  })}
+                </View>
+                {manualMessageChannel === "email" ||
+                manualMessageChannel === "both" ? (
+                  <TextInput
+                    value={manualEmailSubject}
+                    onChangeText={setManualEmailSubject}
+                    placeholder="Email subject"
+                    placeholderTextColor={theme.colors.mutedText}
+                    style={{
+                      minHeight: 50,
+                      borderWidth: 1,
+                      borderColor: theme.colors.border,
+                      borderRadius: 14,
+                      paddingHorizontal: 12,
+                      color: theme.colors.text,
+                      backgroundColor: theme.colors.background,
+                      marginTop: theme.spacing.sm,
+                    }}
+                  />
+                ) : null}
+                {manualTextIssue() || manualEmailIssue() ? (
+                  <View style={{ gap: theme.spacing.sm, marginTop: theme.spacing.sm }}>
+                    <Text
+                      style={{
+                        color: theme.colors.mutedText,
+                        lineHeight: theme.typography.lineHeights.body,
+                      }}
+                    >
+                      {[manualTextIssue(), manualEmailIssue()]
+                        .filter(Boolean)
+                        .join("\n")}
+                    </Text>
+                    <View
+                      style={{
+                        flexDirection: "row",
+                        flexWrap: "wrap",
+                        gap: theme.spacing.sm,
+                      }}
+                    >
+                      <AppButton
+                        title="Edit Client"
+                        variant="secondary"
+                        onPress={() => {
+                          setMessageModalVisible(false);
+                          openEditClient();
+                        }}
+                        fullWidth={false}
+                        style={{ flexGrow: 1, flexBasis: 140 }}
+                      />
+                      <AppButton
+                        title="Request Consent"
+                        variant="secondary"
+                        onPress={() => {
+                          void requestClientMessageConsent();
+                        }}
+                        fullWidth={false}
+                        style={{ flexGrow: 1, flexBasis: 140 }}
+                      />
+                    </View>
+                  </View>
+                ) : null}
+              </AppCard>
+
               <View
                 style={{
                   flexDirection: "row",
@@ -1449,19 +1813,12 @@ export default function ClientDetailsScreen() {
                 }}
               >
                 <AppButton
-                  title="Copy Message"
+                  title={manualMessageSending ? "Sending..." : "Send Message"}
                   onPress={() => {
-                    void copySelectedMessage();
+                    void sendClientManualMessage();
                   }}
-                  fullWidth={false}
-                  style={{ flexGrow: 1, flexBasis: 150 }}
-                />
-                <AppButton
-                  title="Open SMS App"
-                  variant="secondary"
-                  onPress={() => {
-                    void openSmsApp();
-                  }}
+                  loading={manualMessageSending}
+                  disabled={manualMessageSending}
                   fullWidth={false}
                   style={{ flexGrow: 1, flexBasis: 150 }}
                 />
