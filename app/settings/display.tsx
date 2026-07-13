@@ -1,6 +1,6 @@
 import AsyncStorage from "@react-native-async-storage/async-storage";
 import { useEffect, useState } from "react";
-import { Alert, Pressable, Text, View } from "react-native";
+import { Pressable, Text, View } from "react-native";
 import { AppScreen } from "../../components/layout/AppScreen";
 import { useAppTheme } from "../../lib/useAppTheme";
 
@@ -36,7 +36,6 @@ export default function DisplaySettingsScreen() {
     await AsyncStorage.setItem("schedova_theme", selectedTheme);
     setTheme(selectedTheme);
     await AsyncStorage.setItem("font_scale", fontScale);
-    Alert.alert("Saved", "Display theme updated.");
   }
 
   const themeOptions: {

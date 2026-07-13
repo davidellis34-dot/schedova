@@ -1,6 +1,6 @@
 import { useMemo, useState } from "react";
-import { FlatList, Modal, Pressable, Text, View } from "react-native";
-import { useSafeAreaInsets } from "react-native-safe-area-context";
+import { FlatList, Pressable, Text, View } from "react-native";
+import { PickerModal } from "../PickerModal";
 import type { ThemeColors } from "./types";
 
 type Props = {
@@ -11,6 +11,7 @@ type Props = {
   use24Hour: boolean;
   marginTop?: number;
   intervalMinutes?: number;
+  helperText?: string;
 };
 
 function formatTimeLabel(time: string, use24Hour: boolean) {
@@ -53,6 +54,40 @@ function buildTimeOptions(intervalMinutes: number, use24Hour: boolean) {
   return options;
 }
 
+function timeToMinutes(time: string) {
+  const [hourText, minuteText] = String(time || "").slice(0, 5).split(":");
+  const hours = Number(hourText);
+  const minutes = Number(minuteText);
+
+  if (!Number.isFinite(hours) || !Number.isFinite(minutes)) return null;
+
+  return hours * 60 + minutes;
+}
+
+function getSelectedIndex(options: { value: string }[], value: string) {
+  const exactIndex = options.findIndex((item) => item.value === value);
+  if (exactIndex >= 0) return exactIndex;
+
+  const selectedMinutes = timeToMinutes(value);
+  if (selectedMinutes === null) return 0;
+
+  let nearestIndex = 0;
+  let nearestDistance = Number.POSITIVE_INFINITY;
+
+  options.forEach((item, index) => {
+    const optionMinutes = timeToMinutes(item.value);
+    if (optionMinutes === null) return;
+
+    const distance = Math.abs(optionMinutes - selectedMinutes);
+    if (distance < nearestDistance) {
+      nearestDistance = distance;
+      nearestIndex = index;
+    }
+  });
+
+  return nearestIndex;
+}
+
 export function TimeDropdown({
   label,
   value,
@@ -61,8 +96,8 @@ export function TimeDropdown({
   use24Hour,
   marginTop = 0,
   intervalMinutes = 30,
+  helperText,
 }: Props) {
-  const insets = useSafeAreaInsets();
   const [open, setOpen] = useState(false);
 
   const timeOptions = useMemo(
@@ -71,12 +106,12 @@ export function TimeDropdown({
   );
 
   const selectedLabel =
-    timeOptions.find((item) => item.value === value)?.label || "Select time";
+    timeOptions.find((item) => item.value === value)?.label ||
+    (timeToMinutes(value) !== null
+      ? formatTimeLabel(value, use24Hour)
+      : "Select time");
 
-  const selectedIndex = Math.max(
-    timeOptions.findIndex((item) => item.value === value),
-    0,
-  );
+  const selectedIndex = getSelectedIndex(timeOptions, value);
 
   return (
     <View style={{ marginTop, marginBottom: 4 }}>
@@ -91,6 +126,8 @@ export function TimeDropdown({
       </Text>
 
       <Pressable
+        accessibilityRole="button"
+        accessibilityLabel={label}
         onPress={() => setOpen(true)}
         style={{
           minHeight: 56,
@@ -113,108 +150,105 @@ export function TimeDropdown({
         </Text>
       </Pressable>
 
-      <Modal
+      {helperText ? (
+        <Text
+          style={{
+            color: colors.mutedText,
+            fontSize: 12,
+            marginTop: 6,
+            paddingHorizontal: 2,
+          }}
+        >
+          {helperText}
+        </Text>
+      ) : null}
+
+      <PickerModal
         visible={open}
-        transparent
         animationType="fade"
-        onRequestClose={() => setOpen(false)}
+        onDismiss={() => setOpen(false)}
+        backdropAccessibilityLabel={`Close ${label} picker`}
+        contentStyle={{
+          backgroundColor: colors.background,
+          borderRadius: 18,
+          borderWidth: 1,
+          borderColor: colors.border,
+          maxHeight: "70%",
+          overflow: "hidden",
+        }}
       >
         <View
           style={{
-            flex: 1,
-            backgroundColor: "rgba(0,0,0,0.45)",
-            justifyContent: "center",
-            paddingHorizontal: 20,
-            paddingTop: insets.top + 20,
-            paddingBottom: insets.bottom + 20,
+            padding: 16,
+            borderBottomWidth: 1,
+            borderBottomColor: colors.border,
           }}
         >
-          <View
+          <Text
             style={{
-              backgroundColor: colors.background,
-              borderRadius: 18,
-              borderWidth: 1,
-              borderColor: colors.border,
-              maxHeight: "70%",
-              overflow: "hidden",
+              color: colors.text,
+              fontSize: 20,
+              fontWeight: "900",
             }}
           >
-            <View
-              style={{
-                padding: 16,
-                borderBottomWidth: 1,
-                borderBottomColor: colors.border,
-              }}
-            >
-              <Text
+            {label}
+          </Text>
+        </View>
+
+        <FlatList
+          data={timeOptions}
+          keyExtractor={(item) => item.value}
+          initialScrollIndex={selectedIndex}
+          getItemLayout={(_, index) => ({
+            length: 52,
+            offset: 52 * index,
+            index,
+          })}
+          keyboardShouldPersistTaps="handled"
+          renderItem={({ item }) => {
+            const selected = item.value === value;
+
+            return (
+              <Pressable
+                onPress={() => {
+                  onChange(item.value);
+                  setOpen(false);
+                }}
                 style={{
-                  color: colors.text,
-                  fontSize: 20,
-                  fontWeight: "900",
+                  height: 52,
+                  justifyContent: "center",
+                  paddingHorizontal: 18,
+                  backgroundColor: selected ? colors.primary : colors.background,
                 }}
               >
-                {label}
-              </Text>
-            </View>
+                <Text
+                  style={{
+                    color: selected ? "#FFFFFF" : colors.text,
+                    fontSize: 16,
+                    fontWeight: selected ? "900" : "600",
+                  }}
+                >
+                  {item.label}
+                </Text>
+              </Pressable>
+            );
+          }}
+        />
 
-            <FlatList
-              data={timeOptions}
-              keyExtractor={(item) => item.value}
-              initialScrollIndex={selectedIndex}
-              getItemLayout={(_, index) => ({
-                length: 52,
-                offset: 52 * index,
-                index,
-              })}
-              keyboardShouldPersistTaps="handled"
-              renderItem={({ item }) => {
-                const selected = item.value === value;
-
-                return (
-                  <Pressable
-                    onPress={() => {
-                      onChange(item.value);
-                      setOpen(false);
-                    }}
-                    style={{
-                      height: 52,
-                      justifyContent: "center",
-                      paddingHorizontal: 18,
-                      backgroundColor: selected
-                        ? colors.primary
-                        : colors.background,
-                    }}
-                  >
-                    <Text
-                      style={{
-                        color: selected ? "#FFFFFF" : colors.text,
-                        fontSize: 16,
-                        fontWeight: selected ? "900" : "600",
-                      }}
-                    >
-                      {item.label}
-                    </Text>
-                  </Pressable>
-                );
-              }}
-            />
-
-            <Pressable
-              onPress={() => setOpen(false)}
-              style={{
-                padding: 16,
-                alignItems: "center",
-                borderTopWidth: 1,
-                borderTopColor: colors.border,
-              }}
-            >
-              <Text style={{ color: colors.mutedText, fontWeight: "900" }}>
-                Cancel
-              </Text>
-            </Pressable>
-          </View>
-        </View>
-      </Modal>
+        <Pressable
+          onPress={() => setOpen(false)}
+          style={{
+            padding: 16,
+            alignItems: "center",
+            borderTopWidth: 1,
+            borderTopColor: colors.border,
+          }}
+        >
+          <Text style={{ color: colors.mutedText, fontWeight: "900" }}>
+            Cancel
+          </Text>
+        </Pressable>
+      </PickerModal>
     </View>
   );
 }

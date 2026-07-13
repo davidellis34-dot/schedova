@@ -1,4 +1,5 @@
 import { Tabs } from "expo-router";
+import { Platform } from "react-native";
 import { useAppTheme } from "../../lib/useAppTheme";
 
 export default function TabLayout() {
@@ -6,7 +7,9 @@ export default function TabLayout() {
 
   return (
     <Tabs
+      detachInactiveScreens={Platform.OS === "ios" ? false : true}
       screenOptions={{
+        freezeOnBlur: false,
         headerShown: false,
 
         tabBarStyle: {

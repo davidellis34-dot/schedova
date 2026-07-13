@@ -3,14 +3,15 @@
     "name": "Schedova",
     "slug": "schedova",
     "scheme": "schedova",
-    "version": "1.0.5",
+    "version": "1.2.1",
     "orientation": "default",
     "icon": "./assets/images/app-icon.png",
     "userInterfaceStyle": "light",
     "assetBundlePatterns": ["**/*"],
     "ios": {
       "supportsTablet": true,
-      "buildNumber": "5",
+      "usesAppleSignIn": true,
+      "buildNumber": "25",
       "bundleIdentifier": "com.davidellis34.schedova",
       "infoPlist": {
         "ITSAppUsesNonExemptEncryption": false
@@ -23,14 +24,22 @@
         "monochromeImage": "./assets/images/adaptive-icon-monochrome.png"
       },
       "package": "com.davidellis34.schedova",
-      "versionCode": 5
+      "versionCode": 25
     },
     "web": {
       "favicon": "./assets/images/favicon.png"
     },
     "plugins": [
       "expo-router",
-      "expo-notifications",
+      "expo-apple-authentication",
+      [
+        "expo-notifications",
+        {
+          "icon": "./assets/images/notification-icon.png",
+          "color": "#0F766E",
+          "defaultChannel": "client-messages"
+        }
+      ],
       [
         "expo-splash-screen",
         {

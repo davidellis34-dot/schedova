@@ -36,10 +36,11 @@ export function useAppScreenPadding({
   androidBottomPadding,
 }: AppScreenPaddingOptions = {}) {
   const insets = useSafeAreaInsets();
+  const topSafeArea = Platform.OS === "web" ? 0 : insets.top;
 
   return {
     paddingHorizontal: horizontalPadding,
-    paddingTop: Platform.OS === "ios" ? insets.top + topPadding : topPadding,
+    paddingTop: topSafeArea + topPadding,
     paddingBottom:
       Platform.OS === "ios"
         ? insets.bottom + bottomPadding
@@ -98,7 +99,7 @@ export const AppScreen = forwardRef<ScrollView, AppScreenProps>(
 
     return (
       <KeyboardAvoidingView
-        behavior={Platform.OS === "ios" ? "padding" : undefined}
+        behavior={Platform.OS === "ios" ? "padding" : "height"}
         style={{ flex: 1, backgroundColor }}
       >
         {content}

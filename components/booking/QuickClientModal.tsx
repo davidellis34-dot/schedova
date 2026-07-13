@@ -9,6 +9,7 @@ import {
   View,
 } from "react-native";
 import { useSafeAreaInsets } from "react-native-safe-area-context";
+import { normalizePhoneForSmsWithUserDefault } from "../../lib/countrySettings";
 import type { ThemeColors } from "./types";
 
 function inputStyle(colors: ThemeColors) {
@@ -100,6 +101,11 @@ export function QuickClientModal({
               placeholderTextColor={colors.mutedText}
               value={phone}
               onChangeText={onChangePhone}
+              onBlur={() => {
+                void normalizePhoneForSmsWithUserDefault(phone).then(
+                  onChangePhone,
+                );
+              }}
               keyboardType="phone-pad"
               style={inputStyle(colors)}
             />

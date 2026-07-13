@@ -1,7 +1,8 @@
 import { Ionicons } from "@expo/vector-icons";
 import { useState } from "react";
-import { FlatList, Modal, Pressable, Text, View } from "react-native";
+import { FlatList, Pressable, Text, View } from "react-native";
 import { useSafeAreaInsets } from "react-native-safe-area-context";
+import { PickerModal } from "./PickerModal";
 
 type Option = {
   label: string;
@@ -92,111 +93,98 @@ export function AppSelectField({
         <Ionicons name="chevron-forward" size={20} color={colors.mutedText} />
       </Pressable>
 
-      <Modal
+      <PickerModal
         visible={open}
-        transparent
+        align="bottom"
         animationType="slide"
-        onRequestClose={cancel}
+        onDismiss={cancel}
+        backdropAccessibilityLabel={`Close ${title} picker`}
+        contentStyle={{
+          backgroundColor: colors.background,
+          borderTopLeftRadius: 20,
+          borderTopRightRadius: 20,
+          borderWidth: 1,
+          borderColor: colors.border,
+          maxHeight: "72%",
+          paddingBottom: insets.bottom + 12,
+          overflow: "hidden",
+        }}
       >
         <View
           style={{
-            flex: 1,
-            backgroundColor: "rgba(0,0,0,0.45)",
-            justifyContent: "flex-end",
+            flexDirection: "row",
+            alignItems: "center",
+            justifyContent: "space-between",
+            paddingHorizontal: 18,
+            paddingVertical: 14,
+            borderBottomWidth: 1,
+            borderBottomColor: colors.border,
           }}
         >
-          <Pressable style={{ flex: 1 }} onPress={cancel} />
-          <View
+          <Pressable onPress={cancel} hitSlop={10}>
+            <Text style={{ color: colors.mutedText, fontWeight: "800" }}>
+              Cancel
+            </Text>
+          </Pressable>
+          <Text
             style={{
-              backgroundColor: colors.background,
-              borderTopLeftRadius: 20,
-              borderTopRightRadius: 20,
-              borderWidth: 1,
-              borderColor: colors.border,
-              maxHeight: "72%",
-              paddingBottom: insets.bottom + 12,
-              overflow: "hidden",
+              color: colors.text,
+              fontSize: 18,
+              fontWeight: "900",
             }}
           >
-            <View
-              style={{
-                flexDirection: "row",
-                alignItems: "center",
-                justifyContent: "space-between",
-                paddingHorizontal: 18,
-                paddingVertical: 14,
-                borderBottomWidth: 1,
-                borderBottomColor: colors.border,
-              }}
-            >
-              <Pressable onPress={cancel} hitSlop={10}>
-                <Text style={{ color: colors.mutedText, fontWeight: "800" }}>
-                  Cancel
-                </Text>
-              </Pressable>
-              <Text
+            {title}
+          </Text>
+          <Pressable onPress={done} hitSlop={10}>
+            <Text style={{ color: colors.primary, fontWeight: "900" }}>
+              Done
+            </Text>
+          </Pressable>
+        </View>
+
+        <FlatList
+          data={options}
+          keyExtractor={(item) => item.value}
+          keyboardShouldPersistTaps="handled"
+          renderItem={({ item }) => {
+            const selected = item.value === draftValue;
+
+            return (
+              <Pressable
+                accessibilityRole="button"
+                onPress={() => setDraftValue(item.value)}
                 style={{
-                  color: colors.text,
-                  fontSize: 18,
-                  fontWeight: "900",
+                  minHeight: 56,
+                  paddingHorizontal: 18,
+                  paddingVertical: 12,
+                  justifyContent: "center",
+                  backgroundColor: selected ? colors.primary : colors.background,
                 }}
               >
-                {title}
-              </Text>
-              <Pressable onPress={done} hitSlop={10}>
-                <Text style={{ color: colors.primary, fontWeight: "900" }}>
-                  Done
+                <Text
+                  style={{
+                    color: selected ? "#FFFFFF" : colors.text,
+                    fontSize: 16,
+                    fontWeight: selected ? "900" : "700",
+                  }}
+                >
+                  {item.label}
                 </Text>
-              </Pressable>
-            </View>
-
-            <FlatList
-              data={options}
-              keyExtractor={(item) => item.value}
-              keyboardShouldPersistTaps="handled"
-              renderItem={({ item }) => {
-                const selected = item.value === draftValue;
-
-                return (
-                  <Pressable
-                    accessibilityRole="button"
-                    onPress={() => setDraftValue(item.value)}
+                {item.description ? (
+                  <Text
                     style={{
-                      minHeight: 56,
-                      paddingHorizontal: 18,
-                      paddingVertical: 12,
-                      justifyContent: "center",
-                      backgroundColor: selected
-                        ? colors.primary
-                        : colors.background,
+                      color: selected ? "#FFFFFF" : colors.mutedText,
+                      marginTop: 4,
                     }}
                   >
-                    <Text
-                      style={{
-                        color: selected ? "#FFFFFF" : colors.text,
-                        fontSize: 16,
-                        fontWeight: selected ? "900" : "700",
-                      }}
-                    >
-                      {item.label}
-                    </Text>
-                    {item.description ? (
-                      <Text
-                        style={{
-                          color: selected ? "#FFFFFF" : colors.mutedText,
-                          marginTop: 4,
-                        }}
-                      >
-                        {item.description}
-                      </Text>
-                    ) : null}
-                  </Pressable>
-                );
-              }}
-            />
-          </View>
-        </View>
-      </Modal>
+                    {item.description}
+                  </Text>
+                ) : null}
+              </Pressable>
+            );
+          }}
+        />
+      </PickerModal>
     </View>
   );
 }

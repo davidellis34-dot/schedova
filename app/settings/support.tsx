@@ -1,20 +1,15 @@
 import Constants from "expo-constants";
-import * as Linking from "expo-linking";
-import { Alert, Pressable, Text, View } from "react-native";
+import { Pressable, Text, View } from "react-native";
 import { AppScreen } from "../../components/layout/AppScreen";
+import { SUPPORT_EMAIL, openSupportEmail } from "../../lib/legalLinks";
 import { useAppTheme } from "../../lib/useAppTheme";
-
-const SUPPORT_URL =
-  "mailto:support@schedova.com?subject=Schedova%20Support%20Request";
 
 export default function SupportScreen() {
   const { colors } = useAppTheme();
   const appVersion = Constants.expoConfig?.version || "1.0.4";
 
   const contactSupport = () => {
-    void Linking.openURL(SUPPORT_URL).catch(() => {
-      Alert.alert("Contact Support", SUPPORT_URL);
-    });
+    void openSupportEmail();
   };
 
   return (
@@ -67,7 +62,7 @@ export default function SupportScreen() {
             marginBottom: 8,
           }}
         >
-          support@schedova.com
+          {SUPPORT_EMAIL}
         </Text>
 
         <Text

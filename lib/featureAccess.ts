@@ -1,5 +1,12 @@
 import { useEffect, useSyncExternalStore } from "react";
 
+import { ENABLE_PRO } from "./proFeatureFlag";
+import {
+  hasAdminLifetimeSchedovaProAccess,
+  hasSchedovaProAccess,
+  hasRevenueCatStyleSchedovaProAccess,
+  type UserSubscription,
+} from "./subscriptionAccess";
 import { supabase } from "./supabase";
 
 export const FREE_TIER_LIMITS = {
@@ -10,9 +17,10 @@ export const FREE_TIER_LIMITS = {
   clientHistoryItems: 3,
 } as const;
 
-export const PRO_FEATURE_PREVIEWS = [
+export const PRO_FEATURE_HIGHLIGHTS = [
+  "Email appointment messages",
   "Smart rebooking and follow-up reminders",
-  "Revenue dashboard / business insights",
+  "Reports and business insights",
   "Advanced client history timeline",
   "Client photo gallery",
   "Service formulas and appointment notes",
@@ -34,6 +42,7 @@ export type FeatureKey =
   | "unlimitedMessageTemplates"
   | "customTagsStatusesColors"
   | "smsAutomation"
+  | "emailMessaging"
   | "smartReminders"
   | "waitlist"
   | "noShowTracker"
@@ -42,19 +51,12 @@ export type FeatureKey =
   | "serviceFormulas"
   | "customBusinessHours";
 
-type UserSubscription = {
-  status?: string | null;
-  plan?: string | null;
-  current_period_end?: string | null;
-  entitlement?: string | null;
-  entitlement_source?: string | null;
-  entitlement_expires_at?: string | null;
-};
-
 type FeatureAccessState = {
   userId: string | null;
   subscription: UserSubscription | null;
   isPro: boolean;
+  revenueCatLoaded: boolean;
+  revenueCatIsPro: boolean | null;
   loading: boolean;
   loadedAt: string | null;
   source: string;
@@ -65,6 +67,8 @@ const initialState: FeatureAccessState = {
   userId: null,
   subscription: null,
   isPro: false,
+  revenueCatLoaded: false,
+  revenueCatIsPro: null,
   loading: false,
   loadedAt: null,
   source: "initial",
@@ -76,32 +80,20 @@ let refreshGeneration = 0;
 let lastHookRefreshAt = 0;
 const listeners = new Set<() => void>();
 
-function normalize(value: string | null | undefined) {
-  return String(value || "")
-    .trim()
-    .toLowerCase();
-}
+function getEffectiveProAccess(
+  subscription: UserSubscription | null,
+  revenueCatLoaded: boolean,
+  revenueCatIsPro: boolean | null,
+) {
+  if (!ENABLE_PRO) return false;
 
-function isOpenOrFuture(value: string | null | undefined) {
-  if (!value) return true;
+  const supabaseIsPro = hasSchedovaProAccess(subscription);
 
-  const timestamp = new Date(value).getTime();
-  return Number.isFinite(timestamp) && timestamp > Date.now();
-}
+  // Supabase user_subscriptions is the source of truth for current Pro access.
+  if (subscription) return supabaseIsPro;
+  if (revenueCatLoaded) return Boolean(revenueCatIsPro);
 
-function hasActiveProSubscription(subscription: UserSubscription | null) {
-  if (!subscription) return false;
-
-  const entitlementPro =
-    normalize(subscription.entitlement) === "pro" &&
-    isOpenOrFuture(subscription.entitlement_expires_at);
-
-  const paidPlanActive =
-    normalize(subscription.status) === "active" &&
-    ["pro", "paid"].includes(normalize(subscription.plan)) &&
-    isOpenOrFuture(subscription.current_period_end);
-
-  return entitlementPro || paidPlanActive;
+  return false;
 }
 
 function debugFeatureAccess(state: FeatureAccessState) {
@@ -169,11 +161,44 @@ export function clearFeatureAccess(source = "clear") {
   });
 }
 
+export function setRevenueCatFeatureAccess(
+  isPro: boolean,
+  source = "revenuecat",
+) {
+  const subscription = featureAccessState.subscription;
+  const adminLifetimeAccess = hasAdminLifetimeSchedovaProAccess(subscription);
+  const revenueCatStyleAccess =
+    hasRevenueCatStyleSchedovaProAccess(subscription);
+  const visibleProAccess = getEffectiveProAccess(
+    subscription,
+    true,
+    isPro,
+  );
+
+  console.log("revenuecat result", isPro);
+  console.log("subscription object used", subscription);
+  console.log("adminLifetimeAccess", adminLifetimeAccess);
+  console.log("revenueCatStyleAccess", revenueCatStyleAccess);
+  console.log("final isPro", visibleProAccess);
+
+  publishFeatureAccess({
+    ...featureAccessState,
+    isPro: visibleProAccess,
+    revenueCatLoaded: true,
+    revenueCatIsPro: isPro,
+    loading: false,
+    loadedAt: new Date().toISOString(),
+    source,
+    error: null,
+  });
+}
+
 export async function refreshFeatureAccess(
   userId?: string | null,
   source = "refresh",
 ) {
   const generation = ++refreshGeneration;
+  let activeUserId = userId || null;
 
   publishFeatureAccess({
     ...featureAccessState,
@@ -182,70 +207,130 @@ export async function refreshFeatureAccess(
     error: null,
   });
 
-  let activeUserId = userId || null;
+  try {
+    if (!activeUserId) {
+      const { data, error } = await supabase.auth.getUser();
 
-  if (!activeUserId) {
-    const { data, error } = await supabase.auth.getUser();
+      if (generation !== refreshGeneration) return featureAccessState;
+
+      if (error || !data.user?.id) {
+        publishFeatureAccess({
+          ...initialState,
+          source,
+          loadedAt: new Date().toISOString(),
+          error: error?.message || null,
+        });
+        return featureAccessState;
+      }
+
+      activeUserId = data.user.id;
+    }
+
+    const { data: authUserData } = await supabase.auth.getUser();
+    const authUserId = authUserData.user?.id ?? activeUserId;
+    const authEmail = authUserData.user?.email ?? null;
+    const subscriptionSelect =
+      "status, plan, current_period_end, entitlement, entitlement_source, entitlement_expires_at";
+
+    const { data, error } = await supabase
+      .from("user_subscriptions")
+      .select(subscriptionSelect)
+      .eq("user_id", activeUserId);
 
     if (generation !== refreshGeneration) return featureAccessState;
 
-    if (error || !data.user?.id) {
+    if (error) {
+      const adminLifetimeAccess = false;
+      const revenueCatStyleAccess = false;
+      const computedIsPro = getEffectiveProAccess(
+        null,
+        featureAccessState.revenueCatLoaded,
+        featureAccessState.revenueCatIsPro,
+      );
+
+      console.log("current auth user id", authUserId);
+      console.log("current auth email", authEmail);
+      console.log("subscription object used", null);
+      console.log("subscription row loaded from Supabase", null);
+      console.log("adminLifetimeAccess", adminLifetimeAccess);
+      console.log("revenueCatStyleAccess", revenueCatStyleAccess);
+      console.log("revenuecat result", featureAccessState.revenueCatIsPro);
+      console.log("final isPro", computedIsPro);
+
       publishFeatureAccess({
-        ...initialState,
-        source,
+        userId: activeUserId,
+        subscription: null,
+        isPro: computedIsPro,
+        revenueCatLoaded: featureAccessState.revenueCatLoaded,
+        revenueCatIsPro: featureAccessState.revenueCatIsPro,
+        loading: false,
         loadedAt: new Date().toISOString(),
-        error: error?.message || null,
+        source,
+        error: error.message,
       });
       return featureAccessState;
     }
 
-    activeUserId = data.user.id;
-  }
+    const subscriptions = (data || []) as UserSubscription[];
+    const subscription =
+      subscriptions.find(hasSchedovaProAccess) || subscriptions[0] || null;
+    const adminLifetimeAccess = hasAdminLifetimeSchedovaProAccess(subscription);
+    const revenueCatStyleAccess =
+      hasRevenueCatStyleSchedovaProAccess(subscription);
+    const computedIsPro = getEffectiveProAccess(
+      subscription,
+      featureAccessState.revenueCatLoaded,
+      featureAccessState.revenueCatIsPro,
+    );
 
-  const { data, error } = await supabase
-    .from("user_subscriptions")
-    .select(
-      "status, plan, current_period_end, entitlement, entitlement_source, entitlement_expires_at",
-    )
-    .eq("user_id", activeUserId);
+    console.log("current auth user id", authUserId);
+    console.log("current auth email", authEmail);
+    console.log("subscription object used", subscription);
+    console.log("subscription row loaded from Supabase", subscription);
+    console.log("adminLifetimeAccess", adminLifetimeAccess);
+    console.log("revenueCatStyleAccess", revenueCatStyleAccess);
+    console.log("revenuecat result", featureAccessState.revenueCatIsPro);
+    console.log("final isPro", computedIsPro);
 
-  if (generation !== refreshGeneration) return featureAccessState;
-
-  if (error) {
     publishFeatureAccess({
       userId: activeUserId,
-      subscription: null,
-      isPro: false,
+      subscription,
+      isPro: computedIsPro,
+      revenueCatLoaded: featureAccessState.revenueCatLoaded,
+      revenueCatIsPro: featureAccessState.revenueCatIsPro,
       loading: false,
       loadedAt: new Date().toISOString(),
       source,
-      error: error.message,
+      error: null,
     });
-    return featureAccessState;
+  } catch (error) {
+    if (generation !== refreshGeneration) return featureAccessState;
+
+    const message =
+      error instanceof Error
+        ? error.message
+        : "Feature access could not be refreshed.";
+
+    publishFeatureAccess({
+      ...featureAccessState,
+      userId: activeUserId,
+      loading: false,
+      loadedAt: new Date().toISOString(),
+      source,
+      error: message,
+    });
   }
-
-  const subscriptions = (data || []) as UserSubscription[];
-  const subscription =
-    subscriptions.find(hasActiveProSubscription) || subscriptions[0] || null;
-
-  publishFeatureAccess({
-    userId: activeUserId,
-    subscription,
-    isPro: subscriptions.some(hasActiveProSubscription),
-    loading: false,
-    loadedAt: new Date().toISOString(),
-    source,
-    error: null,
-  });
 
   return featureAccessState;
 }
 
 export function isPro() {
-  return featureAccessState.isPro;
+  return ENABLE_PRO && featureAccessState.isPro;
 }
 
 export function canUseFeature(feature: FeatureKey) {
+  if (!ENABLE_PRO) return false;
+
   switch (feature) {
     case "moreClients":
     case "moreServices":
@@ -255,6 +340,7 @@ export function canUseFeature(feature: FeatureKey) {
     case "fullClientHistory":
     case "unlimitedMessageTemplates":
     case "customTagsStatusesColors":
+    case "emailMessaging":
     case "smartReminders":
     case "waitlist":
     case "noShowTracker":
@@ -264,7 +350,7 @@ export function canUseFeature(feature: FeatureKey) {
     case "customBusinessHours":
       return isPro();
     case "smsAutomation":
-      // Message sending is account-credit based, not gated by Pro.
+      // SMS sends are governed by opt-in status and message credits, not Pro.
       return true;
     default:
       return false;

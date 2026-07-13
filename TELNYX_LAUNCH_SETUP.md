@@ -1,22 +1,22 @@
-# Twilio SMS Launch Setup
+# Telnyx SMS Launch Setup
 
-This app now supports Twilio appointment SMS behind a paid-subscription gate.
+This app now supports Telnyx-backed appointment SMS behind a paid-subscription gate.
 
 ## What is included
 
 - `supabase/migrations/202605210001_sms_paywall.sql`
   - `user_subscriptions` table
   - `sms_settings` table
-  - client SMS opt-in fields
+  - client SMS consent fields
   - `sms_message_logs` table
   - RLS policies
 - `supabase/functions/send-appointment-sms/index.ts`
-  - backend-only Twilio sender
+  - backend-only Telnyx sender
   - verifies the signed-in user
   - verifies `user_subscriptions.status = 'active'`
   - checks SMS settings
   - checks client phone + `sms_opt_in`
-  - logs sent/failed SMS messages
+  - logs each Telnyx send attempt, provider message IDs, provider responses, and failures
 - `app/settings/sms.tsx`
   - paid-plan SMS settings UI
 - client opt-in switches in Add/Edit Client
@@ -51,15 +51,28 @@ Deploy the Edge Function:
 supabase functions deploy send-appointment-sms
 ```
 
-Set Twilio secrets in Supabase:
+Set Telnyx secrets in Supabase:
 
 ```bash
-supabase secrets set TWILIO_ACCOUNT_SID=ACxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx
-supabase secrets set TWILIO_AUTH_TOKEN=xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx
-supabase secrets set TWILIO_MESSAGING_SERVICE_SID=MGxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx
+supabase secrets set TELNYX_API_KEY=KEYxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx
+supabase secrets set TELNYX_MESSAGING_PROFILE_ID=40019eb3-5bb9-433c-af8c-ed6e7e38cd3c
+supabase secrets set TELNYX_FROM_NUMBER=+13367929581
 ```
 
-Confirm `SUPABASE_URL` and `SUPABASE_SERVICE_ROLE_KEY` exist in the Edge Function environment. Supabase normally provides these automatically for deployed functions.
+Confirm `SUPABASE_URL` and `SUPABASE_SERVICE_ROLE_KEY` exist in the Edge Function environment. Supabase normally provides these automatically for deployed functions. Do not expose the Telnyx API key in the mobile app. SMS must be sent from Supabase Edge Functions or other backend-only services.
+
+This Telnyx flow expects the live database to include:
+
+- `public.sms_message_logs.provider`
+- `public.sms_message_logs.provider_message_id`
+- `public.sms_message_logs.provider_response`
+- `public.sms_message_logs.error_message`
+- `public.clients.sms_opt_in`
+- `public.clients.sms_opt_in_at`
+- `public.clients.sms_opt_out_at`
+- `public.clients.sms_opt_in_source`
+- `public.appointments.sms_reminder_sent_at`
+- `public.appointments.sms_confirmation_sent_at`
 
 ## Marking a subscriber paid
 
@@ -110,11 +123,10 @@ Use this checklist for a non-destructive rollout. Do not point the app at produc
    - Run `supabase functions deploy send-appointment-sms`
    - Confirm the function is listed in Supabase and uses the expected project.
 
-4. Set Twilio secrets before testing.
-   - `TWILIO_ACCOUNT_SID`
-   - `TWILIO_AUTH_TOKEN`
-   - `TWILIO_MESSAGING_SERVICE_SID`
-   - Optional fallback: `TWILIO_FROM_PHONE`
+4. Set Telnyx secrets before testing.
+   - `TELNYX_API_KEY`
+   - `TELNYX_MESSAGING_PROFILE_ID`
+   - `TELNYX_FROM_NUMBER`
 
 5. Seed one paid test user.
    - Add or upsert one `public.user_subscriptions` row for the tester.
@@ -142,12 +154,14 @@ Use this checklist for a non-destructive rollout. Do not point the app at produc
    - Create an appointment and verify confirmation SMS.
    - Edit the appointment and verify update SMS.
    - Cancel or delete the appointment and verify cancellation SMS.
-   - Check `sms_message_logs` for sent or failed rows after each action.
+   - Check `sms_message_logs` for queued/sent/failed rows after each action.
+   - Confirm successful confirmation sends stamp `appointments.sms_confirmation_sent_at`.
+   - Confirm successful reminder sends stamp `appointments.sms_reminder_sent_at`.
 
 ## Current scope
 
 Appointment create/update/cancel/delete can invoke the SMS function. Automatic future reminder SMS still needs a scheduled cron/Edge Function if you want server-side reminders. Local device reminders are already separate and do not notify clients.
 
-## After Twilio A2P approval
+## After Telnyx verification
 
-Confirmation, update, and cancellation SMS can be tested immediately after approval once the checklist above is complete. Automatic timed reminder SMS is not fully wired yet because there is no backend scheduler invoking the reminder path on a schedule.
+Confirmation, update, and cancellation SMS can be tested immediately once the checklist above is complete. Automatic timed reminder SMS is not fully wired yet because there is no backend scheduler invoking the reminder path on a schedule.

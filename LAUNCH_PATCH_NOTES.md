@@ -1,6 +1,6 @@
 # Launch Patch Notes
 
-This patch prepares the Expo/Supabase booking app for launch-critical testing and adds paid-only Twilio SMS infrastructure.
+This patch prepares the Expo/Supabase booking app for launch-critical testing and adds paid-only Telnyx SMS infrastructure.
 
 ## App fixes
 
@@ -16,14 +16,16 @@ This patch prepares the Expo/Supabase booking app for launch-critical testing an
 - Service delete now uses the platform-safe destructive confirmation helper.
 - Static `expo-notifications` imports were removed from shared notification entrypoints so Android Expo Go does not load notifications accidentally.
 
-## Twilio SMS launch setup
+## Telnyx SMS launch setup
 
 - Added `sms_settings` UI at `/settings/sms`.
 - Added `user_subscriptions` paywall table, `sms_settings`, client SMS consent fields, and `sms_message_logs` migration.
 - Added Supabase Edge Function `send-appointment-sms`.
-- Twilio credentials stay server-side only in Supabase Edge Function secrets.
+- Telnyx credentials stay server-side only in Supabase Edge Function secrets.
 - SMS sends are blocked server-side unless `user_subscriptions.status = 'active'`.
 - SMS requires business SMS enabled and client `sms_opt_in = true`.
+- Each Telnyx send attempt is logged to `sms_message_logs` with provider details and response/error data.
+- Successful confirmation and reminder sends stamp the matching appointment SMS timestamp fields.
 
 ## Required before testing SMS
 
@@ -32,7 +34,9 @@ Run the migration and deploy the Edge Function before using the SMS-enabled clie
 ```bash
 supabase db push
 supabase functions deploy send-appointment-sms
-supabase secrets set TWILIO_ACCOUNT_SID=xxx TWILIO_AUTH_TOKEN=xxx TWILIO_MESSAGING_SERVICE_SID=xxx
+supabase secrets set TELNYX_API_KEY=xxx
+supabase secrets set TELNYX_MESSAGING_PROFILE_ID=40019eb3-5bb9-433c-af8c-ed6e7e38cd3c
+supabase secrets set TELNYX_FROM_NUMBER=+13367929581
 ```
 
 Then mark a test user active in `user_subscriptions` from the Supabase SQL editor or your Stripe webhook.

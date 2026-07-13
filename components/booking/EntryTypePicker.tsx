@@ -1,9 +1,10 @@
 import { useState } from "react";
-import { Modal, Pressable, Text, View } from "react-native";
-import { useSafeAreaInsets } from "react-native-safe-area-context";
+import { Pressable, Text, View } from "react-native";
 
+import { PickerModal } from "../PickerModal";
 import { PickerBox } from "./PickerBox";
 import type { EntryType, ThemeColors } from "./types";
+import { ENABLE_PRO } from "../../lib/proFeatureFlag";
 
 const ENTRY_TYPES: { label: string; value: EntryType }[] = [
   { label: "Appointment", value: "appointment" },
@@ -23,11 +24,19 @@ type Props = {
   value: EntryType;
   onChange: (value: EntryType) => void;
   colors: ThemeColors;
+  proLocked?: boolean;
 };
 
-export function EntryTypePicker({ value, onChange, colors }: Props) {
-  const insets = useSafeAreaInsets();
+export function EntryTypePicker({
+  value,
+  onChange,
+  colors,
+  proLocked = false,
+}: Props) {
   const [open, setOpen] = useState(false);
+  const visibleEntryTypes = ENABLE_PRO
+    ? ENTRY_TYPES
+    : ENTRY_TYPES.filter((entryType) => entryType.value === "appointment");
 
   return (
     <>
@@ -64,99 +73,116 @@ export function EntryTypePicker({ value, onChange, colors }: Props) {
         </Pressable>
       </PickerBox>
 
-      <Modal
+      <PickerModal
         visible={open}
-        transparent
         animationType="fade"
-        onRequestClose={() => setOpen(false)}
+        onDismiss={() => setOpen(false)}
+        backdropAccessibilityLabel="Close entry type picker"
+        contentStyle={{
+          backgroundColor: colors.background,
+          borderWidth: 1,
+          borderColor: colors.border,
+          borderRadius: 18,
+          overflow: "hidden",
+        }}
       >
         <View
           style={{
-            flex: 1,
-            backgroundColor: "rgba(0,0,0,0.45)",
-            justifyContent: "center",
-            paddingHorizontal: 20,
-            paddingTop: insets.top + 20,
-            paddingBottom: insets.bottom + 20,
+            padding: 16,
+            borderBottomWidth: 1,
+            borderBottomColor: colors.border,
           }}
         >
-          <View
+          <Text
             style={{
-              backgroundColor: colors.background,
-              borderWidth: 1,
-              borderColor: colors.border,
-              borderRadius: 18,
-              overflow: "hidden",
+              color: colors.text,
+              fontSize: 20,
+              fontWeight: "900",
             }}
           >
-            <View
+            Entry Type
+          </Text>
+        </View>
+
+        {visibleEntryTypes.map((entryType) => {
+          const selected = entryType.value === value;
+          const locked =
+            ENABLE_PRO && proLocked && entryType.value !== "appointment";
+
+          return (
+            <Pressable
+              key={entryType.value}
+              accessibilityRole="button"
+              accessibilityLabel={
+                locked ? `${entryType.label}, Pro feature` : entryType.label
+              }
+              onPress={() => {
+                setOpen(false);
+                onChange(entryType.value);
+              }}
               style={{
-                padding: 16,
-                borderBottomWidth: 1,
-                borderBottomColor: colors.border,
+                minHeight: 54,
+                alignItems: "center",
+                flexDirection: "row",
+                justifyContent: "space-between",
+                paddingHorizontal: 18,
+                backgroundColor: selected ? colors.primary : colors.background,
               }}
             >
               <Text
                 style={{
-                  color: colors.text,
-                  fontSize: 20,
-                  fontWeight: "900",
+                  color: selected
+                    ? "#FFFFFF"
+                    : locked
+                      ? colors.mutedText
+                      : colors.text,
+                  fontSize: 16,
+                  fontWeight: selected ? "900" : "700",
                 }}
               >
-                Entry Type
+                {entryType.label}
               </Text>
-            </View>
 
-            {ENTRY_TYPES.map((entryType) => {
-              const selected = entryType.value === value;
-
-              return (
-                <Pressable
-                  key={entryType.value}
-                  accessibilityRole="button"
-                  onPress={() => {
-                    setOpen(false);
-                    onChange(entryType.value);
-                  }}
+              {locked ? (
+                <View
                   style={{
-                    minHeight: 54,
-                    justifyContent: "center",
-                    paddingHorizontal: 18,
-                    backgroundColor: selected
-                      ? colors.primary
-                      : colors.background,
+                    borderWidth: 1,
+                    borderColor: selected ? "#FFFFFF" : colors.border,
+                    borderRadius: 999,
+                    paddingHorizontal: 10,
+                    paddingVertical: 4,
                   }}
                 >
                   <Text
                     style={{
-                      color: selected ? "#FFFFFF" : colors.text,
-                      fontSize: 16,
-                      fontWeight: selected ? "900" : "700",
+                      color: selected ? "#FFFFFF" : colors.mutedText,
+                      fontSize: 12,
+                      fontWeight: "900",
                     }}
                   >
-                    {entryType.label}
+                    Pro
                   </Text>
-                </Pressable>
-              );
-            })}
-
-            <Pressable
-              accessibilityRole="button"
-              onPress={() => setOpen(false)}
-              style={{
-                padding: 16,
-                alignItems: "center",
-                borderTopWidth: 1,
-                borderTopColor: colors.border,
-              }}
-            >
-              <Text style={{ color: colors.mutedText, fontWeight: "900" }}>
-                Cancel
-              </Text>
+                </View>
+              ) : null}
             </Pressable>
-          </View>
-        </View>
-      </Modal>
+          );
+        })}
+
+        <Pressable
+          accessibilityRole="button"
+          onPress={() => setOpen(false)}
+          style={{
+            padding: 16,
+            alignItems: "center",
+            borderTopWidth: 1,
+            borderTopColor: colors.border,
+          }}
+        >
+          <Text style={{ color: colors.mutedText, fontWeight: "900" }}>
+            Cancel
+          </Text>
+        </Pressable>
+      </PickerModal>
     </>
   );
 }

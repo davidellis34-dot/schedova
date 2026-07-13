@@ -1,6 +1,8 @@
 import AsyncStorage from "@react-native-async-storage/async-storage";
 import Constants from "expo-constants";
 import { Platform } from "react-native";
+import { emitClientMessageReceived } from "./clientMessageEvents";
+import { isClientMessageNotification } from "./notificationRouting";
 
 const isExpoGo = Constants.appOwnership === "expo";
 const isAndroidExpoGo = Platform.OS === "android" && isExpoGo;
@@ -39,12 +41,26 @@ async function configureNotificationHandler() {
   if (!Notifications) return false;
 
   Notifications.setNotificationHandler({
-    handleNotification: async () => ({
-      shouldShowBanner: true,
-      shouldShowList: true,
-      shouldPlaySound: true,
-      shouldSetBadge: false,
-    }),
+    handleNotification: async (notification) => {
+      if (isClientMessageNotification(notification)) {
+        emitClientMessageReceived();
+        return {
+          shouldShowAlert: false,
+          shouldShowBanner: false,
+          shouldShowList: false,
+          shouldPlaySound: false,
+          shouldSetBadge: true,
+        };
+      }
+
+      return {
+        shouldShowAlert: true,
+        shouldShowBanner: true,
+        shouldShowList: true,
+        shouldPlaySound: true,
+        shouldSetBadge: false,
+      };
+    },
   });
 
   notificationHandlerConfigured = true;

@@ -2,12 +2,22 @@ import { useRouter } from "expo-router";
 import { useMemo, useState } from "react";
 import { Pressable, Text, View } from "react-native";
 import { AppScreen } from "../components/layout/AppScreen";
+import { useAppTheme } from "../lib/useAppTheme";
 
 const DAYS = ["Sun", "Mon", "Tue", "Wed", "Thu", "Fri", "Sat"];
 
 export default function CalendarMonthScreen() {
   const router = useRouter();
+  const { colors, themeName } = useAppTheme();
   const [monthOffset, setMonthOffset] = useState(0);
+  const isDarkTheme = themeName === "dark" || themeName === "black";
+  const infoAccent = isDarkTheme ? "#60A5FA" : "#2563EB";
+  const infoAccentBorder = isDarkTheme
+    ? "rgba(96, 165, 250, 0.32)"
+    : "rgba(37, 99, 235, 0.24)";
+  const polishedBorder = isDarkTheme
+    ? "rgba(148, 163, 184, 0.28)"
+    : "rgba(15, 23, 42, 0.12)";
 
   const monthDate = useMemo(() => {
     const date = new Date();
@@ -32,30 +42,50 @@ export default function CalendarMonthScreen() {
   }
 
   return (
-    <AppScreen scroll backgroundColor="#ffffff">
-      <Text
+    <AppScreen scroll backgroundColor={colors.background}>
+      <View
         style={{
-          fontSize: 30,
-          fontWeight: "bold",
-          color: "#111111",
+          flexDirection: "row",
+          alignItems: "center",
+          gap: 10,
           marginBottom: 16,
         }}
       >
-        Month View
-      </Text>
+        <View
+          style={{
+            width: 4,
+            height: 26,
+            borderRadius: 999,
+            backgroundColor: infoAccent,
+          }}
+        />
+        <Text
+          style={{
+            fontSize: 30,
+            fontWeight: "bold",
+            color: colors.text,
+          }}
+        >
+          Month View
+        </Text>
+      </View>
 
       <View style={{ flexDirection: "row", marginBottom: 18 }}>
         <Pressable
           onPress={() => setMonthOffset(monthOffset - 1)}
           style={{
             flex: 1,
-            backgroundColor: "#111111",
+            backgroundColor: colors.card,
+            borderColor: polishedBorder,
+            borderWidth: 1,
             padding: 14,
             borderRadius: 12,
             alignItems: "center",
           }}
         >
-          <Text style={{ color: "#ffffff", fontWeight: "bold" }}>← Month</Text>
+          <Text style={{ color: infoAccent, fontWeight: "900" }}>
+            Previous Month
+          </Text>
         </Pressable>
 
         <View style={{ width: 10 }} />
@@ -64,32 +94,50 @@ export default function CalendarMonthScreen() {
           onPress={() => setMonthOffset(monthOffset + 1)}
           style={{
             flex: 1,
-            backgroundColor: "#111111",
+            backgroundColor: colors.card,
+            borderColor: polishedBorder,
+            borderWidth: 1,
             padding: 14,
             borderRadius: 12,
             alignItems: "center",
           }}
         >
-          <Text style={{ color: "#ffffff", fontWeight: "bold" }}>Month →</Text>
+          <Text style={{ color: infoAccent, fontWeight: "900" }}>
+            Next Month
+          </Text>
         </Pressable>
       </View>
 
-      <Text
+      <View
         style={{
-          fontSize: 22,
-          fontWeight: "bold",
-          color: "#111111",
+          backgroundColor: colors.card,
+          borderColor: infoAccentBorder,
+          borderLeftColor: infoAccent,
+          borderLeftWidth: 4,
+          borderWidth: 1,
+          borderRadius: 16,
           marginBottom: 16,
-          textAlign: "center",
+          padding: 16,
         }}
       >
-        {monthName}
-      </Text>
+        <Text
+          style={{
+            fontSize: 22,
+            fontWeight: "bold",
+            color: colors.text,
+            textAlign: "center",
+          }}
+        >
+          {monthName}
+        </Text>
+      </View>
 
       <View style={{ flexDirection: "row", marginBottom: 8 }}>
         {DAYS.map((day) => (
           <View key={day} style={{ flex: 1, alignItems: "center" }}>
-            <Text style={{ fontWeight: "bold", color: "#666666" }}>{day}</Text>
+            <Text style={{ fontWeight: "bold", color: colors.mutedText }}>
+              {day}
+            </Text>
           </View>
         ))}
       </View>
@@ -121,14 +169,16 @@ export default function CalendarMonthScreen() {
                 style={{
                   flex: 1,
                   borderRadius: 12,
-                  backgroundColor: today ? "#0F766E" : "#F3F4F6",
+                  backgroundColor: today ? infoAccent : colors.card,
+                  borderColor: today ? infoAccent : polishedBorder,
+                  borderWidth: 1,
                   alignItems: "center",
                   justifyContent: "center",
                 }}
               >
                 <Text
                   style={{
-                    color: today ? "#ffffff" : "#111111",
+                    color: today ? "#FFFFFF" : colors.text,
                     fontWeight: "bold",
                   }}
                 >
@@ -142,7 +192,7 @@ export default function CalendarMonthScreen() {
 
       <Text
         style={{
-          color: "#666666",
+          color: colors.mutedText,
           textAlign: "center",
           marginTop: 20,
         }}
