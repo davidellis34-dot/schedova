@@ -45,6 +45,11 @@ type BulkSummary = {
   failed: number;
 };
 
+type RemoveClientsSummary = {
+  removed: number;
+  failed: number;
+};
+
 const CONSENT_SOURCES: ConsentSource[] = [
   "In person",
   "Written form",
@@ -227,6 +232,21 @@ export default function ClientsScreen() {
 
   function showBulkSummary(title: string, summary: BulkSummary) {
     Alert.alert(title, formatSummary(summary));
+  }
+
+  function showRemoveClientsSummary(summary: RemoveClientsSummary) {
+    if (summary.failed > 0) {
+      Alert.alert(
+        "Clients removed",
+        `${summary.removed} client${summary.removed === 1 ? "" : "s"} removed.\n${summary.failed} failed and remain in the active client list.`,
+      );
+      return;
+    }
+
+    Alert.alert(
+      "Clients removed",
+      `${summary.removed} client${summary.removed === 1 ? "" : "s"} removed`,
+    );
   }
 
   function getConsentBadges(client: any) {
@@ -471,6 +491,79 @@ export default function ClientsScreen() {
     );
   }
 
+  async function removeSelectedClients() {
+    if (!userId || selectedClients.length === 0 || bulkWorking) return;
+
+    const selectedCount = selectedClients.length;
+
+    Alert.alert(
+      "Remove selected clients?",
+      `This will remove ${selectedCount} selected clients from the active client list. Existing appointments and history should remain available.`,
+      [
+        { text: "Cancel", style: "cancel" },
+        {
+          text: "Remove Clients",
+          style: "destructive",
+          onPress: async () => {
+            setBulkWorking(true);
+            const archivedAt = new Date().toISOString();
+            const removedIds: string[] = [];
+            let failed = 0;
+
+            try {
+              for (const client of selectedClients) {
+                const clientId = String(client.id || "").trim();
+
+                if (!clientId) {
+                  failed += 1;
+                  continue;
+                }
+
+                const { data, error } = await supabase
+                  .from("clients")
+                  .update({ archived_at: archivedAt })
+                  .eq("id", clientId)
+                  .eq("user_id", userId)
+                  .is("archived_at", null)
+                  .select("id")
+                  .maybeSingle();
+
+                if (error || !data?.id) {
+                  console.log("Bulk client archive failed", {
+                    clientId,
+                    message: error?.message || "No matching client row updated",
+                  });
+                  failed += 1;
+                } else {
+                  removedIds.push(clientId);
+                }
+              }
+
+              const removedIdSet = new Set(removedIds);
+              setClients((current) =>
+                current.filter((client) => !removedIdSet.has(String(client.id))),
+              );
+              setSelectedClientIds([]);
+              setSelectionMode(false);
+              showRemoveClientsSummary({
+                removed: removedIds.length,
+                failed,
+              });
+            } catch (error) {
+              console.log("Bulk client archive failed", error);
+              Alert.alert(
+                "Remove clients failed",
+                "Selected clients could not be removed. Please try again.",
+              );
+            } finally {
+              setBulkWorking(false);
+            }
+          },
+        },
+      ],
+    );
+  }
+
   return (
     <AppScreen scroll backgroundColor={colors.background} bottomPadding={64}>
       <ScreenHeader
@@ -555,7 +648,7 @@ export default function ClientsScreen() {
         </AppCard>
       ) : null}
 
-      {selectionMode && selectedClientIds.length > 0 ? (
+      {selectionMode ? (
         <AppCard
           style={{
             borderColor: polishedBorder,
@@ -629,6 +722,15 @@ export default function ClientsScreen() {
                 textStyle={{ fontSize: 13 }}
               />
             </View>
+            <AppButton
+              title="Remove Selected Clients"
+              variant="destructive"
+              loading={bulkWorking}
+              disabled={bulkWorking || selectedClientIds.length === 0}
+              onPress={() => {
+                void removeSelectedClients();
+              }}
+            />
             <AppButton
               title="Clear Selection"
               variant="ghost"

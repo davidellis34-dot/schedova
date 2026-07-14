@@ -2,12 +2,14 @@ import AsyncStorage from "@react-native-async-storage/async-storage";
 
 export type CalendarIntervalMinutes = 15 | 30 | 60;
 export type CalendarTimeFormat = "12h" | "24h";
+export type DoubleBookingPreference = "warn_allow" | "block";
 
 export type CalendarPreferences = {
   intervalMinutes: CalendarIntervalMinutes;
   timeFormat: CalendarTimeFormat;
   startHour: number;
   endHour: number;
+  doubleBooking: DoubleBookingPreference;
 };
 
 export const DEFAULT_CALENDAR_PREFERENCES: CalendarPreferences = {
@@ -15,6 +17,7 @@ export const DEFAULT_CALENDAR_PREFERENCES: CalendarPreferences = {
   timeFormat: "12h",
   startHour: 7,
   endHour: 19,
+  doubleBooking: "warn_allow",
 };
 
 export function isValidCalendarInterval(
@@ -28,6 +31,12 @@ export function normalizeTimeFormat(value: unknown): CalendarTimeFormat {
   return "12h";
 }
 
+export function normalizeDoubleBookingPreference(
+  value: unknown,
+): DoubleBookingPreference {
+  return value === "block" ? "block" : "warn_allow";
+}
+
 function normalizeHour(value: unknown, fallback: number) {
   const parsed = Number(value);
 
@@ -38,12 +47,18 @@ function normalizeHour(value: unknown, fallback: number) {
 
 export async function getCalendarPreferences(): Promise<CalendarPreferences> {
   try {
-    const [savedInterval, savedTimeFormat, savedStartHour, savedEndHour] =
-      await Promise.all([
+    const [
+      savedInterval,
+      savedTimeFormat,
+      savedStartHour,
+      savedEndHour,
+      savedDoubleBooking,
+    ] = await Promise.all([
         AsyncStorage.getItem("calendar_interval"),
         AsyncStorage.getItem("time_format"),
         AsyncStorage.getItem("calendar_start_hour"),
         AsyncStorage.getItem("calendar_end_hour"),
+        AsyncStorage.getItem("double_booking_preference"),
       ]);
 
     const parsedInterval = Number(savedInterval);
@@ -58,6 +73,7 @@ export async function getCalendarPreferences(): Promise<CalendarPreferences> {
         DEFAULT_CALENDAR_PREFERENCES.startHour,
       ),
       endHour: normalizeHour(savedEndHour, DEFAULT_CALENDAR_PREFERENCES.endHour),
+      doubleBooking: normalizeDoubleBookingPreference(savedDoubleBooking),
     };
   } catch {
     return DEFAULT_CALENDAR_PREFERENCES;

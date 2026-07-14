@@ -21,7 +21,11 @@ import {
   saveAppointmentCommunicationRecipients,
   type CommunicationRecipient,
 } from "../../lib/communicationRecipients";
-import { getCalendarPreferences } from "../../lib/calendarPreferences";
+import {
+  formatClockTime,
+  getCalendarPreferences,
+  type DoubleBookingPreference,
+} from "../../lib/calendarPreferences";
 import { normalizePhoneForSmsWithUserDefault } from "../../lib/countrySettings";
 import {
   canUseFeature,
@@ -61,6 +65,17 @@ type SafeService = Service & {
   duration_minutes: number;
 };
 
+type AppointmentOverlap = {
+  id: string;
+  date: string;
+  clientName: string;
+  serviceName: string;
+  startTime: string;
+  endTime: string;
+};
+
+type DoubleBookingDecision = "cancel" | "book_all" | "skip_conflicts";
+
 function normalizeEntryType(value?: string): EntryType {
   if (value === "blocked" || value === "blocked_time") return "blocked_time";
   if (value === "vacation") return "vacation";
@@ -94,6 +109,16 @@ function timeToMinutes(time: string) {
   if (!Number.isFinite(hours) || !Number.isFinite(minutes)) return Number.NaN;
 
   return hours * 60 + minutes;
+}
+
+function minutesToTime(minutesValue: number) {
+  if (!Number.isFinite(minutesValue)) return "";
+
+  const normalizedMinutes = Math.max(0, Math.min(24 * 60 - 1, minutesValue));
+  const hours = Math.floor(normalizedMinutes / 60);
+  const minutes = normalizedMinutes % 60;
+
+  return `${String(hours).padStart(2, "0")}:${String(minutes).padStart(2, "0")}`;
 }
 
 function positiveDurationMinutes(value: unknown) {
@@ -328,6 +353,114 @@ function getSafeSelectedServices(servicesValue: unknown): SafeService[] {
   return safeServices;
 }
 
+function getOverlapClientName(appointment: any) {
+  return String(appointment?.client_name || "").trim() || "another client";
+}
+
+function getOverlapServiceName(appointment: any, services: Service[]) {
+  const names = getAppointmentServices(appointment, services)
+    .map((service) => String(service?.name || "").trim())
+    .filter(Boolean);
+
+  return names.join(", ") || "appointment";
+}
+
+function getBookingAvailabilityWindow(dateText: string, rules: any[] = []) {
+  const dayNumber = parseDateOnly(dateText).getDay();
+  const rule = rules.find(
+    (item) => Number(item?.day_of_week) === Number(dayNumber),
+  );
+
+  if (!rule) {
+    return {
+      isAvailable: true,
+      startMinutes: 8 * 60,
+      endMinutes: 18 * 60,
+    };
+  }
+
+  const startMinutes = timeToMinutes(String(rule.start_time || "08:00"));
+  const endMinutes = timeToMinutes(String(rule.end_time || "18:00"));
+  const safeStart = Number.isFinite(startMinutes) ? startMinutes : 8 * 60;
+  const safeEnd =
+    Number.isFinite(endMinutes) && endMinutes > safeStart
+      ? endMinutes
+      : 18 * 60;
+
+  return {
+    isAvailable:
+      rule.is_available === undefined || rule.is_available === null
+        ? true
+        : Boolean(rule.is_available),
+    startMinutes: safeStart,
+    endMinutes: safeEnd,
+  };
+}
+
+function formatOverlapLine(overlap: AppointmentOverlap, includeDate = false) {
+  const datePrefix = includeDate ? `${overlap.date}: ` : "";
+  return `${datePrefix}${overlap.clientName} - ${overlap.serviceName}, ${overlap.startTime}-${overlap.endTime}`;
+}
+
+function buildDoubleBookingMessage(overlaps: AppointmentOverlap[]) {
+  if (overlaps.length === 1) {
+    const overlap = overlaps[0];
+    const serviceLine =
+      overlap.serviceName && overlap.serviceName !== "appointment"
+        ? `\nService: ${overlap.serviceName}`
+        : "";
+
+    return `This appointment overlaps with ${overlap.clientName} from ${overlap.startTime} to ${overlap.endTime}.${serviceLine}\n\nDo you want to book it anyway?`;
+  }
+
+  return `Overlaps with:\n${overlaps
+    .map((overlap) => `- ${formatOverlapLine(overlap, true)}`)
+    .join("\n")}\n\nDo you want to book it anyway?`;
+}
+
+function confirmDoubleBooking(
+  overlaps: AppointmentOverlap[],
+  allowSkip: boolean,
+): Promise<DoubleBookingDecision> {
+  return new Promise((resolve) => {
+    const buttons =
+      allowSkip && overlaps.length > 0
+        ? [
+            {
+              text: "Cancel all",
+              style: "cancel" as const,
+              onPress: () => resolve("cancel" as const),
+            },
+            {
+              text: "Skip conflicting dates",
+              onPress: () => resolve("skip_conflicts" as const),
+            },
+            {
+              text: "Book all anyway",
+              style: "destructive" as const,
+              onPress: () => resolve("book_all" as const),
+            },
+          ]
+        : [
+            {
+              text: "Cancel",
+              style: "cancel" as const,
+              onPress: () => resolve("cancel" as const),
+            },
+            {
+              text: "Book Anyway",
+              style: "destructive" as const,
+              onPress: () => resolve("book_all" as const),
+            },
+          ];
+
+    Alert.alert("Double booking detected", buildDoubleBookingMessage(overlaps), buttons, {
+      cancelable: true,
+      onDismiss: () => resolve("cancel"),
+    });
+  });
+}
+
 function getUnknownErrorMessage(error: unknown) {
   if (error instanceof Error) return error.message;
 
@@ -412,6 +545,8 @@ export function useBookAppointmentForm({
 
   const [use24Hour, setUse24Hour] = useState(false);
   const [calendarIntervalMinutes, setCalendarIntervalMinutes] = useState(30);
+  const [doubleBookingPreference, setDoubleBookingPreference] =
+    useState<DoubleBookingPreference>("warn_allow");
   const [loading, setLoading] = useState(true);
   const [saving, setSaving] = useState(false);
   const savingRef = useRef(false);
@@ -542,6 +677,7 @@ export function useBookAppointmentForm({
     const preferences = await getCalendarPreferences();
     setUse24Hour(preferences.timeFormat === "24h");
     setCalendarIntervalMinutes(preferences.intervalMinutes);
+    setDoubleBookingPreference(preferences.doubleBooking);
   }
 
   async function fetchBaseData(options?: { preserveForm?: boolean }) {
@@ -1501,12 +1637,51 @@ export function useBookAppointmentForm({
       return false;
     }
 
+    const newStartMinutes = timeToMinutes(newStartTime);
+    const newEndMinutes = timeToMinutes(newEndTime);
+    const appointmentOverlapsByDate = new Map<string, AppointmentOverlap[]>();
+    const { data: availabilityRules, error: availabilityError } =
+      await supabase
+        .from("availability_rules")
+        .select("day_of_week, is_available, start_time, end_time")
+        .eq("user_id", currentUserId);
+
+    if (availabilityError) {
+      logSupabaseSaveError("availability_rules.availability", availabilityError);
+      Alert.alert("Error", "Could not check business hours.");
+      return false;
+    }
+
     for (const date of recurringDates) {
+      const availabilityWindow = getBookingAvailabilityWindow(
+        date,
+        availabilityRules || [],
+      );
+
+      if (!availabilityWindow.isAvailable) {
+        Alert.alert(
+          "Closed business hours",
+          `The appointment on ${date} falls on a closed day.`,
+        );
+        return false;
+      }
+
+      if (
+        newStartMinutes < availabilityWindow.startMinutes ||
+        newEndMinutes > availabilityWindow.endMinutes
+      ) {
+        Alert.alert(
+          "Closed business hours",
+          `The appointment on ${date} is outside your available hours.`,
+        );
+        return false;
+      }
+
       const { data: existingAppointmentRows, error: existingError } =
         await supabase
           .from("appointments")
           .select(
-            "id, appointment_date, appointment_time, end_time, duration_minutes, status",
+            "id, appointment_date, appointment_time, end_time, duration_minutes, status, client_name, service_id, service_ids, service_snapshots",
           )
           .eq("user_id", currentUserId)
           .eq("appointment_date", date)
@@ -1518,16 +1693,14 @@ export function useBookAppointmentForm({
         return false;
       }
 
-      const newStartMinutes = timeToMinutes(newStartTime);
-      const newEndMinutes = timeToMinutes(newEndTime);
       const existingAppointments = (existingAppointmentRows || []).filter(
         Boolean,
       );
 
-      const hasOverlap =
-        existingAppointments.some((appt: any) => {
+      const dateOverlaps = existingAppointments
+        .map((appt: any) => {
           if (isEditMode && appointmentId && appt?.id === appointmentId) {
-            return false;
+            return null;
           }
 
           const existingStartMinutes = timeToMinutes(appt?.appointment_time);
@@ -1537,21 +1710,37 @@ export function useBookAppointmentForm({
             !Number.isFinite(existingStartMinutes) ||
             !Number.isFinite(existingEndMinutes)
           ) {
-            return false;
+            return null;
           }
 
-          return (
+          const overlaps =
             existingStartMinutes < newEndMinutes &&
-            existingEndMinutes > newStartMinutes
-          );
-        }) ?? false;
+            existingEndMinutes > newStartMinutes;
 
-      if (hasOverlap) {
-        Alert.alert(
-          "Time Already Booked",
-          `There is already an appointment on ${date} during this time.`,
-        );
-        return false;
+          if (!overlaps) return null;
+
+          const startTimeLabel = formatClockTime(
+            minutesToTime(existingStartMinutes),
+            use24Hour,
+          );
+          const endTimeLabel = formatClockTime(
+            minutesToTime(existingEndMinutes),
+            use24Hour,
+          );
+
+          return {
+            id: String(appt.id || ""),
+            date,
+            clientName: getOverlapClientName(appt),
+            serviceName: getOverlapServiceName(appt, services),
+            startTime: startTimeLabel,
+            endTime: endTimeLabel,
+          } satisfies AppointmentOverlap;
+        })
+        .filter((overlap): overlap is AppointmentOverlap => Boolean(overlap));
+
+      if (dateOverlaps.length > 0) {
+        appointmentOverlapsByDate.set(date, dateOverlaps);
       }
 
       const { data: blockedTimes, error: blockedError } = await supabase
@@ -1574,6 +1763,52 @@ export function useBookAppointmentForm({
           `The appointment on ${date} falls inside a blocked period.`,
         );
         return false;
+      }
+    }
+
+    const allAppointmentOverlaps = Array.from(
+      appointmentOverlapsByDate.values(),
+    ).flat();
+    let datesToSave = recurringDates;
+    let doubleBookedWith = Array.from(
+      new Set(allAppointmentOverlaps.map((overlap) => overlap.id).filter(Boolean)),
+    );
+    let doubleBookingConfirmedAt: string | null = null;
+
+    if (allAppointmentOverlaps.length > 0) {
+      if (doubleBookingPreference === "block") {
+        Alert.alert(
+          "Time Already Booked",
+          repeatType === "none"
+            ? "There is already an appointment during this time."
+            : "One or more recurring appointment dates overlap existing appointments.",
+        );
+        return false;
+      }
+
+      const decision = await confirmDoubleBooking(
+        allAppointmentOverlaps,
+        repeatType !== "none" && !isEditMode,
+      );
+
+      if (decision === "cancel") {
+        return false;
+      }
+
+      if (decision === "skip_conflicts") {
+        const conflictingDates = new Set(appointmentOverlapsByDate.keys());
+        datesToSave = recurringDates.filter((date) => !conflictingDates.has(date));
+        doubleBookedWith = [];
+
+        if (datesToSave.length === 0) {
+          Alert.alert(
+            "No appointments saved",
+            "Every generated date overlaps an existing appointment.",
+          );
+          return false;
+        }
+      } else {
+        doubleBookingConfirmedAt = new Date().toISOString();
       }
     }
 
@@ -1609,6 +1844,10 @@ export function useBookAppointmentForm({
           : 0
         : null,
       status: "scheduled",
+      is_double_booked: doubleBookedWith.length > 0,
+      double_booked_with:
+        doubleBookedWith.length > 0 ? doubleBookedWith : null,
+      double_booking_confirmed_at: doubleBookingConfirmedAt,
     };
 
     if (isEditMode && appointmentId) {
@@ -1659,9 +1898,13 @@ export function useBookAppointmentForm({
       return true;
     }
 
-    const appointmentsToInsert = recurringDates.map((date) => ({
+    const appointmentsToInsert = datesToSave.map((date) => ({
       ...baseAppointmentData,
       appointment_date: date,
+      is_double_booked: Boolean(appointmentOverlapsByDate.get(date)?.length),
+      double_booked_with:
+        appointmentOverlapsByDate.get(date)?.map((overlap) => overlap.id) ??
+        null,
     }));
 
     const uniqueAppointments = appointmentsToInsert.filter(

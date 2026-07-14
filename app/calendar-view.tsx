@@ -2312,6 +2312,46 @@ export default function CalendarView() {
             onColor: true,
             textColor,
           })}
+          {appointment.is_double_booked ? (
+            <View
+              style={{
+                flexDirection: "row",
+                alignItems: "center",
+                gap: 4,
+                borderRadius: 999,
+                borderWidth: 1,
+                borderColor:
+                  textColor === "#FFFFFF"
+                    ? "rgba(255,255,255,0.48)"
+                    : "rgba(217,119,6,0.44)",
+                backgroundColor:
+                  textColor === "#FFFFFF"
+                    ? "rgba(255,255,255,0.16)"
+                    : "rgba(245,158,11,0.12)",
+                paddingHorizontal: compact ? 6 : 8,
+                paddingVertical: 3,
+              }}
+            >
+              <Text
+                style={{
+                  color: textColor,
+                  fontSize: compact ? 9 : 10,
+                  fontWeight: "900",
+                }}
+              >
+                !
+              </Text>
+              <Text
+                style={{
+                  color: textColor,
+                  fontSize: compact ? 9 : 10,
+                  fontWeight: "900",
+                }}
+              >
+                Double booked
+              </Text>
+            </View>
+          ) : null}
         </View>
       </Pressable>
     );

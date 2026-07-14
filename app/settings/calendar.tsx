@@ -3,6 +3,7 @@ import { useEffect, useState } from "react";
 import { Pressable, Text, View } from "react-native";
 import { AppSelectField } from "../../components/AppSelectField";
 import { AppScreen } from "../../components/layout/AppScreen";
+import { normalizeDoubleBookingPreference } from "../../lib/calendarPreferences";
 import { useAppTheme } from "../../lib/useAppTheme";
 
 export default function CalendarSettingsScreen() {
@@ -12,6 +13,8 @@ export default function CalendarSettingsScreen() {
   const [endHour, setEndHour] = useState("19");
   const [interval, setIntervalValue] = useState("30");
   const [timeFormat, setTimeFormat] = useState("12");
+  const [doubleBookingPreference, setDoubleBookingPreference] =
+    useState("warn_allow");
 
   useEffect(() => {
     loadSettings();
@@ -22,11 +25,17 @@ export default function CalendarSettingsScreen() {
     const savedEnd = await AsyncStorage.getItem("calendar_end_hour");
     const savedInterval = await AsyncStorage.getItem("calendar_interval");
     const savedTimeFormat = await AsyncStorage.getItem("time_format");
+    const savedDoubleBookingPreference = await AsyncStorage.getItem(
+      "double_booking_preference",
+    );
 
     if (savedStart) setStartHour(savedStart);
     if (savedEnd) setEndHour(savedEnd);
     if (savedInterval) setIntervalValue(savedInterval);
     if (savedTimeFormat) setTimeFormat(savedTimeFormat);
+    setDoubleBookingPreference(
+      normalizeDoubleBookingPreference(savedDoubleBookingPreference),
+    );
   }
 
   async function saveSettings() {
@@ -34,7 +43,10 @@ export default function CalendarSettingsScreen() {
     await AsyncStorage.setItem("calendar_end_hour", endHour);
     await AsyncStorage.setItem("calendar_interval", interval);
     await AsyncStorage.setItem("time_format", timeFormat);
-
+    await AsyncStorage.setItem(
+      "double_booking_preference",
+      doubleBookingPreference,
+    );
   }
 
   const hourOptions = [
@@ -80,6 +92,11 @@ export default function CalendarSettingsScreen() {
   const timeFormatOptions = [
     { label: "12-hour time, like 5:30 PM", value: "12" },
     { label: "24-hour time, like 17:30", value: "24" },
+  ];
+
+  const doubleBookingOptions = [
+    { label: "Warn and allow", value: "warn_allow" },
+    { label: "Block completely", value: "block" },
   ];
 
   return (
@@ -134,6 +151,18 @@ export default function CalendarSettingsScreen() {
           value={timeFormat}
           options={timeFormatOptions}
           onChange={setTimeFormat}
+          colors={colors}
+        />
+
+        <AppSelectField
+          label="Double booking"
+          value={doubleBookingPreference}
+          options={doubleBookingOptions}
+          onChange={(value) =>
+            setDoubleBookingPreference(
+              normalizeDoubleBookingPreference(value),
+            )
+          }
           colors={colors}
         />
 

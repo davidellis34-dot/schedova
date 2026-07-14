@@ -39,6 +39,7 @@ type Appointment = {
   duration_minutes?: number | null;
   status?: string | null;
   archived?: boolean;
+  is_double_booked?: boolean | null;
   appointment_notes?: string | null;
   tip_amount?: number | null;
 };
@@ -909,6 +910,42 @@ export default function AppointmentsList() {
               }}
             >
               <StatusBadge appointment={appointment} />
+
+              {appointment.is_double_booked ? (
+                <View
+                  style={{
+                    flexDirection: "row",
+                    alignItems: "center",
+                    gap: 5,
+                    marginLeft: 10,
+                    borderRadius: 999,
+                    borderWidth: 1,
+                    borderColor: "rgba(217, 119, 6, 0.34)",
+                    backgroundColor: "rgba(245, 158, 11, 0.12)",
+                    paddingHorizontal: 10,
+                    paddingVertical: 5,
+                  }}
+                >
+                  <Text
+                    style={{
+                      color: "#B45309",
+                      fontSize: 12,
+                      fontWeight: "900",
+                    }}
+                  >
+                    !
+                  </Text>
+                  <Text
+                    style={{
+                      color: "#B45309",
+                      fontSize: 12,
+                      fontWeight: "900",
+                    }}
+                  >
+                    Double booked
+                  </Text>
+                </View>
+              ) : null}
 
               {appointment.status === "completed" &&
                 canUseProFeature("smartReminders") && (
