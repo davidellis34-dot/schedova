@@ -948,8 +948,11 @@ export function useBookAppointmentForm({
   }
 
   async function saveQuickClient() {
+    const trimmedName = newClientName.trim();
+    const trimmedEmail = newClientEmail.trim();
     const normalizedPhone =
-      await normalizePhoneForSmsWithUserDefault(newClientPhone);
+      await normalizePhoneForSmsWithUserDefault(newClientPhone.trim());
+    const displayName = trimmedName || normalizedPhone || trimmedEmail;
     const { data: userData } = await supabase.auth.getUser();
     const currentUserId = userData.user?.id;
 
@@ -958,8 +961,8 @@ export function useBookAppointmentForm({
       return;
     }
 
-    if (!newClientName.trim() && !normalizedPhone && !newClientEmail.trim()) {
-      Alert.alert("Missing Info", "Add a name, phone, or email.");
+    if (!displayName) {
+      Alert.alert("Missing Info", "Enter a name, phone number, or email.");
       return;
     }
 
@@ -982,13 +985,9 @@ export function useBookAppointmentForm({
       .from("clients")
       .insert({
         user_id: currentUserId,
-        name:
-          newClientName.trim() ||
-          normalizedPhone ||
-          newClientEmail.trim() ||
-          "New Client",
+        name: displayName,
         phone: normalizedPhone || null,
-        email: newClientEmail.trim() || null,
+        email: trimmedEmail || null,
       })
       .select("*")
       .single();

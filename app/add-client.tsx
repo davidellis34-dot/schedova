@@ -88,13 +88,14 @@ export default function AddClientScreen() {
     setRecipients((current) => {
       const next = current.length > 0 ? [...current] : [createPrimaryRecipient({})];
       const primary = next[0];
+      const primaryPhone = primary.phone || phone;
 
       next[0] = {
         ...primary,
         name: primary.name || name,
-        phone: primary.phone || phone,
+        phone: primaryPhone,
         email: primary.email || email,
-        smsEnabled: primary.smsEnabled || smsOptIn,
+        smsEnabled: Boolean(primaryPhone.trim()) && (primary.smsEnabled || smsOptIn),
         emailEnabled: primary.emailEnabled || Boolean(email.trim()),
         isPrimary: true,
       };
@@ -102,6 +103,12 @@ export default function AddClientScreen() {
       return next;
     });
   }, [email, name, phone, smsOptIn]);
+
+  useEffect(() => {
+    if (!phone.trim() && smsOptIn) {
+      setSmsOptIn(false);
+    }
+  }, [phone, smsOptIn]);
 
   async function saveClient() {
     if (saving) return;
@@ -118,6 +125,7 @@ export default function AddClientScreen() {
       const trimmedNotes = notes.trim();
       const trimmedBirthday = birthday.trim();
       const displayName = trimmedName || trimmedPhone || trimmedEmail;
+      const nextSmsOptIn = Boolean(trimmedPhone) && smsOptIn;
 
       if (!displayName) {
         const message = "Enter a name, phone number, or email.";
@@ -175,7 +183,7 @@ export default function AddClientScreen() {
           birthday: trimmedBirthday || null,
           rebooking_weeks: parseRebookingWeeks(rebookingWeeks),
           client_tag: clientTag,
-          sms_opt_in: smsOptIn,
+          sms_opt_in: nextSmsOptIn,
         })
         .select("id")
         .single();
@@ -193,15 +201,22 @@ export default function AddClientScreen() {
           clientId,
           recipients: recipients.map((recipient, index) =>
             index === 0
-              ? {
-                  ...recipient,
-                  name: recipient.name || displayName,
-                  phone: recipient.phone || trimmedPhone,
-                  email: recipient.email || trimmedEmail,
-                  smsEnabled: recipient.smsEnabled || smsOptIn,
-                  emailEnabled: recipient.emailEnabled || Boolean(trimmedEmail),
-                  isPrimary: true,
-                }
+              ? (() => {
+                  const primaryPhone = recipient.phone || trimmedPhone;
+
+                  return {
+                    ...recipient,
+                    name: recipient.name || displayName,
+                    phone: primaryPhone,
+                    email: recipient.email || trimmedEmail,
+                    smsEnabled:
+                      Boolean(primaryPhone) &&
+                      (recipient.smsEnabled || nextSmsOptIn),
+                    emailEnabled:
+                      recipient.emailEnabled || Boolean(trimmedEmail),
+                    isPrimary: true,
+                  };
+                })()
               : recipient,
           ),
         });
@@ -328,6 +343,11 @@ export default function AddClientScreen() {
           value={phone}
           onChangeText={setPhone}
           onBlur={() => {
+            if (!phone.trim()) {
+              setPhone("");
+              return;
+            }
+
             void normalizePhoneForSmsWithUserDefault(phone.trim())
               .then(setPhone)
               .catch((error) => {
@@ -395,9 +415,12 @@ export default function AddClientScreen() {
               Client agreed to receive appointment texts.
             </Text>
             <Switch
-              value={smsOptIn}
-              onValueChange={setSmsOptIn}
-              thumbColor={smsOptIn ? colors.primary : undefined}
+              value={Boolean(phone.trim()) && smsOptIn}
+              disabled={!phone.trim()}
+              onValueChange={(value) => {
+                setSmsOptIn(Boolean(phone.trim()) && value);
+              }}
+              thumbColor={phone.trim() && smsOptIn ? colors.primary : undefined}
             />
           </View>
 
@@ -409,8 +432,9 @@ export default function AddClientScreen() {
               lineHeight: 18,
             }}
           >
-            Only enable this if the client has agreed to receive appointment
-            text messages.
+            {phone.trim()
+              ? "Only enable this if the client has agreed to receive appointment text messages."
+              : "Add a phone number before enabling SMS appointment texts."}
           </Text>
         </View>
 

@@ -208,6 +208,12 @@ export function EditClientForm({
     void fetchClient();
   }, [fetchClient]);
 
+  useEffect(() => {
+    if (!phone.trim() && smsOptIn) {
+      setSmsOptIn(false);
+    }
+  }, [phone, smsOptIn]);
+
   async function saveClient() {
     if (saving || loadingClient) return;
 
@@ -225,6 +231,7 @@ export function EditClientForm({
       const displayName = trimmedName || trimmedPhone || trimmedEmail;
       const clientIdMessage = getClientIdValidationMessage(normalizedClientId);
       const now = new Date().toISOString();
+      const nextSmsOptIn = Boolean(trimmedPhone) && smsOptIn;
 
       if (clientIdMessage) {
         setErrorMessage(clientIdMessage);
@@ -267,9 +274,9 @@ export function EditClientForm({
           birthday: trimmedBirthday || null,
           client_tag: clientTag,
           notes: trimmedNotes || null,
-          sms_opt_in: smsOptIn,
-          sms_opt_in_at: smsOptIn ? now : null,
-          sms_opt_in_source: smsOptIn ? "Edit Client" : null,
+          sms_opt_in: nextSmsOptIn,
+          sms_opt_in_at: nextSmsOptIn ? now : null,
+          sms_opt_in_source: nextSmsOptIn ? "Edit Client" : null,
           email_opt_in: emailOptIn,
           email_opt_in_at: emailOptIn ? now : null,
           email_opt_in_source: emailOptIn ? "Edit Client" : null,
@@ -288,15 +295,21 @@ export function EditClientForm({
         clientId: normalizedClientId,
         recipients: recipients.map((recipient, index) =>
           index === 0
-            ? {
-                ...recipient,
-                name: recipient.name || displayName,
-                phone: recipient.phone || trimmedPhone,
-                email: recipient.email || trimmedEmail,
-                smsEnabled: recipient.smsEnabled || smsOptIn,
-                emailEnabled: recipient.emailEnabled || emailOptIn,
-                isPrimary: true,
-              }
+            ? (() => {
+                const primaryPhone = recipient.phone || trimmedPhone;
+
+                return {
+                  ...recipient,
+                  name: recipient.name || displayName,
+                  phone: primaryPhone,
+                  email: recipient.email || trimmedEmail,
+                  smsEnabled:
+                    Boolean(primaryPhone) &&
+                    (recipient.smsEnabled || nextSmsOptIn),
+                  emailEnabled: recipient.emailEnabled || emailOptIn,
+                  isPrimary: true,
+                };
+              })()
             : recipient,
         ),
       });
@@ -422,6 +435,11 @@ export function EditClientForm({
           value={phone}
           onChangeText={setPhone}
           onBlur={() => {
+            if (!phone.trim()) {
+              setPhone("");
+              return;
+            }
+
             void normalizePhoneForSmsWithUserDefault(phone.trim())
               .then(setPhone)
               .catch((error) => {
@@ -488,9 +506,12 @@ export function EditClientForm({
               SMS appointment messages
             </Text>
             <Switch
-              value={smsOptIn}
-              onValueChange={setSmsOptIn}
-              thumbColor={smsOptIn ? colors.primary : undefined}
+              value={Boolean(phone.trim()) && smsOptIn}
+              disabled={!phone.trim()}
+              onValueChange={(value) => {
+                setSmsOptIn(Boolean(phone.trim()) && value);
+              }}
+              thumbColor={phone.trim() && smsOptIn ? colors.primary : undefined}
             />
           </View>
 
@@ -502,8 +523,9 @@ export function EditClientForm({
               lineHeight: 18,
             }}
           >
-            Only enable this if the client has agreed to receive appointment
-            text messages.
+            {phone.trim()
+              ? "Only enable this if the client has agreed to receive appointment text messages."
+              : "Add a phone number before enabling SMS appointment texts."}
           </Text>
         </View>
 

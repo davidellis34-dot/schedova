@@ -37,14 +37,17 @@ export function createPrimaryRecipient(input: {
   smsOptIn?: boolean | null;
   emailOptIn?: boolean | null;
 }): CommunicationRecipient {
+  const phone = String(input.phone || "").trim();
+  const email = String(input.email || "").trim();
+
   return {
     clientId: input.clientId || null,
     name: String(input.name || "").trim(),
     relationship: "",
-    phone: String(input.phone || "").trim(),
-    email: String(input.email || "").trim(),
-    smsEnabled: Boolean(input.smsOptIn),
-    emailEnabled: Boolean(input.emailOptIn && input.email),
+    phone,
+    email,
+    smsEnabled: Boolean(input.smsOptIn && phone),
+    emailEnabled: Boolean(input.emailOptIn && email),
     isPrimary: true,
   };
 }
@@ -57,8 +60,8 @@ export function normalizeRecipient(row: ClientContactRow): CommunicationRecipien
     relationship: String(row.relationship || "").trim(),
     phone: String(row.phone || "").trim(),
     email: String(row.email || "").trim(),
-    smsEnabled: Boolean(row.sms_enabled),
-    emailEnabled: Boolean(row.email_enabled),
+    smsEnabled: Boolean(row.sms_enabled && row.phone),
+    emailEnabled: Boolean(row.email_enabled && row.email),
     isPrimary: Boolean(row.is_primary),
   };
 }

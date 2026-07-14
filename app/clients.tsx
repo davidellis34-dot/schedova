@@ -393,19 +393,32 @@ export default function ClientsScreen() {
 
         const patch: Record<string, unknown> = {};
         if (manualSmsConsent) {
-          if (!cleanContact(client.phone)) summary.missingPhone += 1;
-          if (client.sms_opt_in) summary.alreadyOptedIn += 1;
-          patch.sms_opt_in = true;
-          patch.sms_opt_in_at = client.sms_opt_in_at || now;
-          patch.sms_opt_in_source = manualConsentSource;
+          if (!cleanContact(client.phone)) {
+            summary.missingPhone += 1;
+            patch.sms_opt_in = false;
+            patch.sms_opt_in_at = null;
+            patch.sms_opt_in_source = null;
+          } else {
+            if (client.sms_opt_in) summary.alreadyOptedIn += 1;
+            patch.sms_opt_in = true;
+            patch.sms_opt_in_at = client.sms_opt_in_at || now;
+            patch.sms_opt_in_source = manualConsentSource;
+          }
         }
 
         if (manualEmailConsent) {
-          if (!cleanContact(client.email)) summary.missingEmail += 1;
-          if (client.email_opt_in) summary.alreadyOptedIn += 1;
-          patch.email_opt_in = true;
-          patch.email_opt_in_at = client.email_opt_in_at || now;
-          patch.email_opt_in_source = manualConsentSource;
+          if (!cleanContact(client.email)) {
+            summary.missingEmail += 1;
+          } else {
+            if (client.email_opt_in) summary.alreadyOptedIn += 1;
+            patch.email_opt_in = true;
+            patch.email_opt_in_at = client.email_opt_in_at || now;
+            patch.email_opt_in_source = manualConsentSource;
+          }
+        }
+
+        if (Object.keys(patch).length === 0) {
+          continue;
         }
 
         const { error } = await supabase

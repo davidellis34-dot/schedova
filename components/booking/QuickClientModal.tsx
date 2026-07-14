@@ -102,9 +102,16 @@ export function QuickClientModal({
               value={phone}
               onChangeText={onChangePhone}
               onBlur={() => {
-                void normalizePhoneForSmsWithUserDefault(phone).then(
-                  onChangePhone,
-                );
+                if (!phone.trim()) {
+                  onChangePhone("");
+                  return;
+                }
+
+                void normalizePhoneForSmsWithUserDefault(phone.trim())
+                  .then(onChangePhone)
+                  .catch((error) => {
+                    console.log("Phone normalization failed", error);
+                  });
               }}
               keyboardType="phone-pad"
               style={inputStyle(colors)}
