@@ -10,7 +10,13 @@ import {
   PRO_UPSELL_COPY,
   showProUpgradePrompt,
 } from "../../lib/proUpsell";
+import {
+  getSavePerformanceNow,
+  logSaveTiming,
+  measureSaveStep,
+} from "../../lib/savePerformance";
 import { supabase } from "../../lib/supabase";
+import { useScreenLoadingTiming } from "../../lib/screenPerformance";
 import { useAppTheme } from "../../lib/useAppTheme";
 
 type SmsSettings = {
@@ -57,6 +63,7 @@ export default function SmsSettingsScreen() {
   const { authStatus, userId } = useAuthSession();
   useFeatureAccess();
   const [loading, setLoading] = useState(true);
+  useScreenLoadingTiming(loading);
   const [saving, setSaving] = useState(false);
   const [isPaid, setIsPaid] = useState(false);
   const [statusMessage, setStatusMessage] = useState("");
@@ -132,6 +139,11 @@ export default function SmsSettingsScreen() {
   );
 
   async function saveSettings() {
+    const flowName = "sms settings save";
+    const saveStartedAt = getSavePerformanceNow();
+    const validationStartedAt = getSavePerformanceNow();
+    let postSupabaseStartedAt: number | null = null;
+
     if (!smsAvailable) {
       if (ENABLE_PRO) {
         showProUpgradePrompt(PRO_UPSELL_COPY.sms);
@@ -170,11 +182,26 @@ export default function SmsSettingsScreen() {
         updated_at: new Date().toISOString(),
       };
 
+      logSaveTiming(
+        flowName,
+        "validation",
+        getSavePerformanceNow() - validationStartedAt,
+      );
+
+      const existingRowStartedAt = getSavePerformanceNow();
       const existingRowResult = await supabase
         .from("sms_settings")
         .select("user_id")
         .eq("user_id", userId)
         .maybeSingle();
+      logSaveTiming(
+        flowName,
+        "pre-save queries",
+        getSavePerformanceNow() - existingRowStartedAt,
+        {
+          operation: "existing sms_settings row lookup",
+        },
+      );
 
       if (existingRowResult.error) {
         logSmsSettingsSupabaseError(
@@ -192,24 +219,36 @@ export default function SmsSettingsScreen() {
         return;
       }
 
-      const saveResult = existingRowResult.data
-        ? await supabase
-            .from("sms_settings")
-            .update(settingsPayload)
-            .eq("user_id", userId)
-            .select("user_id")
-            .maybeSingle()
-        : await supabase
-            .from("sms_settings")
-            .upsert(
-              {
-                user_id: userId,
-                ...settingsPayload,
-              },
-              { onConflict: "user_id" },
-            )
-            .select("user_id")
-            .maybeSingle();
+      const mutationStartedAt = getSavePerformanceNow();
+      logSaveTiming(
+        flowName,
+        "time before supabase request starts",
+        mutationStartedAt - saveStartedAt,
+      );
+
+      const saveResult = await measureSaveStep(
+        flowName,
+        "supabase request duration",
+        () =>
+          existingRowResult.data
+            ? supabase
+                .from("sms_settings")
+                .update(settingsPayload)
+                .eq("user_id", userId)
+                .select("user_id")
+                .maybeSingle()
+            : supabase
+                .from("sms_settings")
+                .upsert(
+                  {
+                    user_id: userId,
+                    ...settingsPayload,
+                  },
+                  { onConflict: "user_id" },
+                )
+                .select("user_id")
+                .maybeSingle(),
+      );
 
       if (saveResult.error) {
         logSmsSettingsSupabaseError("save failed", saveResult.error, {
@@ -225,11 +264,32 @@ export default function SmsSettingsScreen() {
         return;
       }
 
+      postSupabaseStartedAt = getSavePerformanceNow();
       console.log("[SMS settings] save success", {
         userId,
         mode: existingRowResult.data ? "update" : "upsert",
       });
       setStatusMessage("SMS settings saved.");
+      logSaveTiming(flowName, "local state refresh", getSavePerformanceNow() - postSupabaseStartedAt);
+      requestAnimationFrame(() => {
+        requestAnimationFrame(() => {
+          const completedAt = getSavePerformanceNow();
+
+          if (postSupabaseStartedAt) {
+            logSaveTiming(
+              flowName,
+              "post-supabase to local refresh completion",
+              completedAt - postSupabaseStartedAt,
+            );
+          }
+
+          logSaveTiming(
+            flowName,
+            "total time until continue",
+            completedAt - saveStartedAt,
+          );
+        });
+      });
     } catch (error) {
       logSmsSettingsSupabaseError(
         "save exception",

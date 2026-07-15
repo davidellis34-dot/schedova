@@ -18,6 +18,7 @@ import {
 } from "../authNativeIsolation";
 import {
   refreshFeatureAccess,
+  setCachedEntitlementFeatureAccess,
   setRevenueCatFeatureAccess,
   useFeatureAccess,
 } from "../featureAccess";
@@ -186,8 +187,9 @@ export function SubscriptionProvider({
     Boolean(userId) &&
     cachedRevenueCatUserIdRef.current === userId &&
     cachedRevenueCatIsPro;
-  const effectiveIsPro = featureAccess.isPro;
-  const effectiveLoading = loading || featureAccess.loading;
+  const effectiveIsPro = featureAccess.isPro !== false;
+  const effectiveLoading =
+    loading || featureAccess.loading || featureAccess.isPro === null;
   const activeSupabaseSchedovaPro = hasSchedovaProAccess(
     featureAccess.subscription,
   );
@@ -401,6 +403,11 @@ export function SubscriptionProvider({
       lastKnownProByUserRef.current[userId] = cachedIsPro;
       cachedRevenueCatUserIdRef.current = userId;
       setCachedRevenueCatIsPro(cachedIsPro);
+      setCachedEntitlementFeatureAccess(
+        userId,
+        cachedIsPro,
+        "revenuecat-last-known-cache",
+      );
 
       if (cachedIsPro && !customerInfoRef.current) {
         if (__DEV__) {
@@ -895,6 +902,9 @@ export function SubscriptionProvider({
 
     async function init() {
       if (!revenueCatSupported) {
+        if (userId) {
+          setRevenueCatFeatureAccess(false, "revenuecat:unsupported");
+        }
         setLoading(false);
         return;
       }

@@ -17,6 +17,7 @@ import { SafeAreaProvider } from "react-native-safe-area-context";
 import {
   IOS_AUTH_NATIVE_ISOLATION,
   beginAuthNativeTransition,
+  scheduleDelayedAuthNativeSync,
 } from "../lib/authNativeIsolation";
 import { AuthSessionProvider, useAuthSession } from "../lib/authSession";
 import {
@@ -28,9 +29,13 @@ import {
   refreshFeatureAccess,
 } from "../lib/featureAccess";
 import { recordAuthDiagnosticEvent } from "../lib/authDiagnostics";
-import { SubscriptionProvider } from "../lib/revenuecat/SubscriptionProvider";
+import {
+  SubscriptionProvider,
+  useSubscription,
+} from "../lib/revenuecat/SubscriptionProvider";
 import { getSchedovaBookingRouteParamsFromUrl } from "../lib/schedovaLinks";
 import { useAppTheme } from "../lib/useAppTheme";
+import { ScreenPerformanceBootstrap } from "../lib/screenPerformance";
 import {
   addClientMessageNotificationListeners,
   getLastClientMessageNotificationRoute,
@@ -195,6 +200,35 @@ function AuthNativeTransitionBootstrap() {
       authStatus === "authenticated" ? userId ?? null : null,
     );
   }, [authStatus, isHydrated, userId]);
+
+  return null;
+}
+
+function AuthNativeServicesBootstrap() {
+  const { authStatus, isHydrated, userId } = useAuthSession();
+  const { syncRevenueCatAfterAuthSettle } = useSubscription();
+
+  useEffect(() => {
+    if (
+      !IOS_AUTH_NATIVE_ISOLATION ||
+      !isHydrated ||
+      authStatus !== "authenticated" ||
+      !userId
+    ) {
+      return;
+    }
+
+    void scheduleDelayedAuthNativeSync({
+      userId,
+      syncRevenueCat: async () => {
+        await syncRevenueCatAfterAuthSettle();
+      },
+      syncPush: async () => {
+        await syncUserTimezone(userId);
+        await registerForPushNotifications(userId);
+      },
+    });
+  }, [authStatus, isHydrated, syncRevenueCatAfterAuthSettle, userId]);
 
   return null;
 }
@@ -426,7 +460,9 @@ export default function RootLayout() {
         <SafeAreaProvider>
           <RevenueCatBootstrap>
             <AuthNativeTransitionBootstrap />
+            <AuthNativeServicesBootstrap />
             <FeatureAccessBootstrap />
+            <ScreenPerformanceBootstrap />
             <PushNotificationsBootstrap />
             <AuthNavigationCoordinator />
             <SchedovaDeepLinkHandler />

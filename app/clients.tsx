@@ -27,6 +27,7 @@ import { useAuthSession } from "../lib/authSession";
 import { sendConsentRequests } from "../lib/communicationRecipients";
 import { PRO_UPSELL_COPY, showProUpgradePrompt } from "../lib/proUpsell";
 import { supabase } from "../lib/supabase";
+import { useScreenLoadingTiming } from "../lib/screenPerformance";
 import { useAppTheme } from "../lib/useAppTheme";
 
 type ConsentSource =
@@ -91,6 +92,7 @@ export default function ClientsScreen() {
   useFeatureAccess();
   const [clients, setClients] = useState<any[]>([]);
   const [loadingClients, setLoadingClients] = useState(true);
+  useScreenLoadingTiming(loadingClients);
   const [searchText, setSearchText] = useState("");
   const [selectionMode, setSelectionMode] = useState(false);
   const [selectedClientIds, setSelectedClientIds] = useState<string[]>([]);

@@ -30,6 +30,8 @@ type AppointmentRecord = {
   client_name: string | null;
   appointment_date: string | null;
   appointment_time: string | null;
+  sms_confirmation_sent_at?: string | null;
+  sms_reminder_sent_at?: string | null;
 };
 
 type ClientRecord = {
@@ -65,6 +67,16 @@ const SMS_PROVIDER = "telnyx";
 const SMS_DIRECTION = "outbound";
 const SMS_SEND_FRIENDLY_ERROR =
   "SMS reminder could not be sent. Please check settings and try again.";
+const DUPLICATE_CONFIRMATION_SKIP_CODE = "duplicate_confirmation";
+const NON_FAILED_SMS_LOG_STATUSES = new Set([
+  "accepted",
+  "delivered",
+  "pending",
+  "processing",
+  "queued",
+  "sending",
+  "sent",
+]);
 
 const corsHeaders = {
   "Access-Control-Allow-Origin": "*",
@@ -203,6 +215,45 @@ function appointmentSentAtColumn(messageType: AppointmentSmsMessageType) {
     default:
       return null;
   }
+}
+
+function shouldSkipDuplicateAppointmentSms(
+  messageType: AppointmentSmsMessageType,
+) {
+  return messageType === "confirmation";
+}
+
+async function hasExistingAppointmentSmsRecord(
+  serviceClient: any,
+  userId: string,
+  appointmentId: string,
+  messageType: AppointmentSmsMessageType,
+) {
+  const { data, error } = await serviceClient
+    .from("sms_message_logs")
+    .select("id, status, provider_message_id, created_at")
+    .eq("user_id", userId)
+    .eq("appointment_id", appointmentId)
+    .eq("message_type", messageType)
+    .eq("direction", SMS_DIRECTION)
+    .order("created_at", { ascending: false })
+    .limit(5);
+
+  if (error) {
+    console.error("existing appointment SMS lookup failed", {
+      userId,
+      appointmentId,
+      messageType,
+      error,
+    });
+    throw error;
+  }
+
+  return ((data || []) as JsonObject[]).some((row) => {
+    const status = asTrimmedString(row.status).toLowerCase();
+    const providerMessageId = asTrimmedString(row.provider_message_id);
+    return providerMessageId.length > 0 || NON_FAILED_SMS_LOG_STATUSES.has(status);
+  });
 }
 
 function safeParseJson(text: string) {
@@ -490,7 +541,7 @@ Deno.serve(async (req) => {
   } = await serviceClient
     .from("appointments")
     .select(
-      "id, user_id, client_id, client_name, appointment_date, appointment_time",
+      "id, user_id, client_id, client_name, appointment_date, appointment_time, sms_confirmation_sent_at, sms_reminder_sent_at",
     )
     .eq("id", appointmentId)
     .eq("user_id", user.id)
@@ -607,6 +658,40 @@ Deno.serve(async (req) => {
       step: "sms_settings",
       code: "sms_disabled",
     });
+  }
+
+  if (shouldSkipDuplicateAppointmentSms(messageType)) {
+    const sentAtColumn = appointmentSentAtColumn(messageType);
+    const alreadyStamped = sentAtColumn
+      ? asTrimmedString(
+          appointment[sentAtColumn as keyof AppointmentRecord],
+        ).length > 0
+      : false;
+
+    if (alreadyStamped) {
+      return jsonResponse({
+        ok: true,
+        skipped: true,
+        step: "idempotency",
+        code: DUPLICATE_CONFIRMATION_SKIP_CODE,
+      });
+    }
+
+    const alreadyRecorded = await hasExistingAppointmentSmsRecord(
+      serviceClient,
+      user.id,
+      appointment.id,
+      messageType,
+    );
+
+    if (alreadyRecorded) {
+      return jsonResponse({
+        ok: true,
+        skipped: true,
+        step: "idempotency",
+        code: DUPLICATE_CONFIRMATION_SKIP_CODE,
+      });
+    }
   }
 
   const { data: userSettingsData, error: userSettingsError } = await serviceClient

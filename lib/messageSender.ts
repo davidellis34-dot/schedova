@@ -31,8 +31,10 @@ function sanitizeSenderName(value: unknown) {
     .trim();
 }
 
+const LEGACY_PLACEHOLDER_BUSINESS_NAME = ["your", "business"].join(" ");
+
 function isPlaceholderBusinessName(value: string) {
-  return value.toLowerCase() === "your business";
+  return value.toLowerCase() === LEGACY_PLACEHOLDER_BUSINESS_NAME;
 }
 
 function formatEmailLocalPart(email: string) {

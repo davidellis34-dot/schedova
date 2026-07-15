@@ -12,8 +12,15 @@ import {
   type CommunicationRecipient,
 } from "../../lib/communicationRecipients";
 import { normalizePhoneForSmsWithUserDefault } from "../../lib/countrySettings";
+import {
+  getSavePerformanceNow,
+  logSaveTiming,
+  measureSaveStep,
+  scheduleSaveCompletionTiming,
+} from "../../lib/savePerformance";
 import { supabase } from "../../lib/supabase";
 import { useAppTheme } from "../../lib/useAppTheme";
+import { useAuthSession } from "../../lib/authSession";
 
 const EMAIL_PATTERN = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
 
@@ -58,6 +65,7 @@ export function EditClientForm({
   onCancel,
   onSaved,
 }: EditClientFormProps) {
+  const { userId } = useAuthSession();
   const { colors, themeName } = useAppTheme();
   const normalizedClientId = normalizeClientId(clientId);
   const isDarkTheme = themeName === "dark" || themeName === "black";
@@ -217,6 +225,10 @@ export function EditClientForm({
   async function saveClient() {
     if (saving || loadingClient) return;
 
+    const flowName = "client save (edit)";
+    const saveStartedAt = getSavePerformanceNow();
+    let postSupabaseStartedAt: number | null = null;
+    const validationStartedAt = getSavePerformanceNow();
     setSaving(true);
     setErrorMessage("");
 
@@ -253,36 +265,73 @@ export function EditClientForm({
         return;
       }
 
-      const {
-        data: { user },
-        error: userError,
-      } = await supabase.auth.getUser();
+      logSaveTiming(
+        flowName,
+        "validation",
+        getSavePerformanceNow() - validationStartedAt,
+      );
 
-      if (userError || !user) {
+      let currentUserId = userId || "";
+
+      if (currentUserId) {
+        logSaveTiming(flowName, "auth lookup", 0, {
+          source: "cached_user_id",
+        });
+      } else {
+        const {
+          data: { user },
+          error: userError,
+        } = await measureSaveStep(flowName, "auth lookup", () =>
+          supabase.auth.getUser(),
+        );
+
+        if (userError || !user) {
+          const message = "Please sign in again.";
+          setErrorMessage(message);
+          Alert.alert("Not signed in", message);
+          return;
+        }
+
+        currentUserId = user.id;
+      }
+
+      if (!currentUserId) {
         const message = "Please sign in again.";
         setErrorMessage(message);
         Alert.alert("Not signed in", message);
         return;
       }
 
-      const { error } = await supabase
-        .from("clients")
-        .update({
-          name: displayName,
-          phone: trimmedPhone || null,
-          email: trimmedEmail || null,
-          birthday: trimmedBirthday || null,
-          client_tag: clientTag,
-          notes: trimmedNotes || null,
-          sms_opt_in: nextSmsOptIn,
-          sms_opt_in_at: nextSmsOptIn ? now : null,
-          sms_opt_in_source: nextSmsOptIn ? "Edit Client" : null,
-          email_opt_in: emailOptIn,
-          email_opt_in_at: emailOptIn ? now : null,
-          email_opt_in_source: emailOptIn ? "Edit Client" : null,
-        })
-        .eq("id", normalizedClientId)
-        .eq("user_id", user.id);
+      const mutationStartedAt = getSavePerformanceNow();
+      logSaveTiming(
+        flowName,
+        "time before supabase request starts",
+        mutationStartedAt - saveStartedAt,
+      );
+
+      const { error } = await measureSaveStep(
+        flowName,
+        "supabase request duration",
+        () =>
+          supabase
+            .from("clients")
+            .update({
+              name: displayName,
+              phone: trimmedPhone || null,
+              email: trimmedEmail || null,
+              birthday: trimmedBirthday || null,
+              client_tag: clientTag,
+              notes: trimmedNotes || null,
+              sms_opt_in: nextSmsOptIn,
+              sms_opt_in_at: nextSmsOptIn ? now : null,
+              sms_opt_in_source: nextSmsOptIn ? "Edit Client" : null,
+              email_opt_in: emailOptIn,
+              email_opt_in_at: emailOptIn ? now : null,
+              email_opt_in_source: emailOptIn ? "Edit Client" : null,
+            })
+            .eq("id", normalizedClientId)
+            .eq("user_id", currentUserId),
+      );
 
       if (error) {
         setErrorMessage(error.message);
@@ -290,31 +339,44 @@ export function EditClientForm({
         return;
       }
 
-      await saveClientCommunicationRecipients({
-        userId: user.id,
-        clientId: normalizedClientId,
-        recipients: recipients.map((recipient, index) =>
-          index === 0
-            ? (() => {
-                const primaryPhone = recipient.phone || trimmedPhone;
+      postSupabaseStartedAt = getSavePerformanceNow();
 
-                return {
-                  ...recipient,
-                  name: recipient.name || displayName,
-                  phone: primaryPhone,
-                  email: recipient.email || trimmedEmail,
-                  smsEnabled:
-                    Boolean(primaryPhone) &&
-                    (recipient.smsEnabled || nextSmsOptIn),
-                  emailEnabled: recipient.emailEnabled || emailOptIn,
-                  isPrimary: true,
-                };
-              })()
-            : recipient,
-        ),
+      scheduleSaveCompletionTiming(flowName, saveStartedAt, {
+        postSupabaseStartedAt,
       });
-
       onSaved();
+
+      requestAnimationFrame(() => {
+        setTimeout(() => {
+          void measureSaveStep(flowName, "post-save queries", () =>
+            saveClientCommunicationRecipients({
+              userId: currentUserId,
+              clientId: normalizedClientId,
+              recipients: recipients.map((recipient, index) =>
+                index === 0
+                  ? (() => {
+                      const primaryPhone = recipient.phone || trimmedPhone;
+
+                      return {
+                        ...recipient,
+                        name: recipient.name || displayName,
+                        phone: primaryPhone,
+                        email: recipient.email || trimmedEmail,
+                        smsEnabled:
+                          Boolean(primaryPhone) &&
+                          (recipient.smsEnabled || nextSmsOptIn),
+                        emailEnabled: recipient.emailEnabled || emailOptIn,
+                        isPrimary: true,
+                      };
+                    })()
+                  : recipient,
+              ),
+            }),
+          ).catch((recipientError) => {
+            console.log("Edit client recipient save failed", recipientError);
+          });
+        }, 0);
+      });
     } catch (error) {
       console.log("Edit client save failed", error);
       const message = "Client could not be saved. Please try again.";

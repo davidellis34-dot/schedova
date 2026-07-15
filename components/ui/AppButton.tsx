@@ -9,6 +9,7 @@ import {
   type ViewStyle,
 } from "react-native";
 import { useAppTheme } from "../../lib/useAppTheme";
+import { useScreenInteractionTiming } from "../../lib/screenPerformance";
 import { createSchedovaUiTheme } from "./theme";
 
 export type AppButtonVariant = "primary" | "secondary" | "destructive" | "ghost";
@@ -39,9 +40,11 @@ export function AppButton({
   ...pressableProps
 }: AppButtonProps) {
   const { colors: appColors } = useAppTheme();
+  const recordInteraction = useScreenInteractionTiming();
   const theme = createSchedovaUiTheme(appColors);
   const { colors, spacing, radii, typography, borders } = theme;
   const isDisabled = disabled || loading;
+  const { onPress, ...restPressableProps } = pressableProps;
 
   const variantStyles: Record<AppButtonVariant, ViewStyle> = {
     primary: {
@@ -90,7 +93,11 @@ export function AppButton({
         variantStyles[variant],
         style,
       ]}
-      {...pressableProps}
+      {...restPressableProps}
+      onPress={(event) => {
+        recordInteraction("button");
+        onPress?.(event);
+      }}
     >
       {loading ? <ActivityIndicator color={labelColor} /> : leftAccessory}
       {children || title ? (

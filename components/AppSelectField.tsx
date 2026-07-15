@@ -3,6 +3,7 @@ import { useState } from "react";
 import { FlatList, Pressable, Text, View } from "react-native";
 import { useSafeAreaInsets } from "react-native-safe-area-context";
 import { PickerModal } from "./PickerModal";
+import { useScreenInteractionTiming } from "../lib/screenPerformance";
 
 type Option = {
   label: string;
@@ -37,6 +38,7 @@ export function AppSelectField({
   title = label,
 }: Props) {
   const insets = useSafeAreaInsets();
+  const recordInteraction = useScreenInteractionTiming();
   const [open, setOpen] = useState(false);
   const [draftValue, setDraftValue] = useState(value);
 
@@ -44,6 +46,7 @@ export function AppSelectField({
     options.find((option) => option.value === value)?.label || "Select";
 
   function openSelector() {
+    recordInteraction("picker-open");
     setDraftValue(value);
     setOpen(true);
   }

@@ -16,6 +16,12 @@ export type AppointmentSmsResult = {
   message?: string;
 };
 
+export type AppointmentSmsDebugContext = {
+  sendPathName?: string;
+  userId?: string | null;
+  appointmentIdFromMutation?: string | null;
+};
+
 const SMS_SEND_FRIENDLY_ERROR =
   "Something went wrong sending the message. Please try again.";
 
@@ -59,8 +65,32 @@ async function readFunctionErrorDetails(error: unknown) {
   }
 }
 
+function logAppointmentSmsDebug(
+  label: string,
+  appointmentId: string,
+  messageType: AppointmentSmsMessageType,
+  debugContext?: AppointmentSmsDebugContext,
+  extra: Record<string, unknown> = {},
+) {
+  if (!__DEV__) return;
+
+  console.log(`[AppointmentSMS] ${label}`, {
+    appointmentId,
+    messageType,
+    sendPathName: debugContext?.sendPathName || "unknown",
+    userId: debugContext?.userId || null,
+    appointmentIdFromMutation: debugContext?.appointmentIdFromMutation || null,
+    appointmentIdMatchesMutation: debugContext?.appointmentIdFromMutation
+      ? appointmentId === debugContext.appointmentIdFromMutation
+      : null,
+    ...extra,
+  });
+}
+
 async function getSmsPreflightSkip(
   appointmentId: string,
+  messageType: AppointmentSmsMessageType,
+  debugContext?: AppointmentSmsDebugContext,
 ): Promise<AppointmentSmsResult | null> {
   const {
     data: { user },
@@ -81,6 +111,19 @@ async function getSmsPreflightSkip(
     .eq("id", appointmentId)
     .eq("user_id", user.id)
     .maybeSingle();
+
+  logAppointmentSmsDebug(
+    "preflight appointment lookup",
+    appointmentId,
+    messageType,
+    debugContext,
+    {
+      authUserId: user.id,
+      appointmentFound: Boolean(appointment),
+      appointmentClientId: appointment?.client_id || null,
+      appointmentLookupError: appointmentError?.message || null,
+    },
+  );
 
   if (appointmentError) {
     console.log("Appointment SMS preflight failed", appointmentError.message);
@@ -143,14 +186,30 @@ async function getSmsPreflightSkip(
 export async function sendAppointmentSms(
   appointmentId: string,
   messageType: AppointmentSmsMessageType,
+  debugContext?: AppointmentSmsDebugContext,
 ): Promise<AppointmentSmsResult> {
   if (!appointmentId) {
     return { ok: false, skipped: true, code: "missing_appointment" };
   }
 
-  const preflightSkip = await getSmsPreflightSkip(appointmentId);
+  logAppointmentSmsDebug("invoke start", appointmentId, messageType, debugContext);
+
+  const preflightSkip = await getSmsPreflightSkip(
+    appointmentId,
+    messageType,
+    debugContext,
+  );
 
   if (preflightSkip) {
+    logAppointmentSmsDebug(
+      "preflight skipped",
+      appointmentId,
+      messageType,
+      debugContext,
+      {
+        code: preflightSkip.code || null,
+      },
+    );
     return preflightSkip;
   }
 
@@ -196,18 +255,31 @@ export async function sendAppointmentSms(
     };
   }
 
-  return {
+  const result = {
     ok: true,
     ...(typeof data === "object" && data ? data : {}),
   } as AppointmentSmsResult;
+
+  logAppointmentSmsDebug("invoke result", appointmentId, messageType, debugContext, {
+    ok: result.ok,
+    skipped: result.skipped || false,
+    code: result.code || null,
+  });
+
+  return result;
 }
 
 export async function sendAppointmentSmsNonBlocking(
   appointmentId: string,
   messageType: AppointmentSmsMessageType,
+  debugContext?: AppointmentSmsDebugContext,
 ) {
   try {
-    const result = await sendAppointmentSms(appointmentId, messageType);
+    const result = await sendAppointmentSms(
+      appointmentId,
+      messageType,
+      debugContext,
+    );
 
     if (result.ok && !result.skipped) {
       emitSmsBalanceUpdated();

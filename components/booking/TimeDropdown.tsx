@@ -1,6 +1,7 @@
 import { useMemo, useState } from "react";
 import { FlatList, Pressable, Text, View } from "react-native";
 import { PickerModal } from "../PickerModal";
+import { useScreenInteractionTiming } from "../../lib/screenPerformance";
 import type { ThemeColors } from "./types";
 
 type Props = {
@@ -99,6 +100,7 @@ export function TimeDropdown({
   helperText,
 }: Props) {
   const [open, setOpen] = useState(false);
+  const recordInteraction = useScreenInteractionTiming();
 
   const timeOptions = useMemo(
     () => buildTimeOptions(intervalMinutes, use24Hour),
@@ -128,7 +130,10 @@ export function TimeDropdown({
       <Pressable
         accessibilityRole="button"
         accessibilityLabel={label}
-        onPress={() => setOpen(true)}
+        onPress={() => {
+          recordInteraction("time-picker-open");
+          setOpen(true);
+        }}
         style={{
           minHeight: 56,
           paddingHorizontal: 14,

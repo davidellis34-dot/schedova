@@ -24,7 +24,13 @@ import {
   updateCustomMessageTemplate,
 } from "../../lib/messageTemplates";
 import { openSchedovaProScreen, PRO_UPSELL_COPY } from "../../lib/proUpsell";
+import {
+  getSavePerformanceNow,
+  logSaveTiming,
+  measureSaveStep,
+} from "../../lib/savePerformance";
 import { supabase } from "../../lib/supabase";
+import { useScreenLoadingTiming } from "../../lib/screenPerformance";
 import { useAppTheme } from "../../lib/useAppTheme";
 
 type TemplateFormState = {
@@ -51,6 +57,7 @@ export default function MessageTemplatesScreen() {
   const [userId, setUserId] = useState<string | null>(null);
   const [customTemplates, setCustomTemplates] = useState<MessageTemplate[]>([]);
   const [loading, setLoading] = useState(true);
+  useScreenLoadingTiming(loading);
   const [saving, setSaving] = useState(false);
   const [deletingId, setDeletingId] = useState<string | null>(null);
   const [loadError, setLoadError] = useState("");
@@ -158,6 +165,10 @@ export default function MessageTemplatesScreen() {
   async function saveTemplate() {
     if (saving) return;
 
+    const flowName = `message template save (${form.id ? "edit" : "create"})`;
+    const saveStartedAt = getSavePerformanceNow();
+    const validationStartedAt = getSavePerformanceNow();
+    let postSupabaseStartedAt: number | null = null;
     const title = form.title.trim();
     const body = form.body.trim();
     const category = form.category.trim();
@@ -177,35 +188,95 @@ export default function MessageTemplatesScreen() {
       return;
     }
 
+    logSaveTiming(
+      flowName,
+      "validation",
+      getSavePerformanceNow() - validationStartedAt,
+    );
+
     setSaving(true);
 
     try {
-      if (form.id) {
-        const updated = await updateCustomMessageTemplate({
-          id: form.id,
-          userId,
-          title,
-          body,
-          category,
-        });
+      const mutationStartedAt = getSavePerformanceNow();
+      logSaveTiming(
+        flowName,
+        "time before supabase request starts",
+        mutationStartedAt - saveStartedAt,
+      );
 
+      const templateId = form.id;
+
+      if (templateId) {
+        const updated = await measureSaveStep(
+          flowName,
+          "supabase request duration",
+          () =>
+            updateCustomMessageTemplate({
+              id: templateId,
+              userId,
+              title,
+              body,
+              category,
+            }),
+        );
+
+        postSupabaseStartedAt = getSavePerformanceNow();
+
+        const localStateRefreshStartedAt = getSavePerformanceNow();
         setCustomTemplates((currentTemplates) =>
           currentTemplates.map((template) =>
             template.id === updated.id ? updated : template,
           ),
         );
+        logSaveTiming(
+          flowName,
+          "local state refresh",
+          getSavePerformanceNow() - localStateRefreshStartedAt,
+        );
       } else {
-        const created = await createCustomMessageTemplate({
-          userId,
-          title,
-          body,
-          category,
-        });
+        const created = await measureSaveStep(
+          flowName,
+          "supabase request duration",
+          () =>
+            createCustomMessageTemplate({
+              userId,
+              title,
+              body,
+              category,
+            }),
+        );
 
+        postSupabaseStartedAt = getSavePerformanceNow();
+
+        const localStateRefreshStartedAt = getSavePerformanceNow();
         setCustomTemplates((currentTemplates) => [created, ...currentTemplates]);
+        logSaveTiming(
+          flowName,
+          "local state refresh",
+          getSavePerformanceNow() - localStateRefreshStartedAt,
+        );
       }
 
       resetForm();
+      requestAnimationFrame(() => {
+        requestAnimationFrame(() => {
+          const completedAt = getSavePerformanceNow();
+
+          if (postSupabaseStartedAt) {
+            logSaveTiming(
+              flowName,
+              "post-supabase to local refresh completion",
+              completedAt - postSupabaseStartedAt,
+            );
+          }
+
+          logSaveTiming(
+            flowName,
+            "total time until continue",
+            completedAt - saveStartedAt,
+          );
+        });
+      });
     } catch (error: any) {
       console.log("SAVE MESSAGE TEMPLATE ERROR:", error?.message || error);
       Alert.alert(

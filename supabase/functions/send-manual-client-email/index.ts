@@ -74,7 +74,7 @@ Deno.serve(async (req) => {
     body.conversationId || body.conversation_id,
   );
   const messageBody = asTrimmedString(body.messageBody || body.body);
-  const subject = asTrimmedString(body.subject) || "Message from your provider";
+  let subject = asTrimmedString(body.subject);
 
   if (!clientId || !messageBody) {
     return jsonError("Client and message are required.", 400, {
@@ -122,7 +122,9 @@ Deno.serve(async (req) => {
   const { businessName, businessContact } = await getBusinessName(
     serviceClient,
     user.id,
+    user,
   );
+  subject = subject || `Message from ${businessName}`;
   const emailContent = buildEmailContent({
     messageType: "manual",
     clientName: asTrimmedString(client.name) || "there",

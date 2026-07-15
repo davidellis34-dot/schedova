@@ -61,6 +61,7 @@ import {
 } from "../lib/proUpsell";
 import { buildSchedovaBookingLink } from "../lib/schedovaLinks";
 import { supabase } from "../lib/supabase";
+import { useScreenLoadingTiming } from "../lib/screenPerformance";
 import { useAppTheme } from "../lib/useAppTheme";
 
 const ANDROID_TABLET_MIN_SHORT_SIDE = 600;
@@ -436,6 +437,7 @@ export default function ClientDetailsScreen() {
     "Schedova Appointment",
   );
   const [loading, setLoading] = useState(true);
+  useScreenLoadingTiming(loading);
   const [error, setError] = useState<string | null>(null);
   const [messageModalVisible, setMessageModalVisible] = useState(false);
   const [messageTemplates, setMessageTemplates] = useState<MessageTemplate[]>(

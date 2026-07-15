@@ -24,8 +24,14 @@ import {
   useFeatureAccess,
 } from "../lib/featureAccess";
 import { PRO_UPSELL_COPY, showProUpgradePrompt } from "../lib/proUpsell";
+import {
+  getSavePerformanceNow,
+  logSaveTiming,
+  measureSaveStep,
+} from "../lib/savePerformance";
 import { supabase } from "../lib/supabase";
 import { useAppTheme } from "../lib/useAppTheme";
+import { useAuthSession } from "../lib/authSession";
 
 type ServiceRecord = {
   id: string;
@@ -79,6 +85,7 @@ function formatServiceDuration(value: unknown) {
 }
 
 export default function AddServiceScreen() {
+  const { userId } = useAuthSession();
   useFeatureAccess();
   const [successMessage, setSuccessMessage] = useState("");
   const [errorMessage, setErrorMessage] = useState("");
@@ -123,24 +130,34 @@ export default function AddServiceScreen() {
   const [services, setServices] = useState<ServiceRecord[]>([]);
   const [editingServiceId, setEditingServiceId] = useState<string | null>(null);
 
-  useFocusEffect(
-    useCallback(() => {
-      void fetchServices();
-    }, []),
-  );
-
   async function handleSave() {
     if (saving) return;
 
+    const flowName = `service save (${editingServiceId ? "edit" : "create"})`;
+    const saveStartedAt = getSavePerformanceNow();
+    const validationStartedAt = getSavePerformanceNow();
+    let postSupabaseStartedAt: number | null = null;
     setSaving(true);
     setErrorMessage("");
     setSuccessMessage("");
 
     try {
-      const { data: userData } = await supabase.auth.getUser();
-      const userId = userData.user?.id;
+      let currentUserId = userId || "";
 
-      if (!userId) {
+      if (currentUserId) {
+        logSaveTiming(flowName, "auth lookup", 0, {
+          source: "cached_user_id",
+        });
+      } else {
+        const { data: userData } = await measureSaveStep(
+          flowName,
+          "auth lookup",
+          () => supabase.auth.getUser(),
+        );
+        currentUserId = userData.user?.id || "";
+      }
+
+      if (!currentUserId) {
         const message = "Please log in first.";
         setErrorMessage(message);
         Alert.alert("Login Required", message);
@@ -173,6 +190,12 @@ export default function AddServiceScreen() {
         return;
       }
 
+      logSaveTiming(
+        flowName,
+        "validation",
+        getSavePerformanceNow() - validationStartedAt,
+      );
+
       if (
         !editingServiceId &&
         !canUseFeature("moreServices") &&
@@ -183,30 +206,53 @@ export default function AddServiceScreen() {
       }
 
       let error;
+      let savedService: ServiceRecord | null = null;
+      const mutationStartedAt = getSavePerformanceNow();
+      logSaveTiming(
+        flowName,
+        "time before supabase request starts",
+        mutationStartedAt - saveStartedAt,
+      );
 
       if (editingServiceId) {
-        const response = await supabase
-          .from("services")
-          .update({
-            name: trimmedName,
-            price: priceNumber,
-            duration_minutes: durationNumber,
-            color_hex: normalizeServiceColor(colorHex),
-          })
-          .eq("id", editingServiceId)
-          .eq("user_id", userId);
+        const response = await measureSaveStep(
+          flowName,
+          "supabase request duration",
+          () =>
+            supabase
+              .from("services")
+              .update({
+                name: trimmedName,
+                price: priceNumber,
+                duration_minutes: durationNumber,
+                color_hex: normalizeServiceColor(colorHex),
+              })
+              .eq("id", editingServiceId)
+              .eq("user_id", currentUserId)
+              .select("id, name, price, duration_minutes, color_hex")
+              .single(),
+        );
 
         error = response.error;
+        savedService = isServiceRecord(response.data) ? response.data : null;
       } else {
-        const response = await supabase.from("services").insert({
-          user_id: userId,
-          name: trimmedName,
-          price: priceNumber,
-          duration_minutes: durationNumber,
-          color_hex: normalizeServiceColor(colorHex),
-        });
+        const response = await measureSaveStep(
+          flowName,
+          "supabase request duration",
+          () =>
+            supabase.from("services").insert({
+              user_id: currentUserId,
+              name: trimmedName,
+              price: priceNumber,
+              duration_minutes: durationNumber,
+              color_hex: normalizeServiceColor(colorHex),
+            })
+            .select("id, name, price, duration_minutes, color_hex")
+            .single(),
+        );
 
         error = response.error;
+        savedService = isServiceRecord(response.data) ? response.data : null;
       }
 
       if (error) {
@@ -215,14 +261,64 @@ export default function AddServiceScreen() {
         return;
       }
 
+      postSupabaseStartedAt = getSavePerformanceNow();
       setSuccessMessage("Service saved.");
 
+      const localStateRefreshStartedAt = getSavePerformanceNow();
       setName("");
       setPrice("");
       setDuration("");
       setColorHex(DEFAULT_SERVICE_COLOR);
       setEditingServiceId(null);
-      await fetchServices();
+      setServices((current) => {
+        const nextService =
+          savedService ||
+          (editingServiceId
+            ? ({
+                id: editingServiceId,
+                name: trimmedName,
+                price: priceNumber,
+                duration_minutes: durationNumber,
+                color_hex: normalizeServiceColor(colorHex),
+              } satisfies ServiceRecord)
+            : null);
+
+        if (!nextService) {
+          return current;
+        }
+
+        const filteredServices = current.filter(
+          (service) => service.id !== nextService.id,
+        );
+
+        return [...filteredServices, nextService].sort((left, right) =>
+          normalizeServiceName(left).localeCompare(normalizeServiceName(right)),
+        );
+      });
+      logSaveTiming(
+        flowName,
+        "local state refresh",
+        getSavePerformanceNow() - localStateRefreshStartedAt,
+      );
+      requestAnimationFrame(() => {
+        requestAnimationFrame(() => {
+          const completedAt = getSavePerformanceNow();
+
+          if (postSupabaseStartedAt) {
+            logSaveTiming(
+              flowName,
+              "post-supabase to local refresh completion",
+              completedAt - postSupabaseStartedAt,
+            );
+          }
+
+          logSaveTiming(
+            flowName,
+            "total time until continue",
+            completedAt - saveStartedAt,
+          );
+        });
+      });
     } catch (error) {
       console.log("Service save failed", error);
       const message = "Service could not be saved. Please try again.";
@@ -235,12 +331,16 @@ export default function AddServiceScreen() {
     return;
   }
 
-  async function fetchServices() {
+  const fetchServices = useCallback(async () => {
     try {
-      const { data: userData } = await supabase.auth.getUser();
-      const userId = userData.user?.id;
+      let currentUserId = userId || "";
 
-      if (!userId) {
+      if (!currentUserId) {
+        const { data: userData } = await supabase.auth.getUser();
+        currentUserId = userData.user?.id || "";
+      }
+
+      if (!currentUserId) {
         setServices([]);
         return;
       }
@@ -248,7 +348,7 @@ export default function AddServiceScreen() {
       const { data, error } = await supabase
         .from("services")
         .select("*")
-        .eq("user_id", userId)
+        .eq("user_id", currentUserId)
         .order("name");
       if (error) {
         Alert.alert("Error", error.message);
@@ -261,7 +361,13 @@ export default function AddServiceScreen() {
       setServices([]);
       Alert.alert("Error", "Services could not be loaded. Please try again.");
     }
-  }
+  }, [userId]);
+
+  useFocusEffect(
+    useCallback(() => {
+      void fetchServices();
+    }, [fetchServices]),
+  );
 
   async function handleDeleteService(
     service: ServiceRecord | null | undefined,
@@ -272,8 +378,12 @@ export default function AddServiceScreen() {
     }
 
     try {
-      const { data: userData } = await supabase.auth.getUser();
-      const currentUserId = userData.user?.id;
+      let currentUserId = userId || "";
+
+      if (!currentUserId) {
+        const { data: userData } = await supabase.auth.getUser();
+        currentUserId = userData.user?.id || "";
+      }
 
       if (!currentUserId) {
         Alert.alert("Login Required", "Please log in first.");
@@ -297,7 +407,9 @@ export default function AddServiceScreen() {
           }
 
           setSuccessMessage("Service deleted.");
-          await fetchServices();
+          setServices((current) =>
+            current.filter((currentService) => currentService.id !== service.id),
+          );
         },
       });
     } catch (error) {

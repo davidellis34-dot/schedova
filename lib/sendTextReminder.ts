@@ -6,5 +6,8 @@ import {
 export { sendAppointmentSms, sendAppointmentSmsNonBlocking };
 
 export async function sendTextReminder(appointmentId: string) {
-  return await sendAppointmentSms(appointmentId, "reminder");
+  return await sendAppointmentSms(appointmentId, "reminder", {
+    sendPathName: "send-text-reminder",
+    appointmentIdFromMutation: appointmentId,
+  });
 }

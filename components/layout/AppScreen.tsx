@@ -9,6 +9,7 @@ import {
   ViewStyle,
 } from "react-native";
 import { useSafeAreaInsets } from "react-native-safe-area-context";
+import { useScreenRenderTiming } from "../../lib/screenPerformance";
 
 type AppScreenProps = Omit<ScrollViewProps, "contentContainerStyle"> & {
   children: ReactNode;
@@ -66,6 +67,7 @@ export const AppScreen = forwardRef<ScrollView, AppScreenProps>(
     },
     ref,
   ) => {
+    useScreenRenderTiming();
     const safeContentStyle = useAppScreenPadding({
       horizontalPadding,
       topPadding,

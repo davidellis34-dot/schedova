@@ -24,7 +24,12 @@ import { useAuthSession } from "../lib/authSession";
 import { resolveClientReply } from "../lib/clientReplies";
 import { canUseFeature, useFeatureAccess } from "../lib/featureAccess";
 import { openSchedovaProScreen, PRO_UPSELL_COPY } from "../lib/proUpsell";
+import {
+  subscribeToSaveNotices,
+  type SaveNotice,
+} from "../lib/saveNoticeEvents";
 import { supabase } from "../lib/supabase";
+import { useScreenLoadingTiming } from "../lib/screenPerformance";
 import { useAppTheme } from "../lib/useAppTheme";
 import { useSmsBalance } from "../lib/useSmsBalance";
 
@@ -180,6 +185,7 @@ export default function MessagesScreen() {
   });
   const clientRepliesAvailable = canUseFeature("smsAutomation");
   const [loading, setLoading] = useState(true);
+  useScreenLoadingTiming(loading);
   const [messages, setMessages] = useState<SmsReplyRow[]>([]);
   const [clientsById, setClientsById] = useState<Record<string, ClientSummary>>({});
   const [appointmentsById, setAppointmentsById] = useState<
@@ -194,6 +200,7 @@ export default function MessagesScreen() {
   const [replyBody, setReplyBody] = useState("");
   const [sendingReply, setSendingReply] = useState(false);
   const [resolving, setResolving] = useState(false);
+  const [saveNotice, setSaveNotice] = useState<SaveNotice | null>(null);
   const [setupError, setSetupError] = useState("");
 
   const isDarkTheme = themeName === "dark" || themeName === "black";
@@ -223,6 +230,31 @@ export default function MessagesScreen() {
       ).length,
     [messages],
   );
+
+  useEffect(() => {
+    let timeoutId: ReturnType<typeof setTimeout> | null = null;
+
+    const unsubscribe = subscribeToSaveNotices((notice) => {
+      setSaveNotice(notice);
+
+      if (timeoutId) {
+        clearTimeout(timeoutId);
+      }
+
+      timeoutId = setTimeout(() => {
+        setSaveNotice((current) =>
+          current?.id === notice.id ? null : current,
+        );
+      }, 2500);
+    });
+
+    return () => {
+      if (timeoutId) {
+        clearTimeout(timeoutId);
+      }
+      unsubscribe();
+    };
+  }, []);
 
   const conversationCards = useMemo(() => {
     const filteredMessages =
@@ -817,6 +849,28 @@ export default function MessagesScreen() {
         subtitle="Review text replies and outbound emails in one place."
         showBack
       />
+
+      {saveNotice ? (
+        <AppCard
+          style={{
+            borderColor: infoAccent,
+            borderLeftColor: infoAccent,
+            borderLeftWidth: 4,
+            borderWidth: 1,
+            marginBottom: 16,
+          }}
+        >
+          <Text
+            style={{
+              color: colors.text,
+              fontWeight: "900",
+              textAlign: "center",
+            }}
+          >
+            {saveNotice.message}
+          </Text>
+        </AppCard>
+      ) : null}
 
       <View
         style={{

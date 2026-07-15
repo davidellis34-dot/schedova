@@ -1,6 +1,7 @@
 import { createClient, processLock } from "@supabase/supabase-js";
 import "react-native-url-polyfill/auto";
 import { supabaseAuthStorage } from "./supabaseStorage";
+import { screenTimedFetch } from "./screenPerformance";
 
 export const supabaseUrl = "https://tzbnnmjogxidyltanufu.supabase.co";
 export const supabaseAnonKey =
@@ -8,6 +9,9 @@ export const supabaseAnonKey =
 export const supabaseAuthStorageKey = "sb-tzbnnmjogxidyltanufu-auth-token";
 
 export const supabase = createClient(supabaseUrl, supabaseAnonKey, {
+  global: {
+    fetch: screenTimedFetch,
+  },
   auth: {
     storage: supabaseAuthStorage,
     storageKey: supabaseAuthStorageKey,

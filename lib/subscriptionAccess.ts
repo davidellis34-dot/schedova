@@ -40,12 +40,15 @@ export function hasAdminLifetimeSchedovaProAccess(
 ) {
   if (!subscription) return false;
 
+  const plan = normalize(subscription.plan);
+  const source = normalize(getEntitlementSource(subscription));
+  const isLifetimeOrAdmin =
+    plan === "lifetime" || ["admin", "manual"].includes(source);
+
   return (
     normalize(subscription.status) === "active" &&
-    normalize(subscription.plan) === "lifetime" &&
-    normalize(subscription.entitlement) === "schedova_pro" &&
-    ["admin", "manual"].includes(normalize(getEntitlementSource(subscription))) &&
-    !getEntitlementExpiresAt(subscription)
+    isLifetimeOrAdmin &&
+    isOpenOrFuture(getEntitlementExpiresAt(subscription))
   );
 }
 

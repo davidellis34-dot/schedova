@@ -1,5 +1,5 @@
 import { useFocusEffect, useRouter } from "expo-router";
-import { useCallback, useRef, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import {
   Alert,
   KeyboardAvoidingView,
@@ -14,6 +14,10 @@ import {
 import { useSafeAreaInsets } from "react-native-safe-area-context";
 import SwipeDownSheet from "../components/SwipeDownSheet";
 import { AppScreen } from "../components/layout/AppScreen";
+import {
+  mergeAppointmentsById,
+  subscribeToAppointmentEvents,
+} from "../lib/appointmentEvents";
 import { getAppointmentServices as getSavedAppointmentServices } from "../lib/appointmentServices";
 import { sortAppointmentsChronologically } from "../lib/appointmentSort";
 import { sendAppointmentSmsNonBlocking } from "../lib/appointmentSms";
@@ -229,6 +233,26 @@ export default function AppointmentsList() {
       void loadCalendarPreferences();
     }, [fetchData, loadCalendarPreferences]),
   );
+
+  useEffect(() => {
+    return subscribeToAppointmentEvents((event) => {
+      if (event.type === "upsert") {
+        setAppointments((current) =>
+          sortAppointmentsChronologically(
+            mergeAppointmentsById(current, event.appointments as Appointment[]),
+          ),
+        );
+        return;
+      }
+
+      const deletedIds = new Set(event.appointmentIds);
+      setAppointments((current) =>
+        current.filter(
+          (appointment) => !deletedIds.has(String(appointment.id || "")),
+        ),
+      );
+    });
+  }, []);
 
   function getClientByName(name?: string | null) {
     return clients.find((client) => client?.name === name);
@@ -451,7 +475,11 @@ export default function AppointmentsList() {
 
     if (data) {
       if (status === "canceled") {
-        void sendAppointmentSmsNonBlocking(id, "cancellation");
+        void sendAppointmentSmsNonBlocking(id, "cancellation", {
+          sendPathName: "appointments-list.status.cancellation",
+          userId,
+          appointmentIdFromMutation: id,
+        });
         await cancelAppointmentReminder(id);
       }
 
@@ -483,7 +511,11 @@ export default function AppointmentsList() {
         const userId = await getCurrentUserIdOrAlert();
         if (!userId) return;
 
-        void sendAppointmentSmsNonBlocking(id, "cancellation");
+        void sendAppointmentSmsNonBlocking(id, "cancellation", {
+          sendPathName: "appointments-list.delete.cancellation",
+          userId,
+          appointmentIdFromMutation: id,
+        });
 
         const { error } = await supabase
           .from("appointments")
@@ -569,7 +601,11 @@ export default function AppointmentsList() {
 
         await Promise.all(
           selectedIds.map((appointmentId) =>
-            sendAppointmentSmsNonBlocking(appointmentId, "cancellation"),
+            sendAppointmentSmsNonBlocking(appointmentId, "cancellation", {
+              sendPathName: "appointments-list.bulk-delete.cancellation",
+              userId,
+              appointmentIdFromMutation: appointmentId,
+            }),
           ),
         );
 

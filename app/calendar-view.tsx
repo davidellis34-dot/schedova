@@ -17,6 +17,10 @@ import {
 import { useSafeAreaInsets } from "react-native-safe-area-context";
 import SwipeDownSheet from "../components/SwipeDownSheet";
 import { AppScreen } from "../components/layout/AppScreen";
+import {
+  mergeAppointmentsById,
+  subscribeToAppointmentEvents,
+} from "../lib/appointmentEvents";
 import { confirmDestructiveAction } from "../lib/confirmDestructiveAction";
 import {
   getAppointmentServiceNames,
@@ -30,12 +34,18 @@ import {
   type AppointmentReplySummary,
 } from "../lib/appointmentConfirmationStatus";
 import { sendAppointmentSmsNonBlocking } from "../lib/appointmentSms";
+import { useAuthSession } from "../lib/authSession";
 import { getCalendarPreferences } from "../lib/calendarPreferences";
 import { canUseFeature, useFeatureAccess } from "../lib/featureAccess";
 import { isSchedovaInternalDebugMode } from "../lib/debugMode";
 import { cancelAppointmentReminder } from "../lib/localNotifications";
 import { ENABLE_PRO } from "../lib/proFeatureFlag";
 import { openSchedovaProScreen, PRO_UPSELL_COPY } from "../lib/proUpsell";
+import {
+  recordPrimaryScreenInteractive,
+  recordScreenBackgroundRefreshComplete,
+  useManualScreenInteractiveTiming,
+} from "../lib/screenPerformance";
 import { supabase } from "../lib/supabase";
 import { getUSHolidaysForYears, type USHoliday } from "../lib/usHolidays";
 import { useAppTheme } from "../lib/useAppTheme";
@@ -63,6 +73,14 @@ const DEFAULT_TIME_FORMAT: TimeFormat = "12h";
 const DEFAULT_BUSINESS_START_MINUTES = 8 * 60;
 const DEFAULT_BUSINESS_END_MINUTES = 18 * 60;
 const CALENDAR_LAYOUT_STORAGE_KEY = "schedova_calendar_layout";
+const FINDER_CACHE_TTL_MS = 60_000;
+
+type FinderCacheEntry = {
+  appointments: any[];
+  loadedAt: number;
+};
+
+const finderCacheByUserId = new Map<string, FinderCacheEntry>();
 
 type CalendarIntervalMinutes = 15 | 30 | 60;
 type CalendarLayout = "list" | "grid";
@@ -813,6 +831,12 @@ function isGridScheduleFilter(filter: SearchFilter) {
   return ["selected_day", "this_week", "next_week"].includes(filter);
 }
 
+function needsBroadFinderData(filter: SearchFilter, hasSearchQuery: boolean) {
+  if (hasSearchQuery) return true;
+
+  return !["selected_day", "today", "this_week"].includes(filter);
+}
+
 function appointmentMatchesFinderFilter(
   appointment: any,
   filter: SearchFilter,
@@ -900,7 +924,9 @@ function hourToTimeText(hour: number) {
 
 export default function CalendarView() {
   const router = useRouter();
+  useManualScreenInteractiveTiming("calendar-view");
   const { colors, themeName } = useAppTheme();
+  const { userId } = useAuthSession();
   useFeatureAccess();
   const insets = useSafeAreaInsets();
   const { width, height } = useWindowDimensions();
@@ -952,6 +978,8 @@ export default function CalendarView() {
   const dayLayouts = useRef<Record<string, number>>({});
   const hasAutoScrolled = useRef(false);
   const fetchRequestId = useRef(0);
+  const finderFetchRequestId = useRef(0);
+  const finderDataLoadedRef = useRef(false);
   const longPressHandledAppointmentId = useRef<string | null>(null);
 
   const todayKey = initialDate;
@@ -1048,6 +1076,10 @@ export default function CalendarView() {
     (calendarLayout === "grid"
       ? !isGridScheduleFilter(searchFilter)
       : searchFilter !== "selected_day");
+  const shouldLoadBroadFinder = needsBroadFinderData(
+    searchFilter,
+    hasSearchQuery,
+  );
 
   const searchResults = useMemo(() => {
     if (!finderActive) return [];
@@ -1057,7 +1089,11 @@ export default function CalendarView() {
 
     const now = Date.now();
 
-    return finderAppointments
+    const sourceAppointments = finderDataLoadedRef.current
+      ? finderAppointments
+      : appointments;
+
+    return sourceAppointments
       .filter((appointment) => isValidAppointmentForDisplay(appointment))
       .filter((appointment) => !isArchivedAppointment(appointment))
       .filter((appointment) =>
@@ -1082,6 +1118,7 @@ export default function CalendarView() {
   }, [
     finderActive,
     finderAppointments,
+    appointments,
     clients,
     searchFilter,
     services,
@@ -1384,12 +1421,59 @@ export default function CalendarView() {
     }, []),
   );
 
+  const loadVisibleAppointmentReplies = useCallback(
+    async (requestId: number, hasVisibleAppointments: boolean) => {
+      if (!userId || !hasVisibleAppointments) {
+        setLatestRepliesByAppointmentId({});
+        recordScreenBackgroundRefreshComplete("calendar-view");
+        return;
+      }
+
+      const recentReplyCutoff = new Date();
+      recentReplyCutoff.setDate(recentReplyCutoff.getDate() - 90);
+      const repliesResult = await supabase
+        .from("sms_message_logs")
+        .select("id, appointment_id, body, message_body, status, needs_attention, created_at")
+        .eq("user_id", userId)
+        .eq("direction", "inbound")
+        .gte("created_at", recentReplyCutoff.toISOString())
+        .or("needs_attention.eq.true,resolved_at.is.null")
+        .order("created_at", { ascending: false })
+        .limit(50);
+
+      if (requestId !== fetchRequestId.current) return;
+
+      if (repliesResult.error) {
+        console.log(
+          "Unable to load latest appointment replies",
+          repliesResult.error.message,
+        );
+        setLatestRepliesByAppointmentId({});
+        recordScreenBackgroundRefreshComplete("calendar-view");
+        return;
+      }
+
+      const nextRepliesByAppointmentId: Record<string, AppointmentReplySummary> =
+        {};
+
+      for (const reply of repliesResult.data || []) {
+        const appointmentId = String(reply?.appointment_id || "");
+        if (!appointmentId || nextRepliesByAppointmentId[appointmentId]) {
+          continue;
+        }
+
+        nextRepliesByAppointmentId[appointmentId] = reply;
+      }
+
+      setLatestRepliesByAppointmentId(nextRepliesByAppointmentId);
+      recordScreenBackgroundRefreshComplete("calendar-view");
+    },
+    [userId],
+  );
+
   const fetchCalendarData = useCallback(async () => {
     const requestId = fetchRequestId.current + 1;
     fetchRequestId.current = requestId;
-
-    const { data: userData } = await supabase.auth.getUser();
-    const userId = userData.user?.id;
 
     if (!userId) return;
 
@@ -1398,36 +1482,21 @@ export default function CalendarView() {
 
     if (!weekStart || !weekEnd) return;
 
-    if (customScheduleAvailable) {
-      const availabilityResult = await supabase
-        .from("availability_rules")
-        .select("*")
-        .eq("user_id", userId)
-        .order("day_of_week", { ascending: true });
-
-      if (requestId !== fetchRequestId.current) return;
-
-      if (availabilityResult.error) {
-        Alert.alert("Error", availabilityResult.error.message);
-        setAvailabilityRules([]);
-        return;
-      }
-
-      setAvailabilityRules(availabilityResult.data || []);
-    } else {
-      setAvailabilityRules([]);
-    }
-
-    const finderStart = addDaysToIso(todayIso(), -180);
-    const finderEnd = addDaysToIso(todayIso(), 365);
-
     const [
+      availabilityResult,
       appointmentsResult,
-      finderAppointmentsResult,
       servicesResult,
       clientsResult,
+      blocksResult,
     ] =
       await Promise.all([
+        customScheduleAvailable
+          ? supabase
+              .from("availability_rules")
+              .select("*")
+              .eq("user_id", userId)
+              .order("day_of_week", { ascending: true })
+          : Promise.resolve(null),
         supabase
           .from("appointments")
           .select("*")
@@ -1436,42 +1505,43 @@ export default function CalendarView() {
           .lte("appointment_date", weekEnd)
           .order("appointment_date", { ascending: true })
           .order("appointment_time", { ascending: true }),
-        supabase
-          .from("appointments")
-          .select("*")
-          .eq("user_id", userId)
-          .gte("appointment_date", finderStart)
-          .lte("appointment_date", finderEnd)
-          .order("appointment_date", { ascending: true })
-          .order("appointment_time", { ascending: true }),
         supabase.from("services").select("*").eq("user_id", userId),
         supabase
           .from("clients")
           .select("id, name, phone, email")
           .eq("user_id", userId),
+        customScheduleAvailable
+          ? supabase
+              .from("blocked_times")
+              .select("*")
+              .eq("user_id", userId)
+              .gte("block_date", weekStart)
+              .lte("block_date", weekEnd)
+              .order("block_date", { ascending: true })
+              .order("start_time", { ascending: true })
+          : Promise.resolve(null),
       ]);
 
     let nextBlocks: any[] = [];
+    let nextAvailabilityRules: any[] = [];
 
     if (customScheduleAvailable) {
-      const blocksResult = await supabase
-        .from("blocked_times")
-        .select("*")
-        .eq("user_id", userId)
-        .gte("block_date", weekStart)
-        .lte("block_date", weekEnd)
-        .order("block_date", { ascending: true })
-        .order("start_time", { ascending: true });
-
       if (requestId !== fetchRequestId.current) return;
 
-      if (blocksResult.error) {
+      if (availabilityResult?.error) {
+        Alert.alert("Error", availabilityResult.error.message);
+        setAvailabilityRules([]);
+        return;
+      }
+
+      if (blocksResult?.error) {
         Alert.alert("Error", blocksResult.error.message);
         setBlocks([]);
         return;
       }
 
-      nextBlocks = (blocksResult.data || []).filter((block: any) => {
+      nextAvailabilityRules = availabilityResult?.data || [];
+      nextBlocks = (blocksResult?.data || []).filter((block: any) => {
         if (!block?.block_date) return false;
 
         return true;
@@ -1494,20 +1564,7 @@ export default function CalendarView() {
         return true;
       }),
     );
-    let nextFinderAppointments: any[] = [];
-
-    if (finderAppointmentsResult.error) {
-      console.log(
-        "Unable to load calendar finder appointments",
-        finderAppointmentsResult.error.message,
-      );
-      setFinderAppointments([]);
-    } else {
-      nextFinderAppointments = sortAppointmentsChronologically(
-        (finderAppointmentsResult.data || []).filter(isValidAppointmentForDisplay),
-      );
-      setFinderAppointments(nextFinderAppointments);
-    }
+    setAvailabilityRules(nextAvailabilityRules);
 
     if (servicesResult.error) {
       console.log("Unable to load calendar services", servicesResult.error.message);
@@ -1523,61 +1580,119 @@ export default function CalendarView() {
       setClients(clientsResult.data || []);
     }
 
-    const appointmentIds = Array.from(
-      new Set(
-        [...nextAppointments, ...nextFinderAppointments]
-          .map((appointment) => appointment?.id)
-          .filter(Boolean)
-          .map(String),
-      ),
-    );
-
-    if (appointmentIds.length > 0) {
-      const repliesResult = await supabase
-        .from("sms_message_logs")
-        .select("id, appointment_id, body, message_body, status, needs_attention, created_at")
-        .eq("user_id", userId)
-        .eq("direction", "inbound")
-        .in("appointment_id", appointmentIds)
-        .order("created_at", { ascending: false });
-
-      if (requestId !== fetchRequestId.current) return;
-
-      if (repliesResult.error) {
-        console.log(
-          "Unable to load latest appointment replies",
-          repliesResult.error.message,
-        );
-        setLatestRepliesByAppointmentId({});
-      } else {
-        const nextRepliesByAppointmentId: Record<string, AppointmentReplySummary> =
-          {};
-
-        for (const reply of repliesResult.data || []) {
-          const appointmentId = String(reply?.appointment_id || "");
-          if (!appointmentId || nextRepliesByAppointmentId[appointmentId]) {
-            continue;
-          }
-
-          nextRepliesByAppointmentId[appointmentId] = reply;
-        }
-
-        setLatestRepliesByAppointmentId(nextRepliesByAppointmentId);
+    setAppointments(nextAppointments);
+    setBlocks(nextBlocks);
+    requestAnimationFrame(() => {
+      if (requestId === fetchRequestId.current) {
+        recordPrimaryScreenInteractive("calendar-view");
       }
-    } else {
-      setLatestRepliesByAppointmentId({});
+    });
+    void loadVisibleAppointmentReplies(requestId, nextAppointments.length > 0);
+  }, [
+    customScheduleAvailable,
+    loadVisibleAppointmentReplies,
+    userId,
+    weekDates,
+  ]);
+
+  const loadFinderAppointments = useCallback(async () => {
+    if (!userId) return;
+
+    const cached = finderCacheByUserId.get(userId);
+    if (cached && Date.now() - cached.loadedAt < FINDER_CACHE_TTL_MS) {
+      finderDataLoadedRef.current = true;
+      setFinderAppointments(cached.appointments);
+      return;
     }
 
-    setAppointments(nextAppointments);
+    const requestId = finderFetchRequestId.current + 1;
+    finderFetchRequestId.current = requestId;
+    const finderStart = addDaysToIso(todayIso(), -180);
+    const finderEnd = addDaysToIso(todayIso(), 365);
+    const { data, error } = await supabase
+      .from("appointments")
+      .select("*")
+      .eq("user_id", userId)
+      .gte("appointment_date", finderStart)
+      .lte("appointment_date", finderEnd)
+      .order("appointment_date", { ascending: true })
+      .order("appointment_time", { ascending: true });
 
-    setBlocks(nextBlocks);
-  }, [customScheduleAvailable, weekDates]);
+    if (requestId !== finderFetchRequestId.current) return;
+
+    if (error) {
+      console.log("Unable to load calendar finder appointments", error.message);
+      return;
+    }
+
+    const nextAppointments = sortAppointmentsChronologically(
+      (data || []).filter(isValidAppointmentForDisplay),
+    );
+    finderCacheByUserId.set(userId, {
+      appointments: nextAppointments,
+      loadedAt: Date.now(),
+    });
+    finderDataLoadedRef.current = true;
+    setFinderAppointments(nextAppointments);
+  }, [userId]);
 
   useFocusEffect(
     useCallback(() => {
       void fetchCalendarData();
     }, [fetchCalendarData]),
   );
+
+  useEffect(() => {
+    finderDataLoadedRef.current = false;
+    setFinderAppointments([]);
+  }, [userId]);
+
+  useEffect(() => {
+    if (!shouldLoadBroadFinder) return;
+
+    void loadFinderAppointments();
+  }, [loadFinderAppointments, shouldLoadBroadFinder]);
+
+  useEffect(() => {
+    return subscribeToAppointmentEvents((event) => {
+      if (userId) finderCacheByUserId.delete(userId);
+
+      if (event.type === "upsert") {
+        setAppointments((current) =>
+          sortAppointmentsChronologically(
+            mergeAppointmentsById(current, event.appointments as any[]),
+          ),
+        );
+        setFinderAppointments((current) =>
+          sortAppointmentsChronologically(
+            mergeAppointmentsById(current, event.appointments as any[]),
+          ),
+        );
+        return;
+      }
+
+      const deletedIds = new Set(event.appointmentIds);
+      setAppointments((current) =>
+        current.filter(
+          (appointment) => !deletedIds.has(String(appointment?.id || "")),
+        ),
+      );
+      setFinderAppointments((current) =>
+        current.filter(
+          (appointment) => !deletedIds.has(String(appointment?.id || "")),
+        ),
+      );
+      setLatestRepliesByAppointmentId((current) => {
+        const nextReplies = { ...current };
+
+        for (const appointmentId of event.appointmentIds) {
+          delete nextReplies[appointmentId];
+        }
+
+        return nextReplies;
+      });
+    });
+  }, [userId]);
 
   function generateTimeSlots(start: string, end: string) {
     const slots: string[] = [];
@@ -1808,7 +1923,11 @@ export default function CalendarView() {
 
       if (status === "canceled") {
         if (canUseFeature("smsAutomation")) {
-          void sendAppointmentSmsNonBlocking(appointment.id, "cancellation");
+          void sendAppointmentSmsNonBlocking(appointment.id, "cancellation", {
+            sendPathName: "calendar-view.status.cancellation",
+            userId: user.id,
+            appointmentIdFromMutation: appointment.id,
+          });
         }
 
         await cancelAppointmentReminder(appointment.id);
@@ -2079,7 +2198,11 @@ export default function CalendarView() {
         }
 
         if (canUseFeature("smsAutomation")) {
-          void sendAppointmentSmsNonBlocking(appointment.id, "cancellation");
+          void sendAppointmentSmsNonBlocking(appointment.id, "cancellation", {
+            sendPathName: "calendar-view.delete.cancellation",
+            userId: user.id,
+            appointmentIdFromMutation: appointment.id,
+          });
         }
 
         const { error } = await supabase

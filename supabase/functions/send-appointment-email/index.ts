@@ -186,6 +186,7 @@ Deno.serve(async (req) => {
   const { businessName, businessContact } = await getBusinessName(
     serviceClient,
     user.id,
+    user,
   );
   const serviceName = await getServiceNames(
     serviceClient,

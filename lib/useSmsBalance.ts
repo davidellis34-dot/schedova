@@ -19,6 +19,7 @@ const EMPTY_SMS_BALANCE: MessageCreditBalance = {
   lastUsedAt: null,
 };
 const SMS_BALANCE_CHANNEL_PREFIX = "sms-balance-";
+const SMS_BALANCE_CACHE_MS = 10_000;
 
 function hasUnlimitedSmsAccess(_subscription?: UserSubscription | null) {
   // Schedova Pro and lifetime/admin access do not bypass SMS credit usage.
@@ -28,9 +29,11 @@ function hasUnlimitedSmsAccess(_subscription?: UserSubscription | null) {
 export function useSmsBalance({
   userId,
   subscription,
+  autoRefresh = true,
 }: {
   userId?: string | null;
   subscription?: UserSubscription | null;
+  autoRefresh?: boolean;
 } = {}) {
   const [balance, setBalance] = useState<MessageCreditBalance>(EMPTY_SMS_BALANCE);
   const [loading, setLoading] = useState(Boolean(userId));
@@ -40,11 +43,14 @@ export function useSmsBalance({
   const channelUserIdRef = useRef<string | null>(null);
   const subscriptionSerialRef = useRef(0);
   const channelOperationRef = useRef<Promise<void>>(Promise.resolve());
-  const refreshRef = useRef<() => Promise<MessageCreditBalance>>(
+  const refreshPromiseRef = useRef<Promise<MessageCreditBalance> | null>(null);
+  const lastBalanceRef = useRef<MessageCreditBalance>(EMPTY_SMS_BALANCE);
+  const lastLoadedAtRef = useRef(0);
+  const refreshRef = useRef<(force?: boolean) => Promise<MessageCreditBalance>>(
     async () => EMPTY_SMS_BALANCE,
   );
 
-  const refresh = useCallback(async () => {
+  const refresh = useCallback(async (force = false) => {
     if (!userId) {
       setBalance(EMPTY_SMS_BALANCE);
       setLoading(false);
@@ -52,22 +58,48 @@ export function useSmsBalance({
       return EMPTY_SMS_BALANCE;
     }
 
-    setLoading(true);
+    if (refreshPromiseRef.current) {
+      return refreshPromiseRef.current;
+    }
+
+    if (
+      !force &&
+      lastLoadedAtRef.current > 0 &&
+      Date.now() - lastLoadedAtRef.current < SMS_BALANCE_CACHE_MS
+    ) {
+      return lastBalanceRef.current;
+    }
+
+    const request = (async () => {
+      setLoading(true);
+
+      try {
+        const nextBalance = await loadMessageCreditBalance(userId);
+        lastBalanceRef.current = nextBalance;
+        lastLoadedAtRef.current = Date.now();
+        setBalance(nextBalance);
+        setError(null);
+        return nextBalance;
+      } catch (refreshError) {
+        setError(
+          refreshError instanceof Error
+            ? refreshError.message
+            : "SMS balance could not be loaded.",
+        );
+        return EMPTY_SMS_BALANCE;
+      } finally {
+        setLoading(false);
+      }
+    })();
+
+    refreshPromiseRef.current = request;
 
     try {
-      const nextBalance = await loadMessageCreditBalance(userId);
-      setBalance(nextBalance);
-      setError(null);
-      return nextBalance;
-    } catch (refreshError) {
-      setError(
-        refreshError instanceof Error
-          ? refreshError.message
-          : "SMS balance could not be loaded.",
-      );
-      return EMPTY_SMS_BALANCE;
+      return await request;
     } finally {
-      setLoading(false);
+      if (refreshPromiseRef.current === request) {
+        refreshPromiseRef.current = null;
+      }
     }
   }, [userId]);
 
@@ -118,24 +150,29 @@ export function useSmsBalance({
 
   useFocusEffect(
     useCallback(() => {
+      if (!autoRefresh) return;
       void refresh();
-    }, [refresh]),
+    }, [autoRefresh, refresh]),
   );
 
   useEffect(() => {
     return subscribeToSmsBalanceEvents(() => {
-      void refresh();
+      void refresh(true);
     });
   }, [refresh]);
 
   useEffect(() => {
     if (!userId) {
+      lastBalanceRef.current = EMPTY_SMS_BALANCE;
+      lastLoadedAtRef.current = 0;
       setBalance(EMPTY_SMS_BALANCE);
       setLoading(false);
       setError(null);
       return;
     }
 
+    lastBalanceRef.current = EMPTY_SMS_BALANCE;
+    lastLoadedAtRef.current = 0;
     setBalance(EMPTY_SMS_BALANCE);
     setLoading(true);
     setError(null);
@@ -252,7 +289,7 @@ export function useSmsBalance({
             return;
           }
 
-          void refreshRef.current();
+          void refreshRef.current(true);
         },
       );
 
@@ -291,7 +328,9 @@ export function useSmsBalance({
         return;
       }
 
-      void refreshRef.current();
+      if (autoRefresh) {
+        void refreshRef.current();
+      }
     });
 
     return () => {
@@ -320,6 +359,7 @@ export function useSmsBalance({
     getChannelTopic,
     matchesSmsBalanceChannelForUser,
     safeRemoveChannel,
+    autoRefresh,
     userId,
   ]);
 

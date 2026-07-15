@@ -2,6 +2,11 @@ import AsyncStorage from "@react-native-async-storage/async-storage";
 import { useEffect, useState } from "react";
 import { Pressable, Text, View } from "react-native";
 import { AppScreen } from "../../components/layout/AppScreen";
+import {
+  getSavePerformanceNow,
+  logSaveTiming,
+  measureSaveStep,
+} from "../../lib/savePerformance";
 import { useAppTheme } from "../../lib/useAppTheme";
 
 type AppTheme = "white" | "dark" | "black" | "brand";
@@ -33,9 +38,34 @@ export default function DisplaySettingsScreen() {
   }
 
   async function saveTheme() {
-    await AsyncStorage.setItem("schedova_theme", selectedTheme);
-    setTheme(selectedTheme);
-    await AsyncStorage.setItem("font_scale", fontScale);
+    const flowName = "display settings save";
+    const saveStartedAt = getSavePerformanceNow();
+    const validationStartedAt = getSavePerformanceNow();
+
+    logSaveTiming(
+      flowName,
+      "validation",
+      getSavePerformanceNow() - validationStartedAt,
+    );
+    logSaveTiming(flowName, "time before supabase request starts", 0, {
+      note: "local AsyncStorage save",
+    });
+
+    await measureSaveStep(flowName, "local persistence write", async () => {
+      await AsyncStorage.setItem("schedova_theme", selectedTheme);
+      setTheme(selectedTheme);
+      await AsyncStorage.setItem("font_scale", fontScale);
+    });
+
+    requestAnimationFrame(() => {
+      requestAnimationFrame(() => {
+        logSaveTiming(
+          flowName,
+          "total time until continue",
+          getSavePerformanceNow() - saveStartedAt,
+        );
+      });
+    });
   }
 
   const themeOptions: {

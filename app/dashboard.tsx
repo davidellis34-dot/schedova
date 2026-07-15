@@ -1,7 +1,7 @@
 import { Ionicons } from "@expo/vector-icons";
 import AsyncStorage from "@react-native-async-storage/async-storage";
 import { useFocusEffect, useRouter } from "expo-router";
-import { useCallback, useEffect, useRef, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import {
   Alert,
   Modal,
@@ -21,6 +21,10 @@ import {
 } from "../components/ui";
 import SwipeDownSheet from "../components/SwipeDownSheet";
 import {
+  mergeAppointmentsById,
+  subscribeToAppointmentEvents,
+} from "../lib/appointmentEvents";
+import {
   getAppointmentServices as getSavedAppointmentServices,
   getAppointmentServiceTotal,
 } from "../lib/appointmentServices";
@@ -30,27 +34,37 @@ import {
   getAppointmentConfirmationStatus,
   type AppointmentReplySummary,
 } from "../lib/appointmentConfirmationStatus";
-import {
-  IOS_AUTH_NATIVE_ISOLATION,
-  scheduleDelayedAuthNativeSync,
-} from "../lib/authNativeIsolation";
 import { useAuthSession } from "../lib/authSession";
 import { sendAppointmentSmsNonBlocking } from "../lib/appointmentSms";
 import { formatClockTime, getCalendarPreferences } from "../lib/calendarPreferences";
 import { subscribeToClientMessageEvents } from "../lib/clientMessageEvents";
 import { confirmDestructiveAction } from "../lib/confirmDestructiveAction";
 import { isSchedovaInternalDebugMode } from "../lib/debugMode";
-import { canUseFeature, useFeatureAccess } from "../lib/featureAccess";
+import {
+  getDashboardPrimaryCache,
+  isDashboardPrimaryCacheFresh,
+  setDashboardPrimaryCache,
+  updateDashboardCachedAppointments,
+} from "../lib/dashboardCache";
+import { canUseFeature } from "../lib/featureAccess";
 import { cancelAppointmentReminder } from "../lib/localNotifications";
 import {
-  registerForPushNotifications,
-  syncUserTimezone,
-} from "../lib/pushNotifications";
+  loadMessageCreditBalance,
+  type MessageCreditBalance,
+} from "../lib/messageCredits";
 import { ENABLE_PRO } from "../lib/proFeatureFlag";
 import { openSchedovaProScreen } from "../lib/proUpsell";
-import { useSubscription } from "../lib/revenuecat/SubscriptionProvider";
+import {
+  subscribeToSaveNotices,
+  type SaveNotice,
+} from "../lib/saveNoticeEvents";
+import {
+  recordPrimaryScreenInteractive,
+  recordScreenBackgroundRefreshComplete,
+  useManualScreenInteractiveTiming,
+} from "../lib/screenPerformance";
+import { subscribeToSmsBalanceEvents } from "../lib/smsBalanceEvents";
 import { supabase } from "../lib/supabase";
-import { useSmsBalance } from "../lib/useSmsBalance";
 import { useAppTheme } from "../lib/useAppTheme";
 
 function normalizeDashboardAppointmentRows(rows: unknown) {
@@ -72,29 +86,72 @@ function logDashboardAppointmentCardDebug(
   console.log(label, details);
 }
 
+const EMPTY_SMS_BALANCE: MessageCreditBalance = {
+  balance: 0,
+  totalPurchased: 0,
+  totalUsed: 0,
+  updatedAt: null,
+  lastPurchaseAt: null,
+  lastUsedAt: null,
+};
+
+type DashboardSecondaryData = {
+  hasBusiness: boolean | null;
+  clientRepliesCount: number;
+  latestRepliesByAppointmentId: Record<string, AppointmentReplySummary>;
+  smsBalance: MessageCreditBalance;
+  smsBalanceError: string | null;
+};
+
+type DashboardDisplayPreferences = {
+  fontScale: string;
+  use24Hour: boolean;
+};
+
+const EMPTY_DASHBOARD_SECONDARY_DATA: DashboardSecondaryData = {
+  hasBusiness: null,
+  clientRepliesCount: 0,
+  latestRepliesByAppointmentId: {},
+  smsBalance: EMPTY_SMS_BALANCE,
+  smsBalanceError: null,
+};
+
 export default function Dashboard() {
   const router = useRouter();
+  useManualScreenInteractiveTiming("dashboard");
   const { colors, themeName } = useAppTheme();
   const { width } = useWindowDimensions();
   const { authStatus, isHydrated, user, userId } = useAuthSession();
-  const featureAccess = useFeatureAccess();
-  const { syncRevenueCatAfterAuthSettle } = useSubscription();
   const [clients, setClients] = useState<any[]>([]);
   const [statusModalOpen, setStatusModalOpen] = useState(false);
   const [selectedStatusAppointment, setSelectedStatusAppointment] = useState<
     any | null
   >(null);
   const [actionAppointment, setActionAppointment] = useState<any | null>(null);
-  const [fontScale, setFontScale] = useState("normal");
-  const [use24Hour, setUse24Hour] = useState(false);
-  const [hasBusiness, setHasBusiness] = useState<boolean | null>(null);
+  const [displayPreferences, setDisplayPreferences] =
+    useState<DashboardDisplayPreferences>({
+      fontScale: "normal",
+      use24Hour: false,
+    });
   const [appointments, setAppointments] = useState<any[]>([]);
   const [services, setServices] = useState<any[]>([]);
-  const [userEmail, setUserEmail] = useState("");
-  const [clientRepliesCount, setClientRepliesCount] = useState(0);
-  const [latestRepliesByAppointmentId, setLatestRepliesByAppointmentId] =
-    useState<Record<string, AppointmentReplySummary>>({});
+  const [saveNotice, setSaveNotice] = useState<SaveNotice | null>(null);
+  const [secondaryData, setSecondaryData] =
+    useState<DashboardSecondaryData>(EMPTY_DASHBOARD_SECONDARY_DATA);
   const longPressHandledAppointmentId = useRef<string | null>(null);
+  const dashboardLoadIdRef = useRef(0);
+  const userEmail = user?.email || "";
+  const {
+    hasBusiness,
+    clientRepliesCount,
+    latestRepliesByAppointmentId,
+    smsBalance,
+    smsBalanceError,
+  } = secondaryData;
+  const { fontScale, use24Hour } = displayPreferences;
+  const hasUnlimitedSms = false;
+  const smsBalanceIsZero = smsBalance.balance <= 0;
+  const smsBalanceLoading = false;
 
   function canUseProFeature(feature: Parameters<typeof canUseFeature>[0]) {
     return canUseFeature(feature);
@@ -133,44 +190,6 @@ export default function Dashboard() {
 
   const clientRepliesBadgeText =
     clientRepliesCount > 99 ? "99+" : String(clientRepliesCount);
-  const {
-    balance: smsBalance,
-    error: smsBalanceError,
-    hasUnlimited: hasUnlimitedSms,
-    isZero: smsBalanceIsZero,
-    loading: smsBalanceLoading,
-  } = useSmsBalance({
-    userId,
-    subscription: featureAccess.subscription,
-  });
-
-  useEffect(() => {
-    if (
-      !IOS_AUTH_NATIVE_ISOLATION ||
-      !isHydrated ||
-      authStatus !== "authenticated" ||
-      !userId
-    ) {
-      return;
-    }
-
-    void scheduleDelayedAuthNativeSync({
-      userId,
-      syncRevenueCat: async () => {
-        await syncRevenueCatAfterAuthSettle();
-      },
-      syncPush: async () => {
-        await syncUserTimezone(userId);
-        await registerForPushNotifications(userId);
-      },
-    });
-  }, [
-    authStatus,
-    isHydrated,
-    syncRevenueCatAfterAuthSettle,
-    userId,
-  ]);
-
   useEffect(() => {
     if (authStatus === "authenticated" && userId) {
       return;
@@ -179,10 +198,7 @@ export default function Dashboard() {
     setClients([]);
     setAppointments([]);
     setServices([]);
-    setUserEmail("");
-    setHasBusiness(null);
-    setClientRepliesCount(0);
-    setLatestRepliesByAppointmentId({});
+    setSecondaryData(EMPTY_DASHBOARD_SECONDARY_DATA);
     setStatusModalOpen(false);
     setSelectedStatusAppointment(null);
     setActionAppointment(null);
@@ -213,36 +229,16 @@ export default function Dashboard() {
     );
   }
 
-  const fetchClients = useCallback(async () => {
-    if (!isHydrated) return;
+  const loadDisplayPreferences = useCallback(async () => {
+    const [savedFont, preferences] = await Promise.all([
+      AsyncStorage.getItem("font_scale"),
+      getCalendarPreferences(),
+    ]);
 
-    if (!userId) {
-      setClients([]);
-      return;
-    }
-
-    const { data, error } = await supabase
-      .from("clients")
-      .select("*")
-      .eq("user_id", userId);
-
-    if (error) {
-      console.log("FETCH CLIENTS ERROR:", error.message);
-      setClients([]);
-      return;
-    }
-
-    setClients((data || []).filter(Boolean));
-  }, [isHydrated, userId]);
-
-  const loadFontScale = useCallback(async () => {
-    const savedFont = await AsyncStorage.getItem("font_scale");
-    setFontScale(savedFont || "normal");
-  }, []);
-
-  const loadCalendarDisplayPreferences = useCallback(async () => {
-    const preferences = await getCalendarPreferences();
-    setUse24Hour(preferences.timeFormat === "24h");
+    return {
+      fontScale: savedFont || "normal",
+      use24Hour: preferences.timeFormat === "24h",
+    };
   }, []);
 
   function getFontSize(base: number) {
@@ -251,15 +247,11 @@ export default function Dashboard() {
     return base;
   }
 
-  const checkBusiness = useCallback(async () => {
-    if (!isHydrated) return;
-
-    setUserEmail(user?.email || "");
+  const loadBusinessStatus = useCallback(async () => {
+    if (!isHydrated) return null;
 
     if (!userId) {
-      setUserEmail("");
-      setHasBusiness(null);
-      return;
+      return null;
     }
 
     const { data, error } = await supabase
@@ -270,22 +262,21 @@ export default function Dashboard() {
 
     if (error) {
       console.log("CHECK BUSINESS ERROR:", error.message);
-      setHasBusiness(false);
-      return;
+      return false;
     }
 
-    setHasBusiness((data || []).length > 0);
-  }, [isHydrated, user?.email, userId]);
+    return (data || []).length > 0;
+  }, [isHydrated, userId]);
 
   const fetchAppointments = useCallback(async () => {
     if (!isHydrated) return;
 
-    setUserEmail(user?.email || "");
-
     if (!userId) {
       setAppointments([]);
-      setUserEmail("");
-      setLatestRepliesByAppointmentId({});
+      setSecondaryData((current) => ({
+        ...current,
+        latestRepliesByAppointmentId: {},
+      }));
       return;
     }
 
@@ -299,7 +290,10 @@ export default function Dashboard() {
     if (error) {
       console.log("FETCH APPOINTMENTS ERROR:", error.message);
       setAppointments([]);
-      setLatestRepliesByAppointmentId({});
+      setSecondaryData((current) => ({
+        ...current,
+        latestRepliesByAppointmentId: {},
+      }));
       return;
     }
 
@@ -307,6 +301,7 @@ export default function Dashboard() {
       normalizeDashboardAppointmentRows(data),
     );
     setAppointments(nextAppointments);
+    updateDashboardCachedAppointments(userId, nextAppointments);
 
     const appointmentIds = nextAppointments
       .map((appointment) => appointment?.id)
@@ -314,7 +309,10 @@ export default function Dashboard() {
       .map(String);
 
     if (appointmentIds.length === 0) {
-      setLatestRepliesByAppointmentId({});
+      setSecondaryData((current) => ({
+        ...current,
+        latestRepliesByAppointmentId: {},
+      }));
       return;
     }
 
@@ -331,7 +329,10 @@ export default function Dashboard() {
         "FETCH APPOINTMENT REPLIES ERROR:",
         repliesResult.error.message,
       );
-      setLatestRepliesByAppointmentId({});
+      setSecondaryData((current) => ({
+        ...current,
+        latestRepliesByAppointmentId: {},
+      }));
       return;
     }
 
@@ -347,46 +348,129 @@ export default function Dashboard() {
       nextRepliesByAppointmentId[appointmentId] = reply;
     }
 
-    setLatestRepliesByAppointmentId(nextRepliesByAppointmentId);
-  }, [isHydrated, user?.email, userId]);
-
-  const fetchServices = useCallback(async () => {
-    if (!isHydrated) return;
-
-    if (!userId) {
-      setServices([]);
-      return;
-    }
-
-    const { data, error } = await supabase
-      .from("services")
-      .select("*")
-      .eq("user_id", userId);
-
-    if (error) {
-      console.log("FETCH SERVICES ERROR:", error.message);
-      setServices([]);
-      return;
-    }
-
-    setServices((data || []).filter(Boolean));
+    setSecondaryData((current) => ({
+      ...current,
+      latestRepliesByAppointmentId: nextRepliesByAppointmentId,
+    }));
   }, [isHydrated, userId]);
 
-  const fetchClientRepliesCount = useCallback(async () => {
-    if (!isHydrated) return;
+  const applyDashboardPrimaryData = useCallback(
+    (data: { appointments: any[]; clients: any[]; services: any[] }) => {
+      // Keep related dashboard state in the same commit so a single load does
+      // not cause one render for each independent table response.
+      setAppointments(data.appointments);
+      setClients(data.clients);
+      setServices(data.services);
+    },
+    [],
+  );
+
+  const loadDashboardPrimaryData = useCallback(async () => {
+    if (!isHydrated || !userId) return null;
+
+    const requestId = dashboardLoadIdRef.current + 1;
+    dashboardLoadIdRef.current = requestId;
+
+    const [appointmentsResult, clientsResult, servicesResult] =
+      await Promise.all([
+        supabase
+          .from("appointments")
+          .select("*")
+          .eq("user_id", userId)
+          .order("appointment_date", { ascending: true })
+          .order("appointment_time", { ascending: true }),
+        supabase.from("clients").select("*").eq("user_id", userId),
+        supabase.from("services").select("*").eq("user_id", userId),
+      ]);
+
+    if (requestId !== dashboardLoadIdRef.current) return null;
+
+    const nextData = {
+      appointments: appointmentsResult.error
+        ? []
+        : sortAppointmentsChronologically(
+            normalizeDashboardAppointmentRows(appointmentsResult.data),
+          ),
+      clients: clientsResult.error ? [] : (clientsResult.data || []).filter(Boolean),
+      services: servicesResult.error
+        ? []
+        : (servicesResult.data || []).filter(Boolean),
+    };
+
+    if (appointmentsResult.error) {
+      console.log("FETCH APPOINTMENTS ERROR:", appointmentsResult.error.message);
+    }
+    if (clientsResult.error) {
+      console.log("FETCH CLIENTS ERROR:", clientsResult.error.message);
+    }
+    if (servicesResult.error) {
+      console.log("FETCH SERVICES ERROR:", servicesResult.error.message);
+    }
+
+    applyDashboardPrimaryData(nextData);
+    setDashboardPrimaryCache(userId, nextData);
+    return nextData;
+  }, [applyDashboardPrimaryData, isHydrated, userId]);
+
+  const loadLatestAppointmentReplies = useCallback(
+    async (appointmentRows: any[]) => {
+      if (!userId) return {};
+
+      const appointmentIds = appointmentRows
+        .map((appointment) => appointment?.id)
+        .filter(Boolean)
+        .map(String);
+
+      if (appointmentIds.length === 0) {
+        return {};
+      }
+
+      const repliesResult = await supabase
+        .from("sms_message_logs")
+        .select("id, appointment_id, body, message_body, status, needs_attention, created_at")
+        .eq("user_id", userId)
+        .eq("direction", "inbound")
+        .in("appointment_id", appointmentIds)
+        .order("created_at", { ascending: false });
+
+      if (repliesResult.error) {
+        console.log(
+          "FETCH APPOINTMENT REPLIES ERROR:",
+          repliesResult.error.message,
+        );
+        return {};
+      }
+
+      const nextRepliesByAppointmentId: Record<string, AppointmentReplySummary> =
+        {};
+
+      for (const reply of repliesResult.data || []) {
+        const appointmentId = String(reply?.appointment_id || "");
+        if (!appointmentId || nextRepliesByAppointmentId[appointmentId]) {
+          continue;
+        }
+
+        nextRepliesByAppointmentId[appointmentId] = reply;
+      }
+
+      return nextRepliesByAppointmentId;
+    },
+    [userId],
+  );
+
+  const loadClientRepliesCount = useCallback(async () => {
+    if (!isHydrated) return 0;
 
     if (!canUseProFeature("smsAutomation")) {
-      setClientRepliesCount(0);
       console.log("Dashboard reply badge count", 0);
-      return;
+      return 0;
     }
 
     console.log("Dashboard current user id", userId || null);
 
     if (!userId) {
-      setClientRepliesCount(0);
       console.log("Dashboard reply badge count", 0);
-      return;
+      return 0;
     }
 
     const preferredResult = await supabase
@@ -399,9 +483,8 @@ export default function Dashboard() {
 
     if (!preferredResult.error) {
       const count = preferredResult.count || 0;
-      setClientRepliesCount(count);
       console.log("Dashboard reply badge count", count);
-      return;
+      return count;
     }
 
     const fallbackResult = await supabase
@@ -416,15 +499,35 @@ export default function Dashboard() {
         "FETCH CLIENT REPLIES COUNT ERROR:",
         fallbackResult.error.message,
       );
-      setClientRepliesCount(0);
       console.log("Dashboard reply badge count", 0);
-      return;
+      return 0;
     }
 
     const count = fallbackResult.count || 0;
-    setClientRepliesCount(count);
     console.log("Dashboard reply badge count", count);
+    return count;
   }, [isHydrated, userId]);
+
+  const refreshClientRepliesCount = useCallback(async () => {
+    const count = await loadClientRepliesCount();
+    setSecondaryData((current) => ({ ...current, clientRepliesCount: count }));
+  }, [loadClientRepliesCount]);
+
+  const loadSmsBalance = useCallback(async () => {
+    if (!userId) {
+      return { balance: EMPTY_SMS_BALANCE, error: null };
+    }
+
+    try {
+      return { balance: await loadMessageCreditBalance(userId), error: null };
+    } catch (error) {
+      console.log("FETCH SMS BALANCE ERROR:", error);
+      return {
+        balance: EMPTY_SMS_BALANCE,
+        error: error instanceof Error ? error.message : "SMS balance could not be loaded.",
+      };
+    }
+  }, [userId]);
 
   function openClientReplies() {
     console.log("Dashboard navigation to messages screen");
@@ -433,29 +536,158 @@ export default function Dashboard() {
 
   useFocusEffect(
     useCallback(() => {
-      void loadFontScale();
-      void loadCalendarDisplayPreferences();
-      void checkBusiness();
-      void fetchAppointments();
-      void fetchServices();
-      void fetchClients();
-      void fetchClientRepliesCount();
+      let active = true;
+      let backgroundTimer: ReturnType<typeof setTimeout> | null = null;
+
+      async function loadDashboard() {
+        if (!isHydrated || !userId) return;
+
+        const cached = getDashboardPrimaryCache(userId);
+        let primaryAppointments = cached?.appointments || [];
+
+        if (cached) {
+          applyDashboardPrimaryData(cached);
+          requestAnimationFrame(() => {
+            if (active) recordPrimaryScreenInteractive("dashboard");
+          });
+        }
+
+        if (!isDashboardPrimaryCacheFresh(cached)) {
+          const loadedPrimaryData = await loadDashboardPrimaryData();
+          primaryAppointments =
+            loadedPrimaryData?.appointments || primaryAppointments;
+          requestAnimationFrame(() => {
+            if (active) recordPrimaryScreenInteractive("dashboard");
+          });
+        }
+
+        if (!active) return;
+
+        // These values enhance the dashboard but must not delay the calendar,
+        // totals, or quick actions becoming usable.
+        backgroundTimer = setTimeout(() => {
+          if (!active) return;
+
+          void Promise.all([
+            loadBusinessStatus(),
+            loadClientRepliesCount(),
+            loadLatestAppointmentReplies(primaryAppointments),
+            loadSmsBalance(),
+            loadDisplayPreferences(),
+          ]).then(
+            ([
+              nextHasBusiness,
+              nextClientRepliesCount,
+              nextLatestRepliesByAppointmentId,
+              nextSmsBalance,
+              nextDisplayPreferences,
+            ]) => {
+              if (!active) return;
+
+              // All secondary dashboard values settle together so background
+              // enrichment needs one render rather than one per request.
+              setDisplayPreferences(nextDisplayPreferences);
+              setSecondaryData({
+                hasBusiness: nextHasBusiness,
+                clientRepliesCount: nextClientRepliesCount,
+                latestRepliesByAppointmentId: nextLatestRepliesByAppointmentId,
+                smsBalance: nextSmsBalance.balance,
+                smsBalanceError: nextSmsBalance.error,
+              });
+              recordScreenBackgroundRefreshComplete("dashboard");
+            },
+          );
+        }, 650);
+      }
+
+      void loadDashboard();
+
+      return () => {
+        active = false;
+        if (backgroundTimer) clearTimeout(backgroundTimer);
+      };
     }, [
-      checkBusiness,
-      fetchAppointments,
-      fetchClientRepliesCount,
-      fetchClients,
-      fetchServices,
-      loadCalendarDisplayPreferences,
-      loadFontScale,
+      applyDashboardPrimaryData,
+      loadBusinessStatus,
+      loadClientRepliesCount,
+      loadDashboardPrimaryData,
+      loadDisplayPreferences,
+      loadLatestAppointmentReplies,
+      loadSmsBalance,
+      userId,
+      isHydrated,
     ]),
   );
 
   useEffect(() => {
-    return subscribeToClientMessageEvents(() => {
-      void fetchClientRepliesCount();
+    let timeoutId: ReturnType<typeof setTimeout> | null = null;
+
+    const unsubscribe = subscribeToSaveNotices((notice) => {
+      setSaveNotice(notice);
+
+      if (timeoutId) {
+        clearTimeout(timeoutId);
+      }
+
+      timeoutId = setTimeout(() => {
+        setSaveNotice((current) =>
+          current?.id === notice.id ? null : current,
+        );
+      }, 2500);
     });
-  }, [fetchClientRepliesCount]);
+
+    return () => {
+      if (timeoutId) {
+        clearTimeout(timeoutId);
+      }
+      unsubscribe();
+    };
+  }, []);
+
+  useEffect(() => {
+    return subscribeToAppointmentEvents((event) => {
+      if (event.type === "upsert") {
+        setAppointments((current) => {
+          const nextAppointments = sortAppointmentsChronologically(
+            mergeAppointmentsById(
+              normalizeDashboardAppointmentRows(current),
+              event.appointments,
+            ),
+          );
+          updateDashboardCachedAppointments(userId, nextAppointments);
+          return nextAppointments;
+        });
+        return;
+      }
+
+      const deletedIds = new Set(event.appointmentIds);
+      setAppointments((current) => {
+        const nextAppointments = current.filter(
+          (appointment) => !deletedIds.has(String(appointment?.id || "")),
+        );
+        updateDashboardCachedAppointments(userId, nextAppointments);
+        return nextAppointments;
+      });
+      setSecondaryData((current) => {
+        const nextReplies = { ...current.latestRepliesByAppointmentId };
+
+        for (const appointmentId of event.appointmentIds) {
+          delete nextReplies[appointmentId];
+        }
+
+        return {
+          ...current,
+          latestRepliesByAppointmentId: nextReplies,
+        };
+      });
+    });
+  }, [userId]);
+
+  useEffect(() => {
+    return subscribeToClientMessageEvents(() => {
+      void refreshClientRepliesCount();
+    });
+  }, [refreshClientRepliesCount]);
 
   useEffect(() => {
     if (!isHydrated || !userId) return;
@@ -477,7 +709,7 @@ export default function Dashboard() {
 
           if (row.direction === "inbound") {
             console.log("Dashboard client reply realtime event", payload.eventType);
-            void fetchClientRepliesCount();
+            void refreshClientRepliesCount();
           }
         },
       )
@@ -486,7 +718,19 @@ export default function Dashboard() {
     return () => {
       void supabase.removeChannel(channel);
     };
-  }, [fetchClientRepliesCount, isHydrated, userId]);
+  }, [isHydrated, refreshClientRepliesCount, userId]);
+
+  useEffect(() => {
+    return subscribeToSmsBalanceEvents(() => {
+      void loadSmsBalance().then((nextSmsBalance) => {
+        setSecondaryData((current) => ({
+          ...current,
+          smsBalance: nextSmsBalance.balance,
+          smsBalanceError: nextSmsBalance.error,
+        }));
+      });
+    });
+  }, [loadSmsBalance]);
 
   async function deleteAppointment(id: string) {
     await confirmDestructiveAction({
@@ -494,23 +738,22 @@ export default function Dashboard() {
       message: "This appointment will be removed.",
       confirmText: "Delete",
       onConfirm: async () => {
-        const {
-          data: { user },
-          error: userError,
-        } = await supabase.auth.getUser();
-
-        if (userError || !user) {
+        if (!userId) {
           Alert.alert("Not signed in", "Please sign in again.");
           return;
         }
 
-        await sendAppointmentSmsNonBlocking(id, "cancellation");
+        await sendAppointmentSmsNonBlocking(id, "cancellation", {
+          sendPathName: "dashboard.delete.cancellation",
+          userId,
+          appointmentIdFromMutation: id,
+        });
 
         const { error } = await supabase
           .from("appointments")
           .delete()
           .eq("id", id)
-          .eq("user_id", user.id);
+          .eq("user_id", userId);
 
         if (error) {
           Alert.alert("Error", error.message);
@@ -531,12 +774,7 @@ export default function Dashboard() {
 
     if (!targetAppointment?.id) return;
 
-    const {
-      data: { user },
-      error: userError,
-    } = await supabase.auth.getUser();
-
-    if (userError || !user) {
+    if (!userId) {
       Alert.alert("Not signed in", "Please sign in again.");
       return;
     }
@@ -545,7 +783,7 @@ export default function Dashboard() {
       .from("appointments")
       .update({ status })
       .eq("id", targetAppointment.id)
-      .eq("user_id", user.id);
+      .eq("user_id", userId);
 
     if (error) {
       Alert.alert("Error", error.message);
@@ -553,7 +791,15 @@ export default function Dashboard() {
     }
 
     if (status === "canceled") {
-      void sendAppointmentSmsNonBlocking(targetAppointment.id, "cancellation");
+      void sendAppointmentSmsNonBlocking(
+        targetAppointment.id,
+        "cancellation",
+        {
+          sendPathName: "dashboard.status.cancellation",
+          userId,
+          appointmentIdFromMutation: targetAppointment.id,
+        },
+      );
       await cancelAppointmentReminder(targetAppointment.id);
     }
 
@@ -673,42 +919,46 @@ export default function Dashboard() {
     return status === "scheduled" || !status;
   }
 
-  const now = new Date();
-
-  const todayIso = `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(
-    2,
-    "0",
-  )}-${String(now.getDate()).padStart(2, "0")}`;
-
-  const displayAppointments = appointments.filter(isDashboardAppointmentVisible);
-
-  const todaysAppointments = sortAppointmentsChronologically(
-    displayAppointments.filter(
-      (appointment) =>
-        appointment?.appointment_date === todayIso &&
-        appointment?.status !== "canceled",
-    ),
-  );
-
-  const upcomingAppointments = sortAppointmentsChronologically(
-    displayAppointments.filter(
-      (appointment) =>
-        appointment?.appointment_date >= todayIso &&
-        appointment?.status !== "canceled",
-    ),
-  ).slice(0, 5);
-  const todayMetricHelper =
-    todaysAppointments.length === 1 ? "Appointment" : "Appointments";
-  const upcomingMetricHelper =
-    upcomingAppointments.length === 1
-      ? "Next appointment"
-      : "Next appointments";
-
   const revenueAvailable =
     ENABLE_PRO && canUseProFeature("revenueInsights");
-
-  const estimatedRevenue = revenueAvailable
-    ? todaysAppointments.reduce((total, appointment) => {
+  const {
+    todaysAppointments,
+    upcomingAppointments,
+    todayMetricHelper,
+    upcomingMetricHelper,
+    estimatedRevenue,
+    monthAppointments,
+    monthExpectedRevenue,
+  } = useMemo(() => {
+    const now = new Date();
+    const currentTodayIso = `${now.getFullYear()}-${String(
+      now.getMonth() + 1,
+    ).padStart(2, "0")}-${String(now.getDate()).padStart(2, "0")}`;
+    const displayAppointments = appointments.filter(
+      isDashboardAppointmentVisible,
+    );
+    const nextTodaysAppointments = sortAppointmentsChronologically(
+      displayAppointments.filter(
+        (appointment) =>
+          appointment?.appointment_date === currentTodayIso &&
+          appointment?.status !== "canceled",
+      ),
+    );
+    const nextUpcomingAppointments = sortAppointmentsChronologically(
+      displayAppointments.filter(
+        (appointment) =>
+          appointment?.appointment_date >= currentTodayIso &&
+          appointment?.status !== "canceled",
+      ),
+    ).slice(0, 5);
+    const currentMonth = currentTodayIso.slice(0, 7);
+    const nextMonthAppointments = displayAppointments.filter(
+      (appointment) =>
+        String(appointment?.appointment_date || "").startsWith(currentMonth) &&
+        appointment?.status !== "canceled",
+    );
+    const calculateRevenue = (appointmentRows: any[]) =>
+      appointmentRows.reduce((total, appointment) => {
         const serviceTotal =
           appointment.final_price !== null &&
           appointment.final_price !== undefined
@@ -716,25 +966,26 @@ export default function Dashboard() {
             : getAppointmentServiceTotal(appointment, services);
 
         return total + serviceTotal;
-      }, 0)
-    : 0;
-  const currentMonth = todayIso.slice(0, 7);
-  const monthAppointments = displayAppointments.filter(
-    (appointment) =>
-      String(appointment?.appointment_date || "").startsWith(currentMonth) &&
-      appointment?.status !== "canceled",
-  );
-  const monthExpectedRevenue = revenueAvailable
-    ? monthAppointments.reduce((total, appointment) => {
-        const serviceTotal =
-          appointment.final_price !== null &&
-          appointment.final_price !== undefined
-            ? Number(appointment.final_price || 0)
-            : getAppointmentServiceTotal(appointment, services);
+      }, 0);
 
-        return total + serviceTotal;
-      }, 0)
-    : 0;
+    return {
+      todaysAppointments: nextTodaysAppointments,
+      upcomingAppointments: nextUpcomingAppointments,
+      todayMetricHelper:
+        nextTodaysAppointments.length === 1 ? "Appointment" : "Appointments",
+      upcomingMetricHelper:
+        nextUpcomingAppointments.length === 1
+          ? "Next appointment"
+          : "Next appointments",
+      estimatedRevenue: revenueAvailable
+        ? calculateRevenue(nextTodaysAppointments)
+        : 0,
+      monthAppointments: nextMonthAppointments,
+      monthExpectedRevenue: revenueAvailable
+        ? calculateRevenue(nextMonthAppointments)
+        : 0,
+    };
+  }, [appointments, revenueAvailable, services]);
   const compactSmsBalance = width < 390;
   const smsBalancePillMaxWidth = width < 390 ? 122 : width < 430 ? 148 : 180;
   const smsBalanceValue = Math.max(0, Number(smsBalance.balance) || 0);
@@ -1353,9 +1604,31 @@ export default function Dashboard() {
             marginBottom: 18,
             opacity: 0.78,
           }}
-        >
+      >
           Account: {userEmail}
         </Text>
+      ) : null}
+
+      {saveNotice ? (
+        <AppCard
+          style={{
+            borderColor: dashboardAccentBorder,
+            borderLeftColor: dashboardSummaryAccent,
+            borderLeftWidth: 4,
+            borderWidth: 1,
+            marginBottom: 16,
+          }}
+        >
+          <Text
+            style={{
+              color: colors.text,
+              fontWeight: "900",
+              textAlign: "center",
+            }}
+          >
+            {saveNotice.message}
+          </Text>
+        </AppCard>
       ) : null}
 
       {hasBusiness === false ? (

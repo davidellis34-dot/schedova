@@ -17,7 +17,14 @@ import {
   PRO_UPSELL_COPY,
   showProUpgradePrompt,
 } from "../lib/proUpsell";
+import {
+  getSavePerformanceNow,
+  logSaveTiming,
+  measureSaveStep,
+  scheduleSaveCompletionTiming,
+} from "../lib/savePerformance";
 import { supabase } from "../lib/supabase";
+import { useScreenLoadingTiming } from "../lib/screenPerformance";
 import { useAppTheme } from "../lib/useAppTheme";
 
 const DAYS = [
@@ -74,6 +81,7 @@ export default function AvailabilitySettingsScreen() {
 
   const [rules, setRules] = useState<AvailabilityRule[]>(defaultRules());
   const [loading, setLoading] = useState(true);
+  useScreenLoadingTiming(loading);
   const [saving, setSaving] = useState(false);
 
   const timeOptions = useMemo(() => TIME_OPTIONS, []);
@@ -171,6 +179,10 @@ export default function AvailabilitySettingsScreen() {
   async function saveAvailability() {
     if (saving) return;
 
+    const flowName = "availability save";
+    const saveStartedAt = getSavePerformanceNow();
+    const validationStartedAt = getSavePerformanceNow();
+    let postSupabaseStartedAt: number | null = null;
     if (!customHoursAvailable) {
       if (ENABLE_PRO) {
         showProUpgradePrompt(PRO_UPSELL_COPY.customBusinessHours);
@@ -186,7 +198,11 @@ export default function AvailabilitySettingsScreen() {
     setSaving(true);
 
     try {
-      const { data: userData } = await supabase.auth.getUser();
+      const { data: userData } = await measureSaveStep(
+        flowName,
+        "auth lookup",
+        () => supabase.auth.getUser(),
+      );
       const userId = userData.user?.id;
 
       if (!userId) {
@@ -205,32 +221,66 @@ export default function AvailabilitySettingsScreen() {
           );
           return;
         }
-
-        const ruleData = {
-          user_id: userId,
-          day_of_week: rule.day_of_week,
-          is_available: rule.is_available,
-          start_time: toSqlTime(rule.start_time),
-          end_time: toSqlTime(rule.end_time),
-        };
-
-        if (rule.id) {
-          const { error } = await supabase
-            .from("availability_rules")
-            .update(ruleData)
-            .eq("id", rule.id)
-            .eq("user_id", userId);
-
-          if (error) throw error;
-        } else {
-          const { error } = await supabase
-            .from("availability_rules")
-            .insert(ruleData);
-
-          if (error) throw error;
-        }
       }
 
+      logSaveTiming(
+        flowName,
+        "validation",
+        getSavePerformanceNow() - validationStartedAt,
+        {
+          ruleCount: rules.length,
+        },
+      );
+
+      const mutationStartedAt = getSavePerformanceNow();
+      logSaveTiming(
+        flowName,
+        "time before supabase request starts",
+        mutationStartedAt - saveStartedAt,
+        {
+          ruleCount: rules.length,
+        },
+      );
+
+      await measureSaveStep(
+        flowName,
+        "supabase request duration",
+        async () => {
+          for (const rule of rules) {
+            const ruleData = {
+              user_id: userId,
+              day_of_week: rule.day_of_week,
+              is_available: rule.is_available,
+              start_time: toSqlTime(rule.start_time),
+              end_time: toSqlTime(rule.end_time),
+            };
+
+            if (rule.id) {
+              const { error } = await supabase
+                .from("availability_rules")
+                .update(ruleData)
+                .eq("id", rule.id)
+                .eq("user_id", userId);
+
+              if (error) throw error;
+            } else {
+              const { error } = await supabase
+                .from("availability_rules")
+                .insert(ruleData);
+
+              if (error) throw error;
+            }
+          }
+        },
+        {
+          ruleCount: rules.length,
+        },
+      );
+
+      postSupabaseStartedAt = getSavePerformanceNow();
+      scheduleSaveCompletionTiming(flowName, saveStartedAt, {
+        postSupabaseStartedAt,
+      });
       router.push("/settings");
     } catch (error: any) {
       console.log("SAVE AVAILABILITY ERROR:", error?.message || error);

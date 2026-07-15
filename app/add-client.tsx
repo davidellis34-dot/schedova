@@ -24,8 +24,15 @@ import {
   useFeatureAccess,
 } from "../lib/featureAccess";
 import { PRO_UPSELL_COPY, showProUpgradePrompt } from "../lib/proUpsell";
+import {
+  getSavePerformanceNow,
+  logSaveTiming,
+  measureSaveStep,
+  scheduleSaveCompletionTiming,
+} from "../lib/savePerformance";
 import { supabase } from "../lib/supabase";
 import { useAppTheme } from "../lib/useAppTheme";
+import { useAuthSession } from "../lib/authSession";
 
 const EMAIL_PATTERN = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
 
@@ -48,6 +55,7 @@ function parseRebookingWeeks(value: string) {
 
 export default function AddClientScreen() {
   const router = useRouter();
+  const { userId } = useAuthSession();
   const { colors, themeName } = useAppTheme();
   const isDarkTheme = themeName === "dark" || themeName === "black";
   const infoAccent = isDarkTheme ? "#60A5FA" : "#2563EB";
@@ -113,6 +121,10 @@ export default function AddClientScreen() {
   async function saveClient() {
     if (saving) return;
 
+    const flowName = "client save (create)";
+    const saveStartedAt = getSavePerformanceNow();
+    let postSupabaseStartedAt: number | null = null;
+    const validationStartedAt = getSavePerformanceNow();
     setSaving(true);
     setErrorMessage("");
 
@@ -141,12 +153,37 @@ export default function AddClientScreen() {
         return;
       }
 
-      const {
-        data: { user },
-        error: userError,
-      } = await supabase.auth.getUser();
+      logSaveTiming(
+        flowName,
+        "validation",
+        getSavePerformanceNow() - validationStartedAt,
+      );
 
-      if (userError || !user) {
+      let currentUserId = userId || "";
+
+      if (currentUserId) {
+        logSaveTiming(flowName, "auth lookup", 0, {
+          source: "cached_user_id",
+        });
+      } else {
+        const {
+          data: { user },
+          error: userError,
+        } = await measureSaveStep(flowName, "auth lookup", () =>
+          supabase.auth.getUser(),
+        );
+
+        if (userError || !user) {
+          const message = "You must be logged in.";
+          setErrorMessage(message);
+          Alert.alert("Error", message);
+          return;
+        }
+
+        currentUserId = user.id;
+      }
+
+      if (!currentUserId) {
         const message = "You must be logged in.";
         setErrorMessage(message);
         Alert.alert("Error", message);
@@ -154,11 +191,20 @@ export default function AddClientScreen() {
       }
 
       if (!canUseFeature("moreClients")) {
+        const freeLimitStartedAt = getSavePerformanceNow();
         const { data: existingClients, error: clientsError } = await supabase
           .from("clients")
           .select("id")
-          .eq("user_id", user.id)
+          .eq("user_id", currentUserId)
           .is("archived_at", null);
+        logSaveTiming(
+          flowName,
+          "pre-save queries",
+          getSavePerformanceNow() - freeLimitStartedAt,
+          {
+            operation: "free-tier client count",
+          },
+        );
 
         if (clientsError) {
           setErrorMessage(clientsError.message);
@@ -172,21 +218,33 @@ export default function AddClientScreen() {
         }
       }
 
-      const { data: insertedClient, error } = await supabase
-        .from("clients")
-        .insert({
-          user_id: user.id,
-          name: displayName,
-          phone: trimmedPhone || null,
-          email: trimmedEmail || null,
-          notes: trimmedNotes || null,
-          birthday: trimmedBirthday || null,
-          rebooking_weeks: parseRebookingWeeks(rebookingWeeks),
-          client_tag: clientTag,
-          sms_opt_in: nextSmsOptIn,
-        })
-        .select("id")
-        .single();
+      const mutationStartedAt = getSavePerformanceNow();
+      logSaveTiming(
+        flowName,
+        "time before supabase request starts",
+        mutationStartedAt - saveStartedAt,
+      );
+
+      const { data: insertedClient, error } = await measureSaveStep(
+        flowName,
+        "supabase request duration",
+        () =>
+          supabase
+            .from("clients")
+            .insert({
+              user_id: currentUserId,
+              name: displayName,
+              phone: trimmedPhone || null,
+              email: trimmedEmail || null,
+              notes: trimmedNotes || null,
+              birthday: trimmedBirthday || null,
+              rebooking_weeks: parseRebookingWeeks(rebookingWeeks),
+              client_tag: clientTag,
+              sms_opt_in: nextSmsOptIn,
+            })
+            .select("id")
+            .single(),
+      );
 
       if (error) {
         setErrorMessage(error.message);
@@ -194,35 +252,48 @@ export default function AddClientScreen() {
         return;
       }
 
+      postSupabaseStartedAt = getSavePerformanceNow();
       const clientId = String(insertedClient?.id || "");
-      if (clientId) {
-        await saveClientCommunicationRecipients({
-          userId: user.id,
-          clientId,
-          recipients: recipients.map((recipient, index) =>
-            index === 0
-              ? (() => {
-                  const primaryPhone = recipient.phone || trimmedPhone;
 
-                  return {
-                    ...recipient,
-                    name: recipient.name || displayName,
-                    phone: primaryPhone,
-                    email: recipient.email || trimmedEmail,
-                    smsEnabled:
-                      Boolean(primaryPhone) &&
-                      (recipient.smsEnabled || nextSmsOptIn),
-                    emailEnabled:
-                      recipient.emailEnabled || Boolean(trimmedEmail),
-                    isPrimary: true,
-                  };
-                })()
-              : recipient,
-          ),
+      scheduleSaveCompletionTiming(flowName, saveStartedAt, {
+        postSupabaseStartedAt,
+      });
+      router.replace("/clients" as any);
+
+      if (clientId) {
+        requestAnimationFrame(() => {
+          setTimeout(() => {
+            void measureSaveStep(flowName, "post-save queries", () =>
+              saveClientCommunicationRecipients({
+                userId: currentUserId,
+                clientId,
+                recipients: recipients.map((recipient, index) =>
+                  index === 0
+                    ? (() => {
+                        const primaryPhone = recipient.phone || trimmedPhone;
+
+                        return {
+                          ...recipient,
+                          name: recipient.name || displayName,
+                          phone: primaryPhone,
+                          email: recipient.email || trimmedEmail,
+                          smsEnabled:
+                            Boolean(primaryPhone) &&
+                            (recipient.smsEnabled || nextSmsOptIn),
+                          emailEnabled:
+                            recipient.emailEnabled || Boolean(trimmedEmail),
+                          isPrimary: true,
+                        };
+                      })()
+                    : recipient,
+                ),
+              }),
+            ).catch((recipientError) => {
+              console.log("Add client recipient save failed", recipientError);
+            });
+          }, 0);
         });
       }
-
-      router.replace("/clients" as any);
     } catch (error) {
       console.log("Add client failed", error);
       const message = "Client could not be saved. Please try again.";

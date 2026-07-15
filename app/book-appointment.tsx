@@ -48,6 +48,7 @@ import {
 import { copyTextToClipboard } from "../lib/clipboard";
 import { confirmDestructiveAction } from "../lib/confirmDestructiveAction";
 import { canUseFeature, useFeatureAccess } from "../lib/featureAccess";
+import { useAuthSession } from "../lib/authSession";
 import { cancelAppointmentReminder } from "../lib/localNotifications";
 import { ENABLE_PRO } from "../lib/proFeatureFlag";
 import {
@@ -63,6 +64,10 @@ import {
   showProUpgradePromptForFlow,
 } from "../lib/proUpsell";
 import { buildSchedovaBookingLink } from "../lib/schedovaLinks";
+import {
+  recordPrimaryScreenInteractive,
+  useManualScreenInteractiveTiming,
+} from "../lib/screenPerformance";
 import { supabase } from "../lib/supabase";
 import { useAppTheme } from "../lib/useAppTheme";
 import {
@@ -368,13 +373,23 @@ function prepareAndroidTabletSmsFallback(
 
 export default function BookAppointmentScreen() {
   const router = useRouter();
+  useManualScreenInteractiveTiming("book-appointment");
   const theme = useAppTheme();
+  const { userId, user } = useAuthSession();
   useFeatureAccess();
   const colors: ThemeColors = { ...FALLBACK_COLORS, ...(theme?.colors || {}) };
   const form = useBookAppointmentForm({
     requestProAccess: (message) =>
       showProUpgradePromptForFlow(message || PRO_UPSELL_COPY.freeLimit),
   });
+
+  useEffect(() => {
+    if (form.loading || !form.userId) return;
+
+    requestAnimationFrame(() => {
+      recordPrimaryScreenInteractive("book-appointment");
+    });
+  }, [form.loading, form.userId]);
   const customScheduleAvailable = canUseFeature("customBusinessHours");
   const [showEntryTypeProPrompt, setShowEntryTypeProPrompt] = useState(false);
   const [messageModalVisible, setMessageModalVisible] = useState(false);
@@ -616,11 +631,7 @@ export default function BookAppointmentScreen() {
     setMessageTemplatesLoading(true);
 
     try {
-      const {
-        data: { user },
-      } = await supabase.auth.getUser();
-
-      if (!user) {
+      if (!userId) {
         Alert.alert("Not signed in", "Please sign in again.");
         return;
       }
@@ -630,17 +641,17 @@ export default function BookAppointmentScreen() {
         { data: clientData },
         { data: businessData },
       ] = await Promise.all([
-        fetchCustomMessageTemplates(user.id),
+        fetchCustomMessageTemplates(userId),
         supabase
           .from("clients")
           .select("*")
           .eq("id", form.selectedClient)
-          .eq("user_id", user.id)
+          .eq("user_id", userId)
           .maybeSingle(),
         supabase
           .from("businesses")
           .select("business_name")
-          .eq("user_id", user.id)
+          .eq("user_id", userId)
           .limit(1)
           .maybeSingle(),
       ]);
@@ -947,23 +958,22 @@ export default function BookAppointmentScreen() {
       message: "This appointment will be permanently deleted.",
       confirmText: "Delete",
       onConfirm: async () => {
-        const {
-          data: { user },
-          error: userError,
-        } = await supabase.auth.getUser();
-
-        if (userError || !user) {
+        if (!userId) {
           Alert.alert("Not signed in", "Please sign in again.");
           return;
         }
 
-        await sendAppointmentSmsNonBlocking(appointmentId, "cancellation");
+        await sendAppointmentSmsNonBlocking(appointmentId, "cancellation", {
+          sendPathName: "book-appointment.delete.cancellation",
+          userId,
+          appointmentIdFromMutation: appointmentId,
+        });
 
         const { error } = await supabase
           .from("appointments")
           .delete()
           .eq("id", appointmentId)
-          .eq("user_id", user.id);
+          .eq("user_id", userId);
 
         if (error) {
           Alert.alert("Error", error.message);

@@ -4,6 +4,11 @@ import { Pressable, Text, View } from "react-native";
 import { AppSelectField } from "../../components/AppSelectField";
 import { AppScreen } from "../../components/layout/AppScreen";
 import { normalizeDoubleBookingPreference } from "../../lib/calendarPreferences";
+import {
+  getSavePerformanceNow,
+  logSaveTiming,
+  measureSaveStep,
+} from "../../lib/savePerformance";
 import { useAppTheme } from "../../lib/useAppTheme";
 
 export default function CalendarSettingsScreen() {
@@ -39,14 +44,39 @@ export default function CalendarSettingsScreen() {
   }
 
   async function saveSettings() {
-    await AsyncStorage.setItem("calendar_start_hour", startHour);
-    await AsyncStorage.setItem("calendar_end_hour", endHour);
-    await AsyncStorage.setItem("calendar_interval", interval);
-    await AsyncStorage.setItem("time_format", timeFormat);
-    await AsyncStorage.setItem(
-      "double_booking_preference",
-      doubleBookingPreference,
+    const flowName = "calendar settings save";
+    const saveStartedAt = getSavePerformanceNow();
+    const validationStartedAt = getSavePerformanceNow();
+
+    logSaveTiming(
+      flowName,
+      "validation",
+      getSavePerformanceNow() - validationStartedAt,
     );
+    logSaveTiming(flowName, "time before supabase request starts", 0, {
+      note: "local AsyncStorage save",
+    });
+
+    await measureSaveStep(flowName, "local persistence write", async () => {
+      await AsyncStorage.setItem("calendar_start_hour", startHour);
+      await AsyncStorage.setItem("calendar_end_hour", endHour);
+      await AsyncStorage.setItem("calendar_interval", interval);
+      await AsyncStorage.setItem("time_format", timeFormat);
+      await AsyncStorage.setItem(
+        "double_booking_preference",
+        doubleBookingPreference,
+      );
+    });
+
+    requestAnimationFrame(() => {
+      requestAnimationFrame(() => {
+        logSaveTiming(
+          flowName,
+          "total time until continue",
+          getSavePerformanceNow() - saveStartedAt,
+        );
+      });
+    });
   }
 
   const hourOptions = [

@@ -1,4 +1,5 @@
 import { useEffect, useSyncExternalStore } from "react";
+import AsyncStorage from "@react-native-async-storage/async-storage";
 
 import { ENABLE_PRO } from "./proFeatureFlag";
 import {
@@ -54,12 +55,15 @@ export type FeatureKey =
 type FeatureAccessState = {
   userId: string | null;
   subscription: UserSubscription | null;
-  isPro: boolean;
+  isPro: boolean | null;
+  subscriptionLoaded: boolean;
+  cachedEntitlementIsPro: boolean;
   revenueCatLoaded: boolean;
   revenueCatIsPro: boolean | null;
   loading: boolean;
   loadedAt: string | null;
   source: string;
+  resolutionSource: string;
   error: string | null;
 };
 
@@ -67,33 +71,78 @@ const initialState: FeatureAccessState = {
   userId: null,
   subscription: null,
   isPro: false,
+  subscriptionLoaded: false,
+  cachedEntitlementIsPro: false,
   revenueCatLoaded: false,
   revenueCatIsPro: null,
   loading: false,
   loadedAt: null,
   source: "initial",
+  resolutionSource: "not-authenticated",
   error: null,
 };
+const LAST_KNOWN_PRO_STORAGE_PREFIX =
+  "schedova_revenuecat_last_known_pro_user_";
 
 let featureAccessState = initialState;
 let refreshGeneration = 0;
 let lastHookRefreshAt = 0;
 const listeners = new Set<() => void>();
 
-function getEffectiveProAccess(
+function resolveEffectiveProAccess(
   subscription: UserSubscription | null,
+  subscriptionLoaded: boolean,
   revenueCatLoaded: boolean,
   revenueCatIsPro: boolean | null,
+  cachedEntitlementIsPro: boolean,
 ) {
-  if (!ENABLE_PRO) return false;
+  if (!ENABLE_PRO) return { isPro: false, source: "pro-disabled" };
 
-  const supabaseIsPro = hasSchedovaProAccess(subscription);
+  if (hasAdminLifetimeSchedovaProAccess(subscription)) {
+    return { isPro: true, source: "supabase-admin-lifetime" };
+  }
 
-  // Supabase user_subscriptions is the source of truth for current Pro access.
-  if (subscription) return supabaseIsPro;
-  if (revenueCatLoaded) return Boolean(revenueCatIsPro);
+  if (hasSchedovaProAccess(subscription)) {
+    return { isPro: true, source: "supabase-subscription" };
+  }
 
-  return false;
+  if (revenueCatLoaded && revenueCatIsPro === true) {
+    return { isPro: true, source: "revenuecat-schedova-pro" };
+  }
+
+  // A valid prior entitlement protects the account only while the two live
+  // sources are still resolving. An empty cache is never persisted as proof.
+  if (cachedEntitlementIsPro && (!subscriptionLoaded || !revenueCatLoaded)) {
+    return { isPro: true, source: "cached-entitlement-temporary" };
+  }
+
+  if (!subscriptionLoaded || !revenueCatLoaded) {
+    return { isPro: null, source: "entitlement-unresolved" };
+  }
+
+  return { isPro: false, source: "no-active-entitlement" };
+}
+
+function withResolvedProAccess(
+  state: FeatureAccessState,
+  overrides: Partial<FeatureAccessState> = {},
+) {
+  const next = { ...state, ...overrides };
+  const resolution = resolveEffectiveProAccess(
+    next.subscription,
+    next.subscriptionLoaded,
+    next.revenueCatLoaded,
+    next.revenueCatIsPro,
+    next.cachedEntitlementIsPro,
+  );
+
+  return {
+    ...next,
+    isPro: resolution.isPro,
+    loading: resolution.isPro === null,
+    source: overrides.source || resolution.source,
+    resolutionSource: resolution.source,
+  };
 }
 
 function debugFeatureAccess(state: FeatureAccessState) {
@@ -104,6 +153,11 @@ function debugFeatureAccess(state: FeatureAccessState) {
     userId: state.userId,
     isPro: state.isPro,
     subscription: state.subscription,
+    subscriptionLoaded: state.subscriptionLoaded,
+    revenueCatLoaded: state.revenueCatLoaded,
+    revenueCatIsPro: state.revenueCatIsPro,
+    cachedEntitlementIsPro: state.cachedEntitlementIsPro,
+    resolutionSource: state.resolutionSource,
     error: state.error,
   });
 }
@@ -144,8 +198,10 @@ export function useFeatureAccess() {
   );
 
   useEffect(() => {
-    if (shouldRefreshFromHook(state)) {
-      void refreshFeatureAccess(undefined, "feature-hook");
+    // Root auth bootstrap owns the first lookup. Avoid a second auth request from
+    // every screen that subscribes before the shared session has populated state.
+    if (state.userId && shouldRefreshFromHook(state)) {
+      void refreshFeatureAccess(state.userId, "feature-hook");
     }
   }, [state]);
 
@@ -169,43 +225,89 @@ export function setRevenueCatFeatureAccess(
   const adminLifetimeAccess = hasAdminLifetimeSchedovaProAccess(subscription);
   const revenueCatStyleAccess =
     hasRevenueCatStyleSchedovaProAccess(subscription);
-  const visibleProAccess = getEffectiveProAccess(
-    subscription,
-    true,
-    isPro,
-  );
-
-  console.log("revenuecat result", isPro);
-  console.log("subscription object used", subscription);
-  console.log("adminLifetimeAccess", adminLifetimeAccess);
-  console.log("revenueCatStyleAccess", revenueCatStyleAccess);
-  console.log("final isPro", visibleProAccess);
-
-  publishFeatureAccess({
-    ...featureAccessState,
-    isPro: visibleProAccess,
+  const nextState = withResolvedProAccess(featureAccessState, {
     revenueCatLoaded: true,
     revenueCatIsPro: isPro,
-    loading: false,
-    loadedAt: new Date().toISOString(),
     source,
     error: null,
   });
+
+  if (__DEV__) {
+    console.log("[FeatureAccess] entitlement resolution", {
+      supabaseSubscriptionResult: subscription,
+      revenueCatEntitlementResult: isPro,
+      cachedEntitlementResult: featureAccessState.cachedEntitlementIsPro,
+      adminLifetimeAccess,
+      revenueCatStyleAccess,
+      finalSource: nextState.resolutionSource,
+      finalIsPro: nextState.isPro,
+    });
+  }
+
+  publishFeatureAccess({ ...nextState, loadedAt: new Date().toISOString() });
+}
+
+async function readCachedEntitlement(userId: string) {
+  try {
+    return (
+      (await AsyncStorage.getItem(
+        `${LAST_KNOWN_PRO_STORAGE_PREFIX}${userId}`,
+      )) === "true"
+    );
+  } catch {
+    return false;
+  }
+}
+
+export function setCachedEntitlementFeatureAccess(
+  userId: string,
+  isPro: boolean,
+  source = "cached-entitlement",
+) {
+  if (!userId || featureAccessState.userId !== userId) return;
+
+  const nextState = withResolvedProAccess(featureAccessState, {
+    cachedEntitlementIsPro: isPro,
+    source,
+  });
+
+  if (__DEV__) {
+    console.log("[FeatureAccess] cached entitlement result", {
+      userId,
+      cachedEntitlementResult: isPro,
+      finalSource: nextState.resolutionSource,
+      finalIsPro: nextState.isPro,
+    });
+  }
+
+  publishFeatureAccess(nextState);
 }
 
 export async function refreshFeatureAccess(
   userId?: string | null,
   source = "refresh",
 ) {
-  const generation = ++refreshGeneration;
   let activeUserId = userId || null;
+  let authEmail: string | null = null;
 
-  publishFeatureAccess({
-    ...featureAccessState,
-    loading: true,
+  if (
+    activeUserId &&
+    featureAccessState.loading &&
+    featureAccessState.userId === activeUserId
+  ) {
+    return featureAccessState;
+  }
+
+  // Do not invalidate an active request for the same account. Auth events can
+  // arrive twice during hydration, and the first response must still commit.
+  const generation = ++refreshGeneration;
+
+  publishFeatureAccess(withResolvedProAccess(featureAccessState, {
+    userId: activeUserId ?? featureAccessState.userId,
+    subscriptionLoaded: false,
     source,
     error: null,
-  });
+  }));
 
   try {
     if (!activeUserId) {
@@ -224,14 +326,17 @@ export async function refreshFeatureAccess(
       }
 
       activeUserId = data.user.id;
+      authEmail = data.user.email ?? null;
     }
 
-    const { data: authUserData } = await supabase.auth.getUser();
-    const authUserId = authUserData.user?.id ?? activeUserId;
-    const authEmail = authUserData.user?.email ?? null;
+    // Callers with a shared session already supplied the authenticated account.
+    // The subscription query is scoped to that ID, so another auth round trip adds
+    // no correctness value and delays every subscribed screen.
+    const authUserId = activeUserId;
     const subscriptionSelect =
       "status, plan, current_period_end, entitlement, entitlement_source, entitlement_expires_at";
 
+    const cachedEntitlementPromise = readCachedEntitlement(activeUserId);
     const { data, error } = await supabase
       .from("user_subscriptions")
       .select(subscriptionSelect)
@@ -239,70 +344,87 @@ export async function refreshFeatureAccess(
 
     if (generation !== refreshGeneration) return featureAccessState;
 
+    const cachedEntitlementIsPro = await cachedEntitlementPromise;
+
+    if (generation !== refreshGeneration) return featureAccessState;
+
     if (error) {
-      const adminLifetimeAccess = false;
-      const revenueCatStyleAccess = false;
-      const computedIsPro = getEffectiveProAccess(
-        null,
-        featureAccessState.revenueCatLoaded,
-        featureAccessState.revenueCatIsPro,
-      );
-
-      console.log("current auth user id", authUserId);
-      console.log("current auth email", authEmail);
-      console.log("subscription object used", null);
-      console.log("subscription row loaded from Supabase", null);
-      console.log("adminLifetimeAccess", adminLifetimeAccess);
-      console.log("revenueCatStyleAccess", revenueCatStyleAccess);
-      console.log("revenuecat result", featureAccessState.revenueCatIsPro);
-      console.log("final isPro", computedIsPro);
-
-      publishFeatureAccess({
+      const nextState = withResolvedProAccess(featureAccessState, {
         userId: activeUserId,
         subscription: null,
-        isPro: computedIsPro,
-        revenueCatLoaded: featureAccessState.revenueCatLoaded,
-        revenueCatIsPro: featureAccessState.revenueCatIsPro,
-        loading: false,
-        loadedAt: new Date().toISOString(),
+        subscriptionLoaded: false,
+        cachedEntitlementIsPro,
         source,
         error: error.message,
       });
+
+      if (__DEV__) {
+        console.log("[FeatureAccess] entitlement resolution", {
+          userId: authUserId,
+          authEmail,
+          supabaseSubscriptionResult: null,
+          revenueCatEntitlementResult: featureAccessState.revenueCatIsPro,
+          cachedEntitlementResult: cachedEntitlementIsPro,
+          finalSource: nextState.resolutionSource,
+          finalIsPro: nextState.isPro,
+          error: error.message,
+        });
+      }
+
+      publishFeatureAccess({ ...nextState, loadedAt: new Date().toISOString() });
       return featureAccessState;
     }
 
     const subscriptions = (data || []) as UserSubscription[];
     const subscription =
       subscriptions.find(hasSchedovaProAccess) || subscriptions[0] || null;
+    const subscriptionIsPro = hasSchedovaProAccess(subscription);
     const adminLifetimeAccess = hasAdminLifetimeSchedovaProAccess(subscription);
-    const revenueCatStyleAccess =
-      hasRevenueCatStyleSchedovaProAccess(subscription);
-    const computedIsPro = getEffectiveProAccess(
-      subscription,
-      featureAccessState.revenueCatLoaded,
-      featureAccessState.revenueCatIsPro,
-    );
 
-    console.log("current auth user id", authUserId);
-    console.log("current auth email", authEmail);
-    console.log("subscription object used", subscription);
-    console.log("subscription row loaded from Supabase", subscription);
-    console.log("adminLifetimeAccess", adminLifetimeAccess);
-    console.log("revenueCatStyleAccess", revenueCatStyleAccess);
-    console.log("revenuecat result", featureAccessState.revenueCatIsPro);
-    console.log("final isPro", computedIsPro);
+    if (__DEV__) {
+      console.log("[FeatureAccess] Supabase subscription fetched", {
+        userId: authUserId,
+        row: subscription
+          ? {
+              status: subscription.status ?? null,
+              plan: subscription.plan ?? null,
+              entitlement: subscription.entitlement ?? null,
+              entitlement_source: subscription.entitlement_source ?? null,
+              entitlement_expires_at:
+                subscription.entitlement_expires_at ?? null,
+            }
+          : null,
+        subscriptionLoaded: true,
+        adminLifetimeAccess,
+        supabaseSubscriptionResult: subscriptionIsPro,
+      });
+    }
 
-    publishFeatureAccess({
+    const nextState = withResolvedProAccess(featureAccessState, {
       userId: activeUserId,
       subscription,
-      isPro: computedIsPro,
-      revenueCatLoaded: featureAccessState.revenueCatLoaded,
-      revenueCatIsPro: featureAccessState.revenueCatIsPro,
-      loading: false,
-      loadedAt: new Date().toISOString(),
+      subscriptionLoaded: true,
+      cachedEntitlementIsPro,
       source,
       error: null,
     });
+
+    if (__DEV__) {
+      console.log("[FeatureAccess] entitlement resolution", {
+        userId: authUserId,
+        authEmail,
+        supabaseSubscriptionRow: subscription,
+        supabaseSubscriptionResult: subscriptionIsPro,
+        revenueCatEntitlementResult: featureAccessState.revenueCatIsPro,
+        cachedEntitlementResult: cachedEntitlementIsPro,
+        adminLifetimeAccess,
+        revenueCatStyleAccess: hasRevenueCatStyleSchedovaProAccess(subscription),
+        finalSource: nextState.resolutionSource,
+        finalIsPro: nextState.isPro,
+      });
+    }
+
+    publishFeatureAccess({ ...nextState, loadedAt: new Date().toISOString() });
   } catch (error) {
     if (generation !== refreshGeneration) return featureAccessState;
 
@@ -311,21 +433,20 @@ export async function refreshFeatureAccess(
         ? error.message
         : "Feature access could not be refreshed.";
 
-    publishFeatureAccess({
-      ...featureAccessState,
+    publishFeatureAccess(withResolvedProAccess(featureAccessState, {
       userId: activeUserId,
-      loading: false,
       loadedAt: new Date().toISOString(),
       source,
       error: message,
-    });
+    }));
   }
 
   return featureAccessState;
 }
 
 export function isPro() {
-  return ENABLE_PRO && featureAccessState.isPro;
+  // Avoid hiding Pro controls while a signed-in account is still resolving.
+  return ENABLE_PRO && featureAccessState.isPro !== false;
 }
 
 export function canUseFeature(feature: FeatureKey) {

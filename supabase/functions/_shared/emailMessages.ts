@@ -1,3 +1,8 @@
+import {
+  getMessageSenderDisplayName,
+  type MessageSenderUserLike,
+} from "../../../lib/messageSender.ts";
+
 export type JsonObject = Record<string, unknown>;
 
 export type EmailMessageType =
@@ -205,7 +210,8 @@ export function sanitizeEmailDisplayName(value: unknown) {
 }
 
 export function buildSchedovaFromHeader(businessName: unknown) {
-  const cleanBusinessName = sanitizeEmailDisplayName(businessName) || "Schedova";
+  const cleanBusinessName =
+    sanitizeEmailDisplayName(businessName) || "Schedova Appointment";
   const displayName = `${cleanBusinessName} via Schedova`;
   const escapedDisplayName = displayName.replace(/\\/g, "\\\\").replace(/"/g, '\\"');
 
@@ -255,36 +261,55 @@ export function buildEmailContent(input: {
   customBody?: string | null;
 }) {
   const clientName = input.clientName || "there";
-  const businessName = input.businessName || "Schedova";
+  const businessName = input.businessName || "Schedova Appointment";
   const date = formatAppointmentDate(input.appointmentDate);
   const time = formatAppointmentTime(input.appointmentTime);
   const serviceText = input.serviceName ? ` for ${input.serviceName}` : "";
   const customBody = asTrimmedString(input.customBody);
 
-  let subject = `${businessName} appointment`;
+  let subject = `Message from ${businessName}`;
   let intro = `Hi ${clientName},`;
   let body = customBody;
+  let headerLabel = "Appointment message";
+
+  switch (input.messageType) {
+    case "confirmation":
+      subject = `Appointment confirmation from ${businessName}`;
+      headerLabel = "Appointment confirmation";
+      break;
+    case "update":
+      subject = `Appointment update from ${businessName}`;
+      headerLabel = "Appointment update";
+      break;
+    case "cancellation":
+      subject = `Appointment cancellation from ${businessName}`;
+      headerLabel = "Appointment cancellation";
+      break;
+    case "reminder":
+      subject = `Appointment reminder from ${businessName}`;
+      headerLabel = "Appointment reminder";
+      break;
+    case "manual":
+      subject = `Message from ${businessName}`;
+      headerLabel = "Appointment message";
+      break;
+  }
 
   if (!body) {
     switch (input.messageType) {
       case "confirmation":
-        subject = `Appointment confirmation from ${businessName}`;
-        body = `Confirming your appointment${serviceText} on ${date} at ${time}. Reply to this email if you need to make a change.`;
+        body = `Confirming your appointment with ${businessName}${serviceText} on ${date} at ${time}. Reply to this email if you need to make a change.`;
         break;
       case "update":
-        subject = `Appointment update from ${businessName}`;
-        body = `Your appointment${serviceText} has been updated to ${date} at ${time}. Reply to this email if you have any questions.`;
+        body = `Your appointment with ${businessName}${serviceText} has been updated to ${date} at ${time}. Reply to this email if you have any questions.`;
         break;
       case "cancellation":
-        subject = `Appointment cancellation from ${businessName}`;
-        body = `Your appointment${serviceText} on ${date} at ${time} has been canceled. Reply to this email if you need help rescheduling.`;
+        body = `Your appointment with ${businessName}${serviceText} on ${date} at ${time} has been canceled. Reply to this email if you need help rescheduling.`;
         break;
       case "reminder":
-        subject = `Appointment reminder from ${businessName}`;
-        body = `This is a reminder for your appointment${serviceText} on ${date} at ${time}. Reply to this email if you need to make a change.`;
+        body = `This is a reminder for your appointment with ${businessName}${serviceText} on ${date} at ${time}. Reply to this email if you need to make a change.`;
         break;
       case "manual":
-        subject = `Message from ${businessName}`;
         body = "Reply to this email if you need anything.";
         break;
     }
@@ -300,7 +325,7 @@ export function buildEmailContent(input: {
       <div style="max-width:560px;margin:0 auto;background:#ffffff;border:1px solid #dbe7e7;border-radius:16px;overflow:hidden;">
         <div style="background:#0f2f3a;color:#ffffff;padding:20px 24px;">
           <div style="font-size:20px;font-weight:800;">${escapeHtml(businessName)}</div>
-          <div style="font-size:13px;color:#9ee7df;margin-top:4px;">Appointment message</div>
+          <div style="font-size:13px;color:#9ee7df;margin-top:4px;">${escapeHtml(headerLabel)}</div>
         </div>
         <div style="padding:24px;">
           <p style="font-size:16px;line-height:24px;margin:0 0 16px;">${escapeHtml(intro)}</p>
@@ -322,7 +347,19 @@ export function buildEmailContent(input: {
 export async function getBusinessName(
   serviceClient: SupabaseServiceClient,
   userId: string,
+  user?: MessageSenderUserLike | null,
 ) {
+  const { data: businessData } = await serviceClient
+    .from("businesses")
+    .select("business_name")
+    .eq("user_id", userId)
+    .order("created_at", { ascending: false })
+    .limit(1)
+    .maybeSingle();
+
+  const businessRow = (businessData || {}) as JsonObject;
+  const currentBusinessName = asTrimmedString(businessRow.business_name);
+
   const { data: businessProfileData } = await serviceClient
     .from("business_profiles")
     .select("business_name, phone, email")
@@ -330,27 +367,14 @@ export async function getBusinessName(
     .maybeSingle();
 
   const businessProfileRow = (businessProfileData || {}) as JsonObject;
-  const businessProfileName = asTrimmedString(
-    businessProfileRow.business_name,
-  );
-  let legacyBusinessName = "";
-
-  if (!businessProfileName) {
-    const { data: businessData } = await serviceClient
-      .from("businesses")
-      .select("business_name")
-      .eq("user_id", userId)
-      .limit(1)
-      .maybeSingle();
-
-    legacyBusinessName = asTrimmedString(
-      (businessData as JsonObject | null)?.business_name,
-    );
-  }
+  const legacyBusinessName = asTrimmedString(businessProfileRow.business_name);
+  const resolvedBusinessName = getMessageSenderDisplayName({
+    businessName: currentBusinessName || legacyBusinessName || null,
+    user,
+  });
 
   return {
-    businessName:
-      businessProfileName || legacyBusinessName || "your business",
+    businessName: resolvedBusinessName,
     businessContact:
       [
         asTrimmedString(businessProfileRow.phone),

@@ -13,6 +13,7 @@ import { canUseFeature, useFeatureAccess } from "../lib/featureAccess";
 import { ENABLE_PRO } from "../lib/proFeatureFlag";
 import { openSchedovaProScreen, PRO_UPSELL_COPY } from "../lib/proUpsell";
 import { supabase } from "../lib/supabase";
+import { useScreenLoadingTiming } from "../lib/screenPerformance";
 import { useAppTheme } from "../lib/useAppTheme";
 
 type RangeKey = "week" | "month" | "last30" | "all";
@@ -167,6 +168,7 @@ export default function ReportsScreen() {
   const reportsAvailable = canUseFeature("reports");
   const [range, setRange] = useState<RangeKey>("month");
   const [loading, setLoading] = useState(false);
+  useScreenLoadingTiming(loading);
   const [loadError, setLoadError] = useState(false);
   const [appointments, setAppointments] = useState<any[]>([]);
   const [services, setServices] = useState<any[]>([]);

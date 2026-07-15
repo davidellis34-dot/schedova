@@ -7,16 +7,15 @@ import {
   getAppointmentServices,
 } from "../../lib/appointmentServices";
 import {
-  sendAppointmentSms,
   sendAppointmentSmsNonBlocking,
 } from "../../lib/appointmentSms";
 import {
-  sendAppointmentEmail,
   sendAppointmentEmailNonBlocking,
   shouldSendEmail,
   shouldSendText,
   type AppointmentDeliveryChoice,
 } from "../../lib/appointmentEmail";
+import { emitAppointmentUpserted } from "../../lib/appointmentEvents";
 import {
   saveAppointmentCommunicationRecipients,
   type CommunicationRecipient,
@@ -35,7 +34,15 @@ import {
 import { resolveClientReply } from "../../lib/clientReplies";
 import { scheduleAppointmentReminder } from "../../lib/localNotifications";
 import { PRO_UPSELL_COPY, showProUpgradePrompt } from "../../lib/proUpsell";
+import {
+  getSavePerformanceNow,
+  logSaveTiming,
+  measureSaveStep,
+  scheduleSaveCompletionTiming,
+} from "../../lib/savePerformance";
+import { emitSaveNotice } from "../../lib/saveNoticeEvents";
 import { supabase } from "../../lib/supabase";
+import { useAuthSession } from "../../lib/authSession";
 import {
   blockTitleFor,
   calculateEndTime,
@@ -75,6 +82,30 @@ type AppointmentOverlap = {
 };
 
 type DoubleBookingDecision = "cancel" | "book_all" | "skip_conflicts";
+
+type BookingBaseCacheEntry = {
+  clients: Client[];
+  services: Service[];
+  availabilityRules: AvailabilityRuleRecord[];
+  loadedAt: number;
+};
+
+const BOOKING_BASE_CACHE_FRESHNESS_MS = 60_000;
+const bookingBaseCache = new Map<string, BookingBaseCacheEntry>();
+
+type SaveTimingState = {
+  flowName: string;
+  saveStartedAt: number;
+  postSupabaseStartedAt: number | null;
+  deferredTasks: (() => void)[];
+};
+
+type AvailabilityRuleRecord = {
+  day_of_week?: number | null;
+  is_available?: boolean | null;
+  start_time?: string | null;
+  end_time?: string | null;
+};
 
 function normalizeEntryType(value?: string): EntryType {
   if (value === "blocked" || value === "blocked_time") return "blocked_time";
@@ -507,6 +538,7 @@ export function useBookAppointmentForm({
 }: UseBookAppointmentFormOptions = {}) {
   const router = useRouter();
   const params = useLocalSearchParams();
+  const { userId: sessionUserId } = useAuthSession();
   useFeatureAccess();
 
   function canUseProFeature(feature: Parameters<typeof canUseFeature>[0]) {
@@ -555,7 +587,9 @@ export function useBookAppointmentForm({
 
   const [clients, setClients] = useState<Client[]>([]);
   const [services, setServices] = useState<Service[]>([]);
-  const [userId, setUserId] = useState("");
+  const cachedAvailabilityRulesRef = useRef<AvailabilityRuleRecord[]>([]);
+  const cachedAvailabilityRulesUserIdRef = useRef("");
+  const cachedAvailabilityRulesLoadedAtRef = useRef<number | null>(null);
 
   const [entryType, setEntryType] = useState<EntryType>(
     blockId ? "blocked_time" : "appointment",
@@ -673,15 +707,12 @@ export function useBookAppointmentForm({
     }
   }
 
-  async function loadCalendarPreferences() {
-    const preferences = await getCalendarPreferences();
-    setUse24Hour(preferences.timeFormat === "24h");
-    setCalendarIntervalMinutes(preferences.intervalMinutes);
-    setDoubleBookingPreference(preferences.doubleBooking);
-  }
-
-  async function fetchBaseData(options?: { preserveForm?: boolean }) {
+  const fetchBaseData = useCallback(async (options?: {
+    preserveForm?: boolean;
+    forceRefresh?: boolean;
+  }) => {
     const preserveForm = Boolean(options?.preserveForm);
+    const forceRefresh = Boolean(options?.forceRefresh);
 
     if (!preserveForm) {
       setLoading(true);
@@ -689,56 +720,115 @@ export function useBookAppointmentForm({
     }
 
     try {
-      const { data: userData } = await supabase.auth.getUser();
-      const currentUserId = userData.user?.id;
-
-      setUserId(currentUserId || "");
+      const currentUserId = sessionUserId || "";
 
       if (!currentUserId) {
         Alert.alert("Login Required", "Please sign in again.");
         return;
       }
 
-      const [clientsResult, servicesResult] = await Promise.all([
-        supabase
-          .from("clients")
-          .select("*")
-          .eq("user_id", currentUserId)
-          .is("archived_at", null)
-          .order("name"),
-        supabase
-          .from("services")
-          .select("*")
-          .eq("user_id", currentUserId)
-          .order("name"),
-      ]);
+      const cached = bookingBaseCache.get(currentUserId);
+      const cacheIsFresh =
+        !forceRefresh &&
+        Boolean(
+          cached &&
+            Date.now() - cached.loadedAt < BOOKING_BASE_CACHE_FRESHNESS_MS,
+        );
 
-      setClients(
+      if (cacheIsFresh && cached) {
+        // Render known form options immediately; a quiet refresh keeps them current.
+        setClients(cached.clients);
+        setServices(cached.services);
+        cachedAvailabilityRulesRef.current = cached.availabilityRules;
+        cachedAvailabilityRulesUserIdRef.current = currentUserId;
+        cachedAvailabilityRulesLoadedAtRef.current = cached.loadedAt;
+        baseDataLoadedRef.current = true;
+        setLoading(false);
+        void fetchBaseData({ preserveForm: true, forceRefresh: true });
+        return;
+      }
+
+      const [
+        clientsResult,
+        servicesResult,
+        availabilityRulesResult,
+        preferences,
+      ] =
+        await Promise.all([
+          supabase
+            .from("clients")
+            .select("*")
+            .eq("user_id", currentUserId)
+            .is("archived_at", null)
+            .order("name"),
+          supabase
+            .from("services")
+            .select("*")
+            .eq("user_id", currentUserId)
+            .order("name"),
+          supabase
+            .from("availability_rules")
+            .select("day_of_week, is_available, start_time, end_time")
+            .eq("user_id", currentUserId),
+          getCalendarPreferences(),
+        ]);
+
+      const nextClients =
         (clientsResult.data || []).filter(Boolean).map((client: any) => ({
           ...client,
           id: normalizeId(client.id),
-        })),
-      );
-
-      setServices(
+        }));
+      const nextServices =
         (servicesResult.data || []).filter(Boolean).map((service: any) => ({
           ...service,
           id: normalizeId(service.id),
-        })),
-      );
+        }));
+      const nextAvailabilityRules = availabilityRulesResult.error
+        ? []
+        : ((availabilityRulesResult.data || []).filter(
+            Boolean,
+          ) as AvailabilityRuleRecord[]);
+
+      if (availabilityRulesResult.error) {
+        console.log(
+          "Booking availability rules preload failed",
+          availabilityRulesResult.error,
+        );
+        cachedAvailabilityRulesRef.current = [];
+        cachedAvailabilityRulesUserIdRef.current = "";
+        cachedAvailabilityRulesLoadedAtRef.current = null;
+      } else {
+        cachedAvailabilityRulesRef.current = nextAvailabilityRules;
+        cachedAvailabilityRulesUserIdRef.current = currentUserId;
+        cachedAvailabilityRulesLoadedAtRef.current = Date.now();
+      }
+
+      bookingBaseCache.set(currentUserId, {
+        clients: nextClients,
+        services: nextServices,
+        availabilityRules: nextAvailabilityRules,
+        loadedAt: Date.now(),
+      });
+
+      // Commit all primary form inputs after their concurrent requests settle.
+      setClients(nextClients);
+      setServices(nextServices);
+      setUse24Hour(preferences.timeFormat === "24h");
+      setCalendarIntervalMinutes(preferences.intervalMinutes);
+      setDoubleBookingPreference(preferences.doubleBooking);
+
       baseDataLoadedRef.current = true;
     } finally {
       if (!preserveForm) {
         setLoading(false);
       }
     }
-  }
+  }, [sessionUserId]);
 
   useFocusEffect(
     useCallback(() => {
       void fetchBaseData({ preserveForm: baseDataLoadedRef.current });
-      void loadCalendarPreferences();
-    }, []),
+    }, [fetchBaseData]),
   );
 
   useEffect(() => {
@@ -953,8 +1043,7 @@ export function useBookAppointmentForm({
     const normalizedPhone =
       await normalizePhoneForSmsWithUserDefault(newClientPhone.trim());
     const displayName = trimmedName || normalizedPhone || trimmedEmail;
-    const { data: userData } = await supabase.auth.getUser();
-    const currentUserId = userData.user?.id;
+    const currentUserId = sessionUserId || "";
 
     if (!currentUserId) {
       Alert.alert("Login Required", "Please sign in to add a client.");
@@ -1013,8 +1102,7 @@ export function useBookAppointmentForm({
   }
 
   async function saveQuickService() {
-    const { data: userData } = await supabase.auth.getUser();
-    const currentUserId = userData.user?.id;
+    const currentUserId = sessionUserId || "";
 
     if (!currentUserId) {
       Alert.alert("Login Required", "Please sign in to add a service.");
@@ -1167,6 +1255,75 @@ export function useBookAppointmentForm({
     });
   }
 
+  async function resolveCurrentUserIdForSave(flowName: string) {
+    if (sessionUserId) {
+      logSaveTiming(flowName, "auth lookup", 0, {
+        source: "hydrated_session_user_id",
+      });
+      return sessionUserId;
+    }
+
+    logSaveTiming(flowName, "auth lookup", 0, {
+      source: "missing_hydrated_session_user_id",
+    });
+    return "";
+  }
+
+  function queueDeferredTask(
+    timing: SaveTimingState | undefined,
+    task: () => void,
+  ) {
+    const startTask = () => {
+      requestAnimationFrame(() => {
+        setTimeout(() => {
+          try {
+            task();
+          } catch (error) {
+            console.log("Deferred appointment save task failed to start", error);
+          }
+        }, 0);
+      });
+    };
+
+    if (timing) {
+      timing.deferredTasks.push(startTask);
+      return;
+    }
+
+    startTask();
+  }
+
+  function queueMeasuredBackgroundSaveTask(input: {
+    timing?: SaveTimingState;
+    flowName: string;
+    operation: string;
+    sideEffect: string;
+    run: () => Promise<unknown>;
+    context?: Record<string, unknown>;
+    errorContext?: Record<string, unknown>;
+  }) {
+    queueDeferredTask(input.timing, () => {
+      void (async () => {
+        try {
+          await measureSaveStep(
+            input.flowName,
+            input.operation,
+            input.run,
+            input.context || {},
+          );
+        } catch (error) {
+          logSaveContext("SIDE EFFECT ERROR", {
+            sideEffect: input.sideEffect,
+            errorMessage: getUnknownErrorMessage(error),
+            errorCode: getUnknownErrorCode(error),
+            ...(input.errorContext || {}),
+          });
+          console.log(`${input.sideEffect} failed`, error);
+        }
+      })();
+    });
+  }
+
   async function saveEntry(options?: {
     deliveryChoice?: AppointmentDeliveryChoice;
     recipients?: CommunicationRecipient[];
@@ -1180,18 +1337,19 @@ export function useBookAppointmentForm({
     setSaving(true);
     logSaveContext("START");
     logAppointmentSaveCheckpoint("appointment save start");
+    const flowName =
+      entryType === "appointment"
+        ? `appointment save (${isEditMode ? "edit" : "create"})`
+        : `calendar block save (${blockId ? "edit" : "create"})`;
+    const timing: SaveTimingState = {
+      flowName,
+      saveStartedAt: getSavePerformanceNow(),
+      postSupabaseStartedAt: null,
+      deferredTasks: [],
+    };
 
     try {
-      const { data: userData, error: userError } =
-        await supabase.auth.getUser();
-
-      if (userError) {
-        logSupabaseSaveError("auth.getUser", userError);
-        Alert.alert("Login Required", "Please sign in again.");
-        return false;
-      }
-
-      const currentUserId = userData.user?.id;
+      const currentUserId = await resolveCurrentUserIdForSave(flowName);
 
       if (!currentUserId) {
         logSaveContext("NO AUTH USER");
@@ -1212,8 +1370,9 @@ export function useBookAppointmentForm({
           ? await saveAppointment(currentUserId, safeDate, {
               deliveryChoice: options?.deliveryChoice,
               recipients: options?.recipients,
+              timing,
             })
-          : await saveCalendarBlock(currentUserId, safeDate);
+          : await saveCalendarBlock(currentUserId, safeDate, timing);
 
       if (!saved) {
         logAppointmentSaveCheckpoint("appointment save error", {
@@ -1223,7 +1382,16 @@ export function useBookAppointmentForm({
       }
 
       logAppointmentSaveCheckpoint("appointment save success");
+      emitSaveNotice(entryType === "appointment" ? "Appointment saved." : "Saved.");
+      scheduleSaveCompletionTiming(flowName, timing.saveStartedAt, {
+        postSupabaseStartedAt: timing.postSupabaseStartedAt,
+        context: {
+          entryType,
+          mode: isEditMode ? "edit" : "create",
+        },
+      });
       navigateAfterSave();
+      timing.deferredTasks.forEach((task) => task());
       return true;
     } catch (error) {
       logSaveContext("CRASH", {
@@ -1277,10 +1445,9 @@ export function useBookAppointmentForm({
     }
   }
 
-  async function scheduleAppointmentSideEffects(
+  async function scheduleAppointmentReminders(
+    currentUserId: string,
     savedAppointments: SavedAppointmentForSideEffects[],
-    messageType: "confirmation" | "update",
-    deliveryChoice: AppointmentDeliveryChoice = "text",
   ) {
     const safeSavedAppointments = savedAppointments.filter(
       (appointment) =>
@@ -1290,109 +1457,25 @@ export function useBookAppointmentForm({
     );
 
     if (!safeSavedAppointments.length) return;
-
-    try {
-      if (canUseProFeature("smartReminders")) {
-        const {
-          data: { user },
-        } = await supabase.auth.getUser();
-        const reminderMinutesBefore = user?.id
-          ? await getSavedReminderMinutesBefore(user.id)
-          : 72 * 60;
-
-        await Promise.all(
-          safeSavedAppointments.map((appointment) =>
-            scheduleAppointmentReminder({
-              appointmentId: appointment.id,
-              clientName: appointment.client_name,
-              appointmentDate: appointment.appointment_date,
-              appointmentTime: appointment.appointment_time,
-              reminderMinutesBefore,
-            }),
-          ),
-        );
-      }
-    } catch (error) {
-      logSaveContext("SIDE EFFECT ERROR", {
-        sideEffect: "scheduleAppointmentReminder",
-        errorMessage: getUnknownErrorMessage(error),
-        errorCode: getUnknownErrorCode(error),
-      });
-    }
-
-    const firstAppointment = safeSavedAppointments[0];
-
-    if (firstAppointment?.id && shouldSendText(deliveryChoice)) {
-      void sendAppointmentSmsNonBlocking(firstAppointment.id, messageType);
-    }
-
-    if (
-      messageType === "update" &&
-      firstAppointment?.id &&
-      canUseProFeature("emailMessaging") &&
-      shouldSendEmail(deliveryChoice)
-    ) {
-      void sendAppointmentEmailNonBlocking(firstAppointment.id, messageType);
-    }
-  }
-
-  async function sendAppointmentConfirmationAfterCreate(
-    newAppointment: SavedAppointmentForSideEffects | null | undefined,
-    deliveryChoice: AppointmentDeliveryChoice = "text",
-  ) {
-    if (deliveryChoice === "none") {
+    if (!canUseProFeature("smartReminders")) {
       return;
     }
 
-    if (!newAppointment?.id) {
-      console.log("Message send skipped", "Missing saved appointment ID");
-      return;
-    }
+    const reminderMinutesBefore = await getSavedReminderMinutesBefore(
+      currentUserId,
+    );
 
-    console.log("Appointment created", newAppointment);
-
-    if (shouldSendText(deliveryChoice)) {
-      const payload = {
-        appointment_id: newAppointment.id,
-        client_id: newAppointment.client_id || null,
-        message_type: "confirmation" as const,
-      };
-
-      console.log("Calling send-appointment-sms");
-      console.log("SMS payload", payload);
-
-      try {
-        const data = await sendAppointmentSms(newAppointment.id, "confirmation");
-        console.log("SMS function data", data);
-
-        if (!data.ok && !data.skipped) {
-          console.log("SMS function error", data.message || data.code);
-        }
-      } catch (exception) {
-        console.log("SMS exception", exception);
-      }
-    }
-
-    if (shouldSendEmail(deliveryChoice) && canUseProFeature("emailMessaging")) {
-      try {
-        const data = await sendAppointmentEmail(
-          newAppointment.id,
-          "confirmation",
-        );
-        console.log("Email function data", {
-          ok: data.ok,
-          skipped: data.skipped,
-          code: data.code,
-          providerMessageId: data.providerMessageId,
-        });
-
-        if (!data.ok && !data.skipped) {
-          console.log("Email function error", data.message || data.code);
-        }
-      } catch (exception) {
-        console.log("Email exception", exception);
-      }
-    }
+    await Promise.all(
+      safeSavedAppointments.map((appointment) =>
+        scheduleAppointmentReminder({
+          appointmentId: appointment.id,
+          clientName: appointment.client_name,
+          appointmentDate: appointment.appointment_date,
+          appointmentTime: appointment.appointment_time,
+          reminderMinutesBefore,
+        }),
+      ),
+    );
   }
 
   async function resolveReplyAfterAppointmentSave(currentUserId: string) {
@@ -1430,26 +1513,37 @@ export function useBookAppointmentForm({
 
     const newAppointmentsByMonth = countDatesByMonth(dates);
 
-    for (const [monthKey, newCount] of Object.entries(newAppointmentsByMonth)) {
-      const { start, end } = getMonthBounds(monthKey);
+    const monthCounts = await Promise.all(
+      Object.entries(newAppointmentsByMonth).map(async ([monthKey, newCount]) => {
+        const { start, end } = getMonthBounds(monthKey);
+        const { data, error } = await supabase
+          .from("appointments")
+          .select("id")
+          .eq("user_id", currentUserId)
+          .gte("appointment_date", start)
+          .lte("appointment_date", end)
+          .neq("status", "canceled");
 
-      const { data, error } = await supabase
-        .from("appointments")
-        .select("id")
-        .eq("user_id", currentUserId)
-        .gte("appointment_date", start)
-        .lte("appointment_date", end)
-        .neq("status", "canceled");
+        return {
+          monthKey,
+          newCount,
+          existingCount: (data || []).length,
+          error,
+        };
+      }),
+    );
 
-      if (error) {
-        logSupabaseSaveError("appointments.freeLimit", error);
-        Alert.alert("Error", error.message);
+    for (const monthCount of monthCounts) {
+      if (monthCount.error) {
+        logSupabaseSaveError("appointments.freeLimit", monthCount.error);
+        Alert.alert("Error", monthCount.error.message);
         return false;
       }
 
-      const existingCount = (data || []).length;
-
-      if (existingCount + newCount > FREE_TIER_LIMITS.appointmentsPerMonth) {
+      if (
+        monthCount.existingCount + monthCount.newCount >
+        FREE_TIER_LIMITS.appointmentsPerMonth
+      ) {
         if (requestProAccess) {
           const unlocked = await requestProAccess(PRO_UPSELL_COPY.freeLimit);
           if (unlocked) return true;
@@ -1463,16 +1557,86 @@ export function useBookAppointmentForm({
     return true;
   }
 
+  async function getAvailabilityRulesForSave(
+    currentUserId: string,
+    flowName: string,
+    recurringDateCount: number,
+  ) {
+    const cachedRulesAreFresh =
+      cachedAvailabilityRulesUserIdRef.current === currentUserId &&
+      cachedAvailabilityRulesLoadedAtRef.current !== null &&
+      Date.now() - cachedAvailabilityRulesLoadedAtRef.current < 5 * 60 * 1000;
+
+    if (cachedRulesAreFresh) {
+      logSaveTiming(flowName, "availability query", 0, {
+        recurringDates: recurringDateCount,
+        source: "cache",
+      });
+      return cachedAvailabilityRulesRef.current;
+    }
+
+    const availabilityQueryStartedAt = getSavePerformanceNow();
+    const { data, error } = await supabase
+      .from("availability_rules")
+      .select("day_of_week, is_available, start_time, end_time")
+      .eq("user_id", currentUserId);
+    logSaveTiming(
+      flowName,
+      "availability query",
+      getSavePerformanceNow() - availabilityQueryStartedAt,
+      {
+        recurringDates: recurringDateCount,
+        source: "supabase",
+      },
+    );
+
+    if (error) {
+      throw error;
+    }
+
+    const nextRules = ((data || []).filter(Boolean) ||
+      []) as AvailabilityRuleRecord[];
+    cachedAvailabilityRulesRef.current = nextRules;
+    cachedAvailabilityRulesUserIdRef.current = currentUserId;
+    cachedAvailabilityRulesLoadedAtRef.current = Date.now();
+
+    return nextRules;
+  }
+
+  function groupRowsByDate<T extends Record<string, unknown>>(
+    rows: T[],
+    dateKey: keyof T,
+  ) {
+    const groupedRows = new Map<string, T[]>();
+
+    for (const row of rows) {
+      const date = String(row?.[dateKey] || "").trim();
+      if (!date) continue;
+
+      const currentRows = groupedRows.get(date) || [];
+      currentRows.push(row);
+      groupedRows.set(date, currentRows);
+    }
+
+    return groupedRows;
+  }
+
   async function saveAppointment(
     currentUserId: string,
     safeDate: string,
     options?: {
       deliveryChoice?: AppointmentDeliveryChoice;
       recipients?: CommunicationRecipient[];
+      timing?: SaveTimingState;
     },
   ) {
     const deliveryChoice = options?.deliveryChoice || "text";
     const messageRecipients = options?.recipients || [];
+    const timing = options?.timing;
+    const flowName =
+      timing?.flowName ||
+      `appointment save (${isEditMode ? "edit" : "create"})`;
+    const validationStartedAt = getSavePerformanceNow();
 
     if (!currentUserId) {
       logSaveContext("MISSING USER ID");
@@ -1626,35 +1790,130 @@ export function useBookAppointmentForm({
       return false;
     }
 
-    if (
-      !isEditMode &&
-      !(await canCreateAppointmentsWithinFreeLimit(
+    logSaveTiming(
+      flowName,
+      "validation",
+      getSavePerformanceNow() - validationStartedAt,
+      {
+        recurringDates: recurringDates.length,
+        deliveryChoice,
+      },
+    );
+
+    if (!isEditMode) {
+      const freeLimitStartedAt = getSavePerformanceNow();
+      const canCreateWithinLimit = await canCreateAppointmentsWithinFreeLimit(
         currentUserId,
         recurringDates,
-      ))
-    ) {
-      return false;
+      );
+      logSaveTiming(
+        flowName,
+        "free-limit check",
+        getSavePerformanceNow() - freeLimitStartedAt,
+        {
+          recurringDates: recurringDates.length,
+        },
+      );
+
+      if (!canCreateWithinLimit) {
+        return false;
+      }
     }
 
     const newStartMinutes = timeToMinutes(newStartTime);
     const newEndMinutes = timeToMinutes(newEndTime);
     const appointmentOverlapsByDate = new Map<string, AppointmentOverlap[]>();
-    const { data: availabilityRules, error: availabilityError } =
-      await supabase
-        .from("availability_rules")
-        .select("day_of_week, is_available, start_time, end_time")
-        .eq("user_id", currentUserId);
+    const appointmentConflictQueryStartedAt = getSavePerformanceNow();
+    const blockedTimeQueryStartedAt = getSavePerformanceNow();
 
-    if (availabilityError) {
-      logSupabaseSaveError("availability_rules.availability", availabilityError);
+    let availabilityRules: AvailabilityRuleRecord[] = [];
+    let existingAppointmentsResult: any = null;
+    let blockedTimesResult: any = null;
+
+    try {
+      [availabilityRules, existingAppointmentsResult, blockedTimesResult] =
+        await Promise.all([
+          getAvailabilityRulesForSave(
+            currentUserId,
+            flowName,
+            recurringDates.length,
+          ),
+          supabase
+            .from("appointments")
+            .select(
+              "id, appointment_date, appointment_time, end_time, duration_minutes, status, client_name, service_id, service_ids, service_snapshots",
+            )
+            .eq("user_id", currentUserId)
+            .in("appointment_date", recurringDates)
+            .neq("status", "canceled"),
+          supabase
+            .from("blocked_times")
+            .select("id, block_date, start_time, end_time")
+            .eq("user_id", currentUserId)
+            .in("block_date", recurringDates)
+            .lt("start_time", newEndTime)
+            .gt("end_time", newStartTime),
+        ]);
+    } catch (availabilityError) {
+      logSupabaseSaveError(
+        "availability_rules.availability",
+        availabilityError,
+      );
       Alert.alert("Error", "Could not check business hours.");
       return false;
     }
 
+    logSaveTiming(
+      flowName,
+      "appointment-conflict query",
+      getSavePerformanceNow() - appointmentConflictQueryStartedAt,
+      {
+        recurringDates: recurringDates.length,
+      },
+    );
+    logSaveTiming(
+      flowName,
+      "blocked-time query",
+      getSavePerformanceNow() - blockedTimeQueryStartedAt,
+      {
+        recurringDates: recurringDates.length,
+      },
+    );
+
+    const existingError = existingAppointmentsResult?.error;
+    const blockedError = blockedTimesResult?.error;
+
+    if (existingError) {
+      logSupabaseSaveError("appointments.availability", existingError);
+      Alert.alert("Error", "Could not check appointment availability.");
+      return false;
+    }
+
+    if (blockedError) {
+      logSupabaseSaveError("blocked_times.availability", blockedError);
+      Alert.alert("Error", "Could not check blocked times.");
+      return false;
+    }
+
+    const existingAppointmentsByDate = groupRowsByDate(
+      ((existingAppointmentsResult.data || []).filter(Boolean) || []) as Record<
+        string,
+        unknown
+      >[],
+      "appointment_date",
+    );
+    const blockedTimesByDate = groupRowsByDate(
+      ((blockedTimesResult.data || []).filter(Boolean) || []) as Record<
+        string,
+        unknown
+      >[],
+      "block_date",
+    );
+
     for (const date of recurringDates) {
       const availabilityWindow = getBookingAvailabilityWindow(
         date,
-        availabilityRules || [],
+        availabilityRules,
       );
 
       if (!availabilityWindow.isAvailable) {
@@ -1676,25 +1935,9 @@ export function useBookAppointmentForm({
         return false;
       }
 
-      const { data: existingAppointmentRows, error: existingError } =
-        await supabase
-          .from("appointments")
-          .select(
-            "id, appointment_date, appointment_time, end_time, duration_minutes, status, client_name, service_id, service_ids, service_snapshots",
-          )
-          .eq("user_id", currentUserId)
-          .eq("appointment_date", date)
-          .neq("status", "canceled");
-
-      if (existingError) {
-        logSupabaseSaveError("appointments.availability", existingError);
-        Alert.alert("Error", "Could not check appointment availability.");
-        return false;
-      }
-
-      const existingAppointments = (existingAppointmentRows || []).filter(
-        Boolean,
-      );
+      const existingAppointments = (
+        existingAppointmentsByDate.get(date) || []
+      ).filter(Boolean);
 
       const dateOverlaps = existingAppointments
         .map((appt: any) => {
@@ -1742,20 +1985,7 @@ export function useBookAppointmentForm({
         appointmentOverlapsByDate.set(date, dateOverlaps);
       }
 
-      const { data: blockedTimes, error: blockedError } = await supabase
-        .from("blocked_times")
-        .select("id, start_time, end_time")
-        .eq("user_id", currentUserId)
-        .eq("block_date", date)
-        .lt("start_time", newEndTime)
-        .gt("end_time", newStartTime);
-
-      if (blockedError) {
-        logSupabaseSaveError("blocked_times.availability", blockedError);
-        Alert.alert("Error", "Could not check blocked times.");
-        return false;
-      }
-
+      const blockedTimes = blockedTimesByDate.get(date) || [];
       if (blockedTimes && blockedTimes.length > 0) {
         Alert.alert(
           "Blocked Time",
@@ -1849,15 +2079,89 @@ export function useBookAppointmentForm({
       double_booking_confirmed_at: doubleBookingConfirmedAt,
     };
 
+    const primaryMutationStartedAt = getSavePerformanceNow();
+    logSaveTiming(
+      flowName,
+      "time before supabase mutation",
+      primaryMutationStartedAt - (timing?.saveStartedAt || validationStartedAt),
+      {
+        mode: isEditMode ? "edit" : "create",
+        recurringDates: recurringDates.length,
+      },
+    );
+
+    const createRecipientSavePromise = (
+      appointmentsForRecipients: SavedAppointmentForSideEffects[],
+    ) => {
+      let recipientSavePromise: Promise<void> | null = null;
+
+      return () => {
+        if (
+          messageRecipients.length === 0 ||
+          appointmentsForRecipients.length === 0
+        ) {
+          return Promise.resolve();
+        }
+
+        if (!recipientSavePromise) {
+          recipientSavePromise = (async () => {
+            try {
+              await measureSaveStep(
+                flowName,
+                "communication-recipient save",
+                () =>
+                  Promise.all(
+                    appointmentsForRecipients.map((appointment) =>
+                      saveAppointmentCommunicationRecipients({
+                        userId: currentUserId,
+                        clientId: baseAppointmentData.client_id,
+                        appointmentId: appointment.id,
+                        recipients: messageRecipients,
+                      }),
+                    ),
+                  ),
+                {
+                  appointmentCount: appointmentsForRecipients.length,
+                  recipientCount: messageRecipients.length,
+                },
+              );
+            } catch (recipientError) {
+              logSaveContext("SIDE EFFECT ERROR", {
+                sideEffect: "saveAppointmentCommunicationRecipients",
+                appointmentCount: appointmentsForRecipients.length,
+                recipientCount: messageRecipients.length,
+                errorMessage: getUnknownErrorMessage(recipientError),
+                errorCode: getUnknownErrorCode(recipientError),
+              });
+              console.log(
+                "Appointment recipients save failed",
+                recipientError,
+              );
+            }
+          })();
+        }
+
+        return recipientSavePromise;
+      };
+    };
+
     if (isEditMode && appointmentId) {
-      const { error } = await supabase
-        .from("appointments")
-        .update({
-          ...baseAppointmentData,
-          appointment_date: safeDate,
-        })
-        .eq("id", appointmentId)
-        .eq("user_id", currentUserId);
+      const { error } = await measureSaveStep(
+        flowName,
+        "appointment update",
+        () =>
+          supabase
+            .from("appointments")
+            .update({
+              ...baseAppointmentData,
+              appointment_date: safeDate,
+            })
+            .eq("id", appointmentId)
+            .eq("user_id", currentUserId),
+        {
+          mode: "edit",
+        },
+      );
 
       if (error) {
         logSupabaseSaveError("appointments.update", error);
@@ -1865,34 +2169,154 @@ export function useBookAppointmentForm({
         return false;
       }
 
-      if (messageRecipients.length > 0) {
-        try {
-          await saveAppointmentCommunicationRecipients({
-            userId: currentUserId,
-            clientId: baseAppointmentData.client_id,
-            appointmentId,
-            recipients: messageRecipients,
-          });
-        } catch (recipientError) {
-          console.log("Appointment recipients save failed", recipientError);
-        }
+      if (timing) {
+        timing.postSupabaseStartedAt = getSavePerformanceNow();
       }
 
-      await scheduleAppointmentSideEffects(
-        [
-          {
-            id: appointmentId,
-            client_id: baseAppointmentData.client_id,
-            appointment_date: safeDate,
-            appointment_time: newStartTime,
-            client_name: baseAppointmentData.client_name,
-          },
-        ],
-        "update",
-        deliveryChoice,
+      const updatedAppointment = {
+        id: appointmentId,
+        appointment_date: safeDate,
+        ...baseAppointmentData,
+      } satisfies Record<string, unknown>;
+      const appointmentsForSideEffects = [
+        {
+          id: appointmentId,
+          client_id: baseAppointmentData.client_id,
+          appointment_date: safeDate,
+          appointment_time: newStartTime,
+          client_name: baseAppointmentData.client_name,
+        },
+      ] satisfies SavedAppointmentForSideEffects[];
+      const ensureRecipientSavePromise = createRecipientSavePromise(
+        appointmentsForSideEffects,
       );
 
-      await resolveReplyAfterAppointmentSave(currentUserId);
+      emitAppointmentUpserted([updatedAppointment]);
+
+      queueDeferredTask(timing, () => {
+        void ensureRecipientSavePromise();
+      });
+
+      if (shouldSendText(deliveryChoice)) {
+        queueMeasuredBackgroundSaveTask({
+          timing,
+          flowName,
+          operation: "SMS call",
+          sideEffect: "sendAppointmentSms",
+          context: {
+            appointmentId,
+            messageType: "update",
+            sendPathName: "booking.update.sms",
+          },
+          errorContext: {
+            appointmentId,
+            userId: currentUserId,
+            sendPathName: "booking.update.sms",
+          },
+          run: async () => {
+            await ensureRecipientSavePromise();
+
+            if (__DEV__) {
+              console.log("[AppointmentSMS] save flow send", {
+                appointmentId,
+                appointmentIdFromMutation: appointmentId,
+                appointmentIdMatchesMutation: true,
+                userId: currentUserId,
+                sendPathName: "booking.update.sms",
+              });
+            }
+
+            const result = await sendAppointmentSmsNonBlocking(
+              appointmentId,
+              "update",
+              {
+                sendPathName: "booking.update.sms",
+                userId: currentUserId,
+                appointmentIdFromMutation: appointmentId,
+              },
+            );
+
+            if (__DEV__) {
+              console.log("SMS function data", {
+                appointmentId,
+                sendPathName: "booking.update.sms",
+                ok: result.ok,
+                skipped: result.skipped,
+                code: result.code,
+                message: result.message,
+              });
+            }
+          },
+        });
+      }
+
+      if (
+        shouldSendEmail(deliveryChoice) &&
+        canUseProFeature("emailMessaging")
+      ) {
+        queueMeasuredBackgroundSaveTask({
+          timing,
+          flowName,
+          operation: "email send",
+          sideEffect: "sendAppointmentEmail",
+          context: {
+            appointmentId,
+            messageType: "update",
+          },
+          errorContext: {
+            appointmentId,
+            userId: currentUserId,
+          },
+          run: async () => {
+            await ensureRecipientSavePromise();
+
+            const result = await sendAppointmentEmailNonBlocking(
+              appointmentId,
+              "update",
+            );
+
+            if (__DEV__) {
+              console.log("Email function data", {
+                appointmentId,
+                ok: result.ok,
+                skipped: result.skipped,
+                code: result.code,
+                providerMessageId: result.providerMessageId,
+              });
+            }
+          },
+        });
+      }
+
+      queueMeasuredBackgroundSaveTask({
+        timing,
+        flowName,
+        operation: "reminder scheduling",
+        sideEffect: "scheduleAppointmentReminder",
+        context: {
+          appointmentCount: appointmentsForSideEffects.length,
+          messageType: "update",
+        },
+        errorContext: {
+          userId: currentUserId,
+        },
+        run: () =>
+          scheduleAppointmentReminders(
+            currentUserId,
+            appointmentsForSideEffects,
+          ),
+      });
+
+      queueMeasuredBackgroundSaveTask({
+        timing,
+        flowName,
+        operation: "reply resolution",
+        sideEffect: "resolveReplyAfterAppointmentSave",
+        errorContext: {
+          userId: currentUserId,
+        },
+        run: () => resolveReplyAfterAppointmentSave(currentUserId),
+      });
 
       return true;
     }
@@ -1916,10 +2340,21 @@ export function useBookAppointmentForm({
         ),
     );
 
-    const { data: insertedAppointments, error } = await supabase
-      .from("appointments")
-      .insert(uniqueAppointments)
-      .select("id, client_id, appointment_date, appointment_time, client_name");
+    const { data: insertedAppointments, error } = await measureSaveStep(
+      flowName,
+      "appointment insert",
+      () =>
+        supabase
+          .from("appointments")
+          .insert(uniqueAppointments)
+          .select(
+            "id, client_id, appointment_date, appointment_time, client_name",
+          ),
+      {
+        appointmentCount: uniqueAppointments.length,
+        mode: "create",
+      },
+    );
 
     if (error) {
       logSupabaseSaveError("appointments.insert", error);
@@ -1927,39 +2362,203 @@ export function useBookAppointmentForm({
       return false;
     }
 
-    const createdAppointments = (insertedAppointments ||
-      []) as SavedAppointmentForSideEffects[];
-    const newAppointment = createdAppointments[0];
-
-    if (messageRecipients.length > 0) {
-      await Promise.all(
-        createdAppointments.map((appointment) =>
-          saveAppointmentCommunicationRecipients({
-            userId: currentUserId,
-            clientId: baseAppointmentData.client_id,
-            appointmentId: appointment.id,
-            recipients: messageRecipients,
-          }).catch((recipientError) => {
-            console.log("Appointment recipients save failed", recipientError);
-          }),
-        ),
-      );
+    if (timing) {
+      timing.postSupabaseStartedAt = getSavePerformanceNow();
     }
 
-    await sendAppointmentConfirmationAfterCreate(newAppointment, deliveryChoice);
+    const createdAppointments = (insertedAppointments ||
+      []) as SavedAppointmentForSideEffects[];
+    const createdAppointmentIdsByKey = new Map(
+      createdAppointments.map((appointment) => [
+        `${appointment.appointment_date}|${appointment.appointment_time}`,
+        appointment,
+      ]),
+    );
+    const appointmentsForUi = uniqueAppointments
+      .map((appointment) => {
+        const insertedAppointment = createdAppointmentIdsByKey.get(
+          `${appointment.appointment_date}|${appointment.appointment_time}`,
+        );
+        const appointmentId = String(insertedAppointment?.id || "").trim();
 
-    await scheduleAppointmentSideEffects(
-      createdAppointments,
-      "confirmation",
-      deliveryChoice,
+        if (!appointmentId) {
+          return null;
+        }
+
+        return {
+          id: appointmentId,
+          ...appointment,
+          client_id:
+            insertedAppointment?.client_id || appointment.client_id || null,
+          client_name:
+            insertedAppointment?.client_name || appointment.client_name || null,
+        } as Record<string, unknown>;
+      })
+      .filter(Boolean) as Record<string, unknown>[];
+    const appointmentsForSideEffects = appointmentsForUi.map((appointment) => ({
+      id: String(appointment.id || "").trim(),
+      client_id: String(appointment.client_id || "").trim() || null,
+      appointment_date: String(appointment.appointment_date || "").trim(),
+      appointment_time: String(appointment.appointment_time || "").trim(),
+      client_name: String(appointment.client_name || "").trim() || null,
+    }));
+    const newAppointment = appointmentsForSideEffects[0];
+    const ensureRecipientSavePromise = createRecipientSavePromise(
+      appointmentsForSideEffects,
     );
 
-    await resolveReplyAfterAppointmentSave(currentUserId);
+    if (__DEV__) {
+      console.log("Appointment insert returned", {
+        userId: currentUserId,
+        appointmentIds: appointmentsForSideEffects.map(
+          (appointment) => appointment.id,
+        ),
+        sendPathName: "booking.create.confirmation",
+      });
+    }
+
+    emitAppointmentUpserted(appointmentsForUi);
+
+    queueDeferredTask(timing, () => {
+      void ensureRecipientSavePromise();
+    });
+
+    if (deliveryChoice !== "none" && newAppointment?.id) {
+      if (shouldSendText(deliveryChoice)) {
+        queueMeasuredBackgroundSaveTask({
+          timing,
+          flowName,
+          operation: "SMS call",
+          sideEffect: "sendAppointmentSms",
+          context: {
+            appointmentId: newAppointment.id,
+            messageType: "confirmation",
+            sendPathName: "booking.create.confirmation",
+          },
+          errorContext: {
+            appointmentId: newAppointment.id,
+            userId: currentUserId,
+            sendPathName: "booking.create.confirmation",
+          },
+          run: async () => {
+            await ensureRecipientSavePromise();
+
+            if (__DEV__) {
+              console.log("[AppointmentSMS] save flow send", {
+                appointmentId: newAppointment.id,
+                appointmentIdFromMutation: newAppointment.id,
+                appointmentIdMatchesMutation: true,
+                userId: currentUserId,
+                sendPathName: "booking.create.confirmation",
+              });
+            }
+
+            const result = await sendAppointmentSmsNonBlocking(
+              newAppointment.id,
+              "confirmation",
+              {
+                sendPathName: "booking.create.confirmation",
+                userId: currentUserId,
+                appointmentIdFromMutation: newAppointment.id,
+              },
+            );
+
+            if (__DEV__) {
+              console.log("SMS function data", {
+                appointmentId: newAppointment.id,
+                sendPathName: "booking.create.confirmation",
+                ok: result.ok,
+                skipped: result.skipped,
+                code: result.code,
+                message: result.message,
+              });
+            }
+          },
+        });
+      }
+
+      if (
+        shouldSendEmail(deliveryChoice) &&
+        canUseProFeature("emailMessaging")
+      ) {
+        queueMeasuredBackgroundSaveTask({
+          timing,
+          flowName,
+          operation: "email send",
+          sideEffect: "sendAppointmentEmail",
+          context: {
+            appointmentId: newAppointment.id,
+            messageType: "confirmation",
+          },
+          errorContext: {
+            appointmentId: newAppointment.id,
+            userId: currentUserId,
+          },
+          run: async () => {
+            await ensureRecipientSavePromise();
+
+            const result = await sendAppointmentEmailNonBlocking(
+              newAppointment.id,
+              "confirmation",
+            );
+
+            if (__DEV__) {
+              console.log("Email function data", {
+                appointmentId: newAppointment.id,
+                ok: result.ok,
+                skipped: result.skipped,
+                code: result.code,
+                providerMessageId: result.providerMessageId,
+              });
+            }
+          },
+        });
+      }
+    }
+
+    queueMeasuredBackgroundSaveTask({
+      timing,
+      flowName,
+      operation: "reminder scheduling",
+      sideEffect: "scheduleAppointmentReminder",
+      context: {
+        appointmentCount: appointmentsForSideEffects.length,
+        messageType: "confirmation",
+      },
+      errorContext: {
+        userId: currentUserId,
+      },
+      run: () =>
+        scheduleAppointmentReminders(
+          currentUserId,
+          appointmentsForSideEffects,
+        ),
+    });
+
+    queueMeasuredBackgroundSaveTask({
+      timing,
+      flowName,
+      operation: "reply resolution",
+      sideEffect: "resolveReplyAfterAppointmentSave",
+      errorContext: {
+        userId: currentUserId,
+      },
+      run: () => resolveReplyAfterAppointmentSave(currentUserId),
+    });
 
     return true;
   }
 
-  async function saveCalendarBlock(currentUserId: string, safeDate: string) {
+  async function saveCalendarBlock(
+    currentUserId: string,
+    safeDate: string,
+    timing?: SaveTimingState,
+  ) {
+    const flowName =
+      timing?.flowName ||
+      `calendar block save (${blockId ? "edit" : "create"})`;
+    const validationStartedAt = getSavePerformanceNow();
+
     if (!canUseProFeature("customBusinessHours")) {
       if (requestProAccess) {
         const unlocked = await requestProAccess(
@@ -1987,12 +2586,30 @@ export function useBookAppointmentForm({
       return false;
     }
 
+    logSaveTiming(
+      flowName,
+      "validation",
+      getSavePerformanceNow() - validationStartedAt,
+      {
+        entryType,
+      },
+    );
+
+    const appointmentConflictStartedAt = getSavePerformanceNow();
     const appointmentsResult = await supabase
       .from("appointments")
       .select("*")
       .eq("user_id", currentUserId)
       .eq("appointment_date", safeDate)
       .neq("status", "canceled");
+    logSaveTiming(
+      flowName,
+      "appointment-conflict query",
+      getSavePerformanceNow() - appointmentConflictStartedAt,
+      {
+        entryType,
+      },
+    );
 
     if (appointmentsResult.error) {
       Alert.alert("Error", appointmentsResult.error.message);
@@ -2041,6 +2658,7 @@ export function useBookAppointmentForm({
       }
     }
 
+    const blockedTimeQueryStartedAt = getSavePerformanceNow();
     const { data: overlappingBlocks, error: blockConflictError } =
       await supabase
         .from("blocked_times")
@@ -2049,6 +2667,14 @@ export function useBookAppointmentForm({
         .eq("block_date", safeDate)
         .lt("start_time", safeEndTime)
         .gt("end_time", safeStartTime);
+    logSaveTiming(
+      flowName,
+      "blocked-time query",
+      getSavePerformanceNow() - blockedTimeQueryStartedAt,
+      {
+        entryType,
+      },
+    );
 
     if (blockConflictError) {
       Alert.alert("Error", blockConflictError.message);
@@ -2073,26 +2699,62 @@ export function useBookAppointmentForm({
       notes: null,
     };
 
+    const primaryMutationStartedAt = getSavePerformanceNow();
+    logSaveTiming(
+      flowName,
+      "time before supabase mutation",
+      primaryMutationStartedAt - (timing?.saveStartedAt || validationStartedAt),
+      {
+        entryType,
+        mode: blockId ? "edit" : "create",
+      },
+    );
+
     if (blockId) {
-      const { error } = await supabase
-        .from("blocked_times")
-        .update(blockData)
-        .eq("id", blockId)
-        .eq("user_id", currentUserId);
+      const { error } = await measureSaveStep(
+        flowName,
+        "blocked-time update",
+        () =>
+          supabase
+            .from("blocked_times")
+            .update(blockData)
+            .eq("id", blockId)
+            .eq("user_id", currentUserId),
+        {
+          entryType,
+          mode: "edit",
+        },
+      );
 
       if (error) {
         Alert.alert("Error", error.message);
         return false;
       }
 
+      if (timing) {
+        timing.postSupabaseStartedAt = getSavePerformanceNow();
+      }
+
       return true;
     }
 
-    const { error } = await supabase.from("blocked_times").insert(blockData);
+    const { error } = await measureSaveStep(
+      flowName,
+      "blocked-time insert",
+      () => supabase.from("blocked_times").insert(blockData),
+      {
+        entryType,
+        mode: "create",
+      },
+    );
 
     if (error) {
       Alert.alert("Error", error.message);
       return false;
+    }
+
+    if (timing) {
+      timing.postSupabaseStartedAt = getSavePerformanceNow();
     }
 
     return true;
@@ -2107,7 +2769,7 @@ export function useBookAppointmentForm({
     calendarIntervalMinutes,
     loading,
     saving,
-    userId,
+    userId: sessionUserId || "",
 
     repeatType,
     setRepeatType,

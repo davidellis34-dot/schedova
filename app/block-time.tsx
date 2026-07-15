@@ -19,6 +19,12 @@ import {
   PRO_UPSELL_COPY,
   showProUpgradePrompt,
 } from "../lib/proUpsell";
+import {
+  getSavePerformanceNow,
+  logSaveTiming,
+  measureSaveStep,
+  scheduleSaveCompletionTiming,
+} from "../lib/savePerformance";
 import { supabase } from "../lib/supabase";
 import { useAppTheme } from "../lib/useAppTheme";
 
@@ -275,6 +281,10 @@ export default function BlockTimeScreen() {
   async function saveBlock() {
     if (saving) return;
 
+    const flowName = `blocked time save (${blockType})`;
+    const saveStartedAt = getSavePerformanceNow();
+    const validationStartedAt = getSavePerformanceNow();
+    let postSupabaseStartedAt: number | null = null;
     if (!customScheduleAvailable) {
       if (ENABLE_PRO) {
         showProUpgradePrompt(PRO_UPSELL_COPY.blockedTime);
@@ -300,16 +310,27 @@ export default function BlockTimeScreen() {
       return;
     }
 
+    logSaveTiming(
+      flowName,
+      "validation",
+      getSavePerformanceNow() - validationStartedAt,
+    );
+
     setSaving(true);
 
     try {
-      const { data: userData } = await supabase.auth.getUser();
+      const { data: userData } = await measureSaveStep(
+        flowName,
+        "auth lookup",
+        () => supabase.auth.getUser(),
+      );
       const userId = userData.user?.id;
       if (!userId) {
         Alert.alert("Login Required", "You must be logged in.");
         return;
       }
 
+      const appointmentQueryStartedAt = getSavePerformanceNow();
       const { data: overlappingAppointments, error: appointmentError } =
         await supabase
           .from("appointments")
@@ -317,6 +338,14 @@ export default function BlockTimeScreen() {
           .eq("user_id", userId)
           .eq("appointment_date", blockDate)
           .neq("status", "canceled");
+      logSaveTiming(
+        flowName,
+        "pre-save queries",
+        getSavePerformanceNow() - appointmentQueryStartedAt,
+        {
+          operation: "appointment overlap query",
+        },
+      );
 
       if (appointmentError) {
         Alert.alert("Error", appointmentError.message);
@@ -350,6 +379,7 @@ export default function BlockTimeScreen() {
         return;
       }
 
+      const blockedTimeQueryStartedAt = getSavePerformanceNow();
       const { data: overlappingBlocks, error: blockError } = await supabase
         .from("blocked_times")
         .select("id")
@@ -357,6 +387,11 @@ export default function BlockTimeScreen() {
         .eq("block_date", blockDate)
         .lt("start_time", endTime)
         .gt("end_time", startTime);
+      logSaveTiming(
+        flowName,
+        "blocked-time query",
+        getSavePerformanceNow() - blockedTimeQueryStartedAt,
+      );
 
       if (blockError) {
         Alert.alert("Error", blockError.message);
@@ -368,21 +403,37 @@ export default function BlockTimeScreen() {
         return;
       }
 
-      const { error } = await supabase.from("blocked_times").insert({
-        user_id: userId,
-        title,
-        block_date: blockDate,
-        start_time: startTime,
-        end_time: endTime,
-        block_type: blockType,
-        notes,
-      });
+      const mutationStartedAt = getSavePerformanceNow();
+      logSaveTiming(
+        flowName,
+        "time before supabase request starts",
+        mutationStartedAt - saveStartedAt,
+      );
+
+      const { error } = await measureSaveStep(
+        flowName,
+        "supabase request duration",
+        () =>
+          supabase.from("blocked_times").insert({
+            user_id: userId,
+            title,
+            block_date: blockDate,
+            start_time: startTime,
+            end_time: endTime,
+            block_type: blockType,
+            notes,
+          }),
+      );
 
       if (error) {
         Alert.alert("Error", error.message);
         return;
       }
 
+      postSupabaseStartedAt = getSavePerformanceNow();
+      scheduleSaveCompletionTiming(flowName, saveStartedAt, {
+        postSupabaseStartedAt,
+      });
       router.back();
     } finally {
       setSaving(false);

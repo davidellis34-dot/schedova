@@ -10,6 +10,12 @@ import {
   createSchedovaUiTheme,
 } from "../components/ui";
 import { useAuthSession } from "../lib/authSession";
+import {
+  getSavePerformanceNow,
+  logSaveTiming,
+  measureSaveStep,
+  scheduleSaveCompletionTiming,
+} from "../lib/savePerformance";
 import { supabase } from "../lib/supabase";
 import { useAppTheme } from "../lib/useAppTheme";
 
@@ -26,6 +32,10 @@ export default function BusinessSetup() {
   async function handleSave() {
     if (saving) return;
 
+    const flowName = "business setup save";
+    const saveStartedAt = getSavePerformanceNow();
+    const validationStartedAt = getSavePerformanceNow();
+    let postSupabaseStartedAt: number | null = null;
     setSaving(true);
     setErrorMessage("");
 
@@ -42,17 +52,37 @@ export default function BusinessSetup() {
         );
         return;
       }
+
       if (!businessName.trim()) {
         const message = "Enter your business name.";
         setErrorMessage(message);
         Alert.alert("Missing Info", message);
         return;
       }
-      const { error } = await supabase.from("businesses").insert({
-        user_id: userId,
-        business_name: businessName,
-        category,
-      });
+
+      logSaveTiming(
+        flowName,
+        "validation",
+        getSavePerformanceNow() - validationStartedAt,
+      );
+
+      const mutationStartedAt = getSavePerformanceNow();
+      logSaveTiming(
+        flowName,
+        "time before supabase request starts",
+        mutationStartedAt - saveStartedAt,
+      );
+
+      const { error } = await measureSaveStep(
+        flowName,
+        "supabase request duration",
+        () =>
+          supabase.from("businesses").insert({
+            user_id: userId,
+            business_name: businessName,
+            category,
+          }),
+      );
 
       if (error) {
         setErrorMessage(error.message);
@@ -60,6 +90,10 @@ export default function BusinessSetup() {
         return;
       }
 
+      postSupabaseStartedAt = getSavePerformanceNow();
+      scheduleSaveCompletionTiming(flowName, saveStartedAt, {
+        postSupabaseStartedAt,
+      });
       router.replace("/dashboard" as any);
     } catch (error) {
       console.log("Business setup save failed", error);
