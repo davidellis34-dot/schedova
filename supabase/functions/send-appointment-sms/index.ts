@@ -5,6 +5,12 @@ import {
   isCountryRegionCode,
   normalizePhoneForSms,
 } from "../../../lib/phoneNumbers.ts";
+import { getMessageSenderDisplayName } from "../../../lib/messageSender.ts";
+import {
+  formatAppointmentDate,
+  formatAppointmentTime,
+  getBusinessName,
+} from "../_shared/emailMessages.ts";
 import {
   confirmMessageCreditReservation,
   refundMessageCreditReservation,
@@ -156,36 +162,35 @@ function messageEnabledKey(messageType: AppointmentSmsMessageType) {
   }
 }
 
-function formatAppointmentTime(value: string | null | undefined) {
-  const time = asTrimmedString(value).slice(0, 5);
-  return time || "your appointment time";
-}
-
 function buildSmsBody({
   clientName,
   appointmentDate,
   appointmentTime,
   messageType,
+  senderName,
 }: {
   clientName: string;
   appointmentDate: string;
   appointmentTime: string;
   messageType: AppointmentSmsMessageType;
+  senderName: string;
 }) {
   const name = clientName || "there";
+  const sender = senderName || "Schedova Appointment";
+  const date = formatAppointmentDate(appointmentDate);
   const time = formatAppointmentTime(appointmentTime);
   const replyInstructions =
-    "Reply YES to confirm, or reply NO if you need to reschedule.";
+    "Reply YES to confirm, NO if you need to reschedule, or CANCEL to cancel.";
 
   switch (messageType) {
     case "confirmation":
-      return `Hi ${name}, confirming your appointment on ${appointmentDate} at ${time}. ${replyInstructions}`;
+      return `Hi ${name}, this is ${sender} confirming your appointment on ${date} at ${time}.\n\n${replyInstructions}`;
     case "update":
-      return `Hi ${name}, your appointment has been updated to ${appointmentDate} at ${time}. Reply here if you need help.`;
+      return `Hi ${name}, this is ${sender}. Your appointment has been updated to ${date} at ${time}. Reply here if you need help.`;
     case "cancellation":
-      return `Hi ${name}, your appointment on ${appointmentDate} at ${time} has been canceled. Reply here if you need to reschedule.`;
+      return `Hi ${name}, this is ${sender}. Your appointment on ${date} at ${time} has been canceled. Reply here if you need to reschedule.`;
     case "reminder":
-      return `Hi ${name}, this is a reminder for your appointment on ${appointmentDate} at ${time}. ${replyInstructions}`;
+      return `Hi ${name}, this is ${sender} reminding you about your appointment on ${date} at ${time}.\n\n${replyInstructions}`;
   }
 }
 
@@ -793,11 +798,18 @@ Deno.serve(async (req) => {
     });
   }
 
+  const { businessName } = await getBusinessName(serviceClient, user.id);
+  const senderName = getMessageSenderDisplayName({
+    businessName,
+    user,
+  });
+
   const smsBody = buildSmsBody({
     clientName: asTrimmedString(client.name || appointment.client_name) || "there",
     appointmentDate: asTrimmedString(appointment.appointment_date),
     appointmentTime: asTrimmedString(appointment.appointment_time),
     messageType,
+    senderName,
   });
 
   const logPayloadFor = ({

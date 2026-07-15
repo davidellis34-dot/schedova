@@ -53,6 +53,7 @@ import {
   renderMessageTemplate,
   type MessageTemplate,
 } from "../lib/messageTemplates";
+import { getMessageSenderDisplayName } from "../lib/messageSender";
 import {
   openSchedovaProScreen,
   PRO_UPSELL_COPY,
@@ -431,7 +432,9 @@ export default function ClientDetailsScreen() {
   const [client, setClient] = useState<ClientRecord | null>(null);
   const [appointments, setAppointments] = useState<AppointmentRecord[]>([]);
   const [services, setServices] = useState<ServiceRecord[]>([]);
-  const [businessName, setBusinessName] = useState("");
+  const [messageSenderName, setMessageSenderName] = useState(
+    "Schedova Appointment",
+  );
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
   const [messageModalVisible, setMessageModalVisible] = useState(false);
@@ -517,14 +520,19 @@ export default function ClientDetailsScreen() {
           appointment.client_id === clientIdValue ||
           appointment.client_name === clientData?.name,
       );
+      const nextBusinessName =
+        typeof businessData?.business_name === "string"
+          ? businessData.business_name
+          : "";
 
       setClient(clientData as ClientRecord);
       setAppointments(filteredAppointments as AppointmentRecord[]);
       setServices((serviceData ?? []) as ServiceRecord[]);
-      setBusinessName(
-        typeof businessData?.business_name === "string"
-          ? businessData.business_name
-          : "",
+      setMessageSenderName(
+        getMessageSenderDisplayName({
+          businessName: nextBusinessName,
+          user,
+        }),
       );
     } catch (fetchError) {
       console.error("Failed to load client details:", fetchError);
@@ -707,10 +715,10 @@ export default function ClientDetailsScreen() {
         ? formatTime(appointmentTime)
         : null,
       service_name: serviceNames || null,
-      business_name: businessName || "your business",
+      business_name: messageSenderName,
       add_to_schedova_link: addToSchedovaLink,
     };
-  }, [businessName, clientIdValue, clientName, messageAppointment, services]);
+  }, [clientIdValue, clientName, messageAppointment, messageSenderName, services]);
 
   const renderedMessage = selectedTemplate
     ? renderMessageTemplate(getTemplateBody(selectedTemplate), messageTemplateValues)

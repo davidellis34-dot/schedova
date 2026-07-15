@@ -37,7 +37,7 @@ export const BUILT_IN_MESSAGE_TEMPLATES: MessageTemplate[] = [
     category: "Confirmation",
     source: "builtin",
     body:
-      "Hi {client_name}, confirming your appointment for {appointment_date} at {appointment_time}. Reply here if you need to make a change.",
+      "Hi {client_name}, this is {business_name} confirming your appointment for {appointment_date} at {appointment_time}.\n\nReply YES to confirm, NO if you need to reschedule, or CANCEL to cancel.",
   },
   {
     id: "builtin_running_late",
@@ -45,7 +45,7 @@ export const BUILT_IN_MESSAGE_TEMPLATES: MessageTemplate[] = [
     category: "Update",
     source: "builtin",
     body:
-      "Hi {client_name}, I am running a few minutes late and will update you if that changes. Thank you for your patience.",
+      "Hi {client_name}, this is {business_name}. We are running a few minutes late and will update you if that changes. Thank you for your patience.",
   },
   {
     id: "builtin_cancellation",
@@ -53,7 +53,7 @@ export const BUILT_IN_MESSAGE_TEMPLATES: MessageTemplate[] = [
     category: "Update",
     source: "builtin",
     body:
-      "Hi {client_name}, we need to cancel or reschedule your appointment on {appointment_date}. Please reply with a time that works for you.",
+      "Hi {client_name}, this is {business_name}. We need to cancel or reschedule your appointment on {appointment_date}. Please reply with a time that works for you.",
   },
 ];
 

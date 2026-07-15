@@ -5,6 +5,12 @@ import {
   isCountryRegionCode,
   normalizePhoneForSms,
 } from "../../../lib/phoneNumbers.ts";
+import { getMessageSenderDisplayName } from "../../../lib/messageSender.ts";
+import {
+  formatAppointmentDate,
+  formatAppointmentTime,
+  getBusinessName,
+} from "../_shared/emailMessages.ts";
 import {
   confirmMessageCreditReservation,
   refundMessageCreditReservation,
@@ -268,24 +274,25 @@ function zonedTimeToUtc(dateText: string, timeText: string, timeZone: string) {
   return new Date(utcMs);
 }
 
-function formatAppointmentTime(value: string | null | undefined) {
-  const time = asTrimmedString(value).slice(0, 5);
-  return time || "your appointment time";
-}
-
 function buildSmsBody({
   clientName,
   appointmentDate,
   appointmentTime,
+  senderName,
 }: {
   clientName: string;
   appointmentDate: string;
   appointmentTime: string;
+  senderName: string;
 }) {
   const name = clientName || "there";
+  const sender = senderName || "Schedova Appointment";
+  const date = formatAppointmentDate(appointmentDate);
   const time = formatAppointmentTime(appointmentTime);
+  const replyInstructions =
+    "Reply YES to confirm, NO if you need to reschedule, or CANCEL to cancel.";
 
-  return `Hi ${name}, this is a reminder for your appointment on ${appointmentDate} at ${time}. Reply here if you need to make a change.`;
+  return `Hi ${name}, this is ${sender} reminding you about your appointment on ${date} at ${time}.\n\n${replyInstructions}`;
 }
 
 function extractTelnyxProviderMessageId(telnyxBody: unknown) {
@@ -628,6 +635,25 @@ Deno.serve(async (req: Request) => {
     const countryRegion = isCountryRegionCode(userSettings?.country_region)
       ? userSettings.country_region
       : DEFAULT_COUNTRY_REGION;
+    const { businessName } = await getBusinessName(serviceClient, userId);
+    let senderName = getMessageSenderDisplayName({
+      businessName,
+      user: null,
+    });
+
+    try {
+      const authResult = await serviceClient.auth.admin.getUserById(userId);
+      senderName = getMessageSenderDisplayName({
+        businessName,
+        user: authResult.data.user || null,
+      });
+    } catch (error) {
+      console.error("auth user lookup failed for reminder worker", {
+        userId,
+        error: serializeDetails(error),
+      });
+    }
+
     const queryStartDate = toDateOnly(
       new Date(now.getTime() - 48 * 60 * 60 * 1000),
     );
@@ -848,6 +874,7 @@ Deno.serve(async (req: Request) => {
           "there",
         appointmentDate,
         appointmentTime,
+        senderName,
       });
       const reservationResult = await reserveMessageCredit(serviceClient, {
         userId,

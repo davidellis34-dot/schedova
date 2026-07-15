@@ -323,19 +323,39 @@ export async function getBusinessName(
   serviceClient: SupabaseServiceClient,
   userId: string,
 ) {
-  const { data } = await serviceClient
+  const { data: businessProfileData } = await serviceClient
     .from("business_profiles")
     .select("business_name, phone, email")
     .eq("user_id", userId)
     .maybeSingle();
 
-  const row = (data || {}) as JsonObject;
+  const businessProfileRow = (businessProfileData || {}) as JsonObject;
+  const businessProfileName = asTrimmedString(
+    businessProfileRow.business_name,
+  );
+  let legacyBusinessName = "";
+
+  if (!businessProfileName) {
+    const { data: businessData } = await serviceClient
+      .from("businesses")
+      .select("business_name")
+      .eq("user_id", userId)
+      .limit(1)
+      .maybeSingle();
+
+    legacyBusinessName = asTrimmedString(
+      (businessData as JsonObject | null)?.business_name,
+    );
+  }
 
   return {
     businessName:
-      asTrimmedString(row.business_name) || "your business",
+      businessProfileName || legacyBusinessName || "your business",
     businessContact:
-      [asTrimmedString(row.phone), asTrimmedString(row.email)]
+      [
+        asTrimmedString(businessProfileRow.phone),
+        asTrimmedString(businessProfileRow.email),
+      ]
         .filter(Boolean)
         .join(" / ") || null,
   };

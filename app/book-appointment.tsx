@@ -56,6 +56,7 @@ import {
   renderMessageTemplate,
   type MessageTemplate,
 } from "../lib/messageTemplates";
+import { getMessageSenderDisplayName } from "../lib/messageSender";
 import {
   PRO_UPSELL_COPY,
   showProUpgradePrompt,
@@ -397,6 +398,8 @@ export default function BookAppointmentScreen() {
   >([]);
   const [appointmentMessageClient, setAppointmentMessageClient] =
     useState<AppointmentMessageClient | null>(null);
+  const [appointmentMessageSenderName, setAppointmentMessageSenderName] =
+    useState("Schedova Appointment");
   const [androidTabletSmsFallback, setAndroidTabletSmsFallback] =
     useState<AndroidTabletSmsFallback | null>(null);
 
@@ -584,10 +587,11 @@ export default function BookAppointmentScreen() {
       appointment_date: formatTemplateDate(form.appointmentDate),
       appointment_time: formatTemplateTime(form.startTime),
       service_name: serviceNames || null,
-      business_name: "your business",
+      business_name: appointmentMessageSenderName,
       add_to_schedova_link: addToSchedovaLink,
     });
   }, [
+    appointmentMessageSenderName,
     appointmentMessageClient?.name,
     form.appointmentDate,
     form.selectedClient,
@@ -621,13 +625,23 @@ export default function BookAppointmentScreen() {
         return;
       }
 
-      const [customTemplates, { data: clientData }] = await Promise.all([
+      const [
+        customTemplates,
+        { data: clientData },
+        { data: businessData },
+      ] = await Promise.all([
         fetchCustomMessageTemplates(user.id),
         supabase
           .from("clients")
           .select("*")
           .eq("id", form.selectedClient)
           .eq("user_id", user.id)
+          .maybeSingle(),
+        supabase
+          .from("businesses")
+          .select("business_name")
+          .eq("user_id", user.id)
+          .limit(1)
           .maybeSingle(),
       ]);
       const nextTemplates = [
@@ -650,6 +664,15 @@ export default function BookAppointmentScreen() {
         };
 
       setAppointmentMessageClient(nextMessageClient);
+      setAppointmentMessageSenderName(
+        getMessageSenderDisplayName({
+          businessName:
+            typeof businessData?.business_name === "string"
+              ? businessData.business_name
+              : "",
+          user,
+        }),
+      );
       setManualMessageChannel(getInitialManualMessageChannel(nextMessageClient));
       setManualEmailSubject(selectedTemplate?.title || "Appointment message");
     } catch (error) {
