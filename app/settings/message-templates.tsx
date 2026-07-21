@@ -23,7 +23,11 @@ import {
   type MessageTemplate,
   updateCustomMessageTemplate,
 } from "../../lib/messageTemplates";
-import { openSchedovaProScreen, PRO_UPSELL_COPY } from "../../lib/proUpsell";
+import {
+  openSchedovaProScreen,
+  PRO_UPSELL_COPY,
+  showProUpgradePrompt,
+} from "../../lib/proUpsell";
 import {
   getSavePerformanceNow,
   logSaveTiming,
@@ -117,7 +121,7 @@ export default function MessageTemplatesScreen() {
       return true;
     }
 
-    openSchedovaProScreen();
+    showProUpgradePrompt(PRO_UPSELL_COPY.messageTemplates);
     return false;
   }
 
@@ -184,7 +188,7 @@ export default function MessageTemplatesScreen() {
     }
 
     if (!customTemplatesAvailable) {
-      openSchedovaProScreen();
+      showProUpgradePrompt(PRO_UPSELL_COPY.messageTemplates);
       return;
     }
 

@@ -18,11 +18,8 @@ import {
   ScreenHeader,
 } from "../components/ui";
 import { confirmDestructiveAction } from "../lib/confirmDestructiveAction";
-import {
-  canUseFeature,
-  FREE_TIER_LIMITS,
-  useFeatureAccess,
-} from "../lib/featureAccess";
+import { canUseFeature, useFeatureAccess } from "../lib/featureAccess";
+import { FREE_TIER_LIMITS } from "../lib/freePlanLimits";
 import { PRO_UPSELL_COPY, showProUpgradePrompt } from "../lib/proUpsell";
 import {
   getSavePerformanceNow,
@@ -201,7 +198,7 @@ export default function AddServiceScreen() {
         !canUseFeature("moreServices") &&
         services.length >= FREE_TIER_LIMITS.services
       ) {
-        showProUpgradePrompt(PRO_UPSELL_COPY.freeLimit);
+        showProUpgradePrompt(PRO_UPSELL_COPY.moreServices);
         return;
       }
 

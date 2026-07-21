@@ -28,12 +28,23 @@ import {
 import { normalizePhoneForSmsWithUserDefault } from "../../lib/countrySettings";
 import {
   canUseFeature,
-  FREE_TIER_LIMITS,
   useFeatureAccess,
 } from "../../lib/featureAccess";
+import {
+  countActiveClients,
+  countDatesByMonth,
+  FREE_TIER_LIMITS,
+  getAppointmentCreationAccess,
+  getClientCreationAccess,
+  getLocalMonthBounds,
+} from "../../lib/freePlanLimits";
 import { resolveClientReply } from "../../lib/clientReplies";
 import { scheduleAppointmentReminder } from "../../lib/localNotifications";
-import { PRO_UPSELL_COPY, showProUpgradePrompt } from "../../lib/proUpsell";
+import {
+  PRO_UPSELL_COPY,
+  showFreePlanUpgradePrompt,
+  showProUpgradePrompt,
+} from "../../lib/proUpsell";
 import {
   getSavePerformanceNow,
   logSaveTiming,
@@ -263,28 +274,6 @@ function toDateOnly(date: Date) {
     2,
     "0",
   )}-${String(date.getDate()).padStart(2, "0")}`;
-}
-
-function getMonthKey(dateText: string) {
-  return cleanDateOnly(dateText).slice(0, 7);
-}
-
-function getMonthBounds(monthKey: string) {
-  const [year, month] = monthKey.split("-").map(Number);
-  const end = new Date(year, month, 0, 12, 0, 0, 0);
-
-  return {
-    start: `${monthKey}-01`,
-    end: toDateOnly(end),
-  };
-}
-
-function countDatesByMonth(dates: string[]) {
-  return dates.reduce<Record<string, number>>((counts, date) => {
-    const monthKey = getMonthKey(date);
-    counts[monthKey] = (counts[monthKey] || 0) + 1;
-    return counts;
-  }, {});
 }
 
 function getDefaultRepeatUntil(startDate: string, repeatType: RepeatType) {
@@ -1057,7 +1046,11 @@ export function useBookAppointmentForm({
 
     if (
       !canUseProFeature("moreClients") &&
-      clients.length >= FREE_TIER_LIMITS.clients
+      !getClientCreationAccess({
+        activeClientCount: countActiveClients(clients),
+        isUnlimited: false,
+        limit: FREE_TIER_LIMITS.clients,
+      }).canCreate
     ) {
       if (requestProAccess) {
         const unlocked = await requestProAccess(PRO_UPSELL_COPY.freeLimit);
@@ -1065,7 +1058,7 @@ export function useBookAppointmentForm({
       }
 
       if (!canUseProFeature("moreClients")) {
-        showProUpgradePrompt(PRO_UPSELL_COPY.freeLimit);
+        showFreePlanUpgradePrompt();
         return;
       }
     }
@@ -1119,12 +1112,12 @@ export function useBookAppointmentForm({
       services.length >= FREE_TIER_LIMITS.services
     ) {
       if (requestProAccess) {
-        const unlocked = await requestProAccess(PRO_UPSELL_COPY.freeLimit);
+        const unlocked = await requestProAccess(PRO_UPSELL_COPY.moreServices);
         if (!unlocked) return;
       }
 
       if (!canUseProFeature("moreServices")) {
-        showProUpgradePrompt(PRO_UPSELL_COPY.freeLimit);
+        showProUpgradePrompt(PRO_UPSELL_COPY.moreServices);
         return;
       }
     }
@@ -1515,7 +1508,7 @@ export function useBookAppointmentForm({
 
     const monthCounts = await Promise.all(
       Object.entries(newAppointmentsByMonth).map(async ([monthKey, newCount]) => {
-        const { start, end } = getMonthBounds(monthKey);
+        const { start, end } = getLocalMonthBounds(monthKey);
         const { data, error } = await supabase
           .from("appointments")
           .select("id")
@@ -1540,16 +1533,20 @@ export function useBookAppointmentForm({
         return false;
       }
 
-      if (
-        monthCount.existingCount + monthCount.newCount >
-        FREE_TIER_LIMITS.appointmentsPerMonth
-      ) {
+      const appointmentAccess = getAppointmentCreationAccess({
+        existingCount: monthCount.existingCount,
+        isUnlimited: false,
+        limit: FREE_TIER_LIMITS.appointmentsPerMonth,
+        requestedCount: monthCount.newCount,
+      });
+
+      if (!appointmentAccess.canCreate) {
         if (requestProAccess) {
           const unlocked = await requestProAccess(PRO_UPSELL_COPY.freeLimit);
           if (unlocked) return true;
         }
 
-        showProUpgradePrompt(PRO_UPSELL_COPY.freeLimit);
+        showFreePlanUpgradePrompt();
         return false;
       }
     }
@@ -2197,7 +2194,10 @@ export function useBookAppointmentForm({
         void ensureRecipientSavePromise();
       });
 
-      if (shouldSendText(deliveryChoice)) {
+      if (
+        shouldSendText(deliveryChoice) &&
+        canUseProFeature("smsAutomation")
+      ) {
         queueMeasuredBackgroundSaveTask({
           timing,
           flowName,
@@ -2424,7 +2424,10 @@ export function useBookAppointmentForm({
     });
 
     if (deliveryChoice !== "none" && newAppointment?.id) {
-      if (shouldSendText(deliveryChoice)) {
+      if (
+        shouldSendText(deliveryChoice) &&
+        canUseProFeature("smsAutomation")
+      ) {
         queueMeasuredBackgroundSaveTask({
           timing,
           flowName,

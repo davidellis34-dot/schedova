@@ -4,7 +4,6 @@ import * as ExpoLinking from "expo-linking";
 import { useLocalSearchParams, useRouter } from "expo-router";
 import { useCallback, useEffect, useRef, useState } from "react";
 import {
-  Keyboard,
   Platform,
   Pressable,
   Text,
@@ -144,8 +143,9 @@ export default function LoginScreen() {
   }, [authStatus]);
 
   async function settleKeyboard() {
-    Keyboard.dismiss();
-    await new Promise((resolve) => setTimeout(resolve, 100));
+    await new Promise<void>((resolve) => {
+      requestAnimationFrame(() => resolve());
+    });
     await new Promise<void>((resolve) => {
       requestAnimationFrame(() => resolve());
     });
@@ -297,7 +297,6 @@ export default function LoginScreen() {
   async function login() {
     const normalizedEmail = email.trim();
 
-    Keyboard.dismiss();
     const { data, error } = await supabase.auth.signInWithPassword({
       email: normalizedEmail,
       password,
@@ -425,8 +424,6 @@ export default function LoginScreen() {
   }
 
   async function handlePasswordSubmit() {
-    blurAuthInputs();
-    await settleKeyboard();
     await submitAuth();
   }
 

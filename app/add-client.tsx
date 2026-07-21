@@ -20,10 +20,13 @@ import {
 import { normalizePhoneForSmsWithUserDefault } from "../lib/countrySettings";
 import {
   canUseFeature,
-  FREE_TIER_LIMITS,
   useFeatureAccess,
 } from "../lib/featureAccess";
-import { PRO_UPSELL_COPY, showProUpgradePrompt } from "../lib/proUpsell";
+import {
+  FREE_TIER_LIMITS,
+  getClientCreationAccess,
+} from "../lib/freePlanLimits";
+import { showFreePlanUpgradePrompt } from "../lib/proUpsell";
 import {
   getSavePerformanceNow,
   logSaveTiming,
@@ -212,8 +215,14 @@ export default function AddClientScreen() {
           return;
         }
 
-        if ((existingClients || []).length >= FREE_TIER_LIMITS.clients) {
-          showProUpgradePrompt(PRO_UPSELL_COPY.freeLimit);
+        const clientAccess = getClientCreationAccess({
+          activeClientCount: (existingClients || []).length,
+          isUnlimited: false,
+          limit: FREE_TIER_LIMITS.clients,
+        });
+
+        if (!clientAccess.canCreate) {
+          showFreePlanUpgradePrompt();
           return;
         }
       }

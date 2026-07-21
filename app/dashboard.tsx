@@ -46,6 +46,7 @@ import {
   setDashboardPrimaryCache,
   updateDashboardCachedAppointments,
 } from "../lib/dashboardCache";
+import { registerAccountScopedCleanup } from "../lib/accountTransition";
 import { canUseFeature } from "../lib/featureAccess";
 import { cancelAppointmentReminder } from "../lib/localNotifications";
 import {
@@ -53,7 +54,7 @@ import {
   type MessageCreditBalance,
 } from "../lib/messageCredits";
 import { ENABLE_PRO } from "../lib/proFeatureFlag";
-import { openSchedovaProScreen } from "../lib/proUpsell";
+import { openSchedovaProScreen, PRO_UPSELL_COPY, showProUpgradePrompt } from "../lib/proUpsell";
 import {
   subscribeToSaveNotices,
   type SaveNotice,
@@ -461,7 +462,7 @@ export default function Dashboard() {
   const loadClientRepliesCount = useCallback(async () => {
     if (!isHydrated) return 0;
 
-    if (!canUseProFeature("smsAutomation")) {
+    if (!canUseProFeature("clientReplies")) {
       console.log("Dashboard reply badge count", 0);
       return 0;
     }
@@ -530,6 +531,11 @@ export default function Dashboard() {
   }, [userId]);
 
   function openClientReplies() {
+    if (!canUseProFeature("clientReplies")) {
+      showProUpgradePrompt(PRO_UPSELL_COPY.clientReplies);
+      return;
+    }
+
     console.log("Dashboard navigation to messages screen");
     router.push("/messages" as any);
   }
@@ -692,6 +698,8 @@ export default function Dashboard() {
   useEffect(() => {
     if (!isHydrated || !userId) return;
 
+    let active = true;
+
     const channel = supabase
       .channel(`dashboard-client-replies-${userId}`)
       .on(
@@ -703,6 +711,7 @@ export default function Dashboard() {
           filter: `user_id=eq.${userId}`,
         },
         (payload) => {
+          if (!active) return;
           const row = (payload.new || payload.old || {}) as {
             direction?: unknown;
           };
@@ -715,7 +724,14 @@ export default function Dashboard() {
       )
       .subscribe();
 
+    const unregisterAccountCleanup = registerAccountScopedCleanup(async () => {
+      active = false;
+      await supabase.removeChannel(channel);
+    });
+
     return () => {
+      active = false;
+      unregisterAccountCleanup();
       void supabase.removeChannel(channel);
     };
   }, [isHydrated, refreshClientRepliesCount, userId]);

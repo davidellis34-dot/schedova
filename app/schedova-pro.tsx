@@ -18,7 +18,14 @@ import { copyTextToClipboard } from "../lib/clipboard";
 import { isSchedovaInternalDebugMode } from "../lib/debugMode";
 import { useFeatureAccess } from "../lib/featureAccess";
 import { PRIVACY_POLICY_URL, TERMS_OF_USE_URL } from "../lib/legalLinks";
+import { loadProPaywallSnapshot } from "../lib/proPaywallData";
 import { ENABLE_PRO } from "../lib/proFeatureFlag";
+import {
+  buildMonthlyPlanCopy,
+  getLocalizedRecurringPrice,
+  resolvePurchaseFlowOutcome,
+  type MonthlyPlanCopy,
+} from "../lib/proPaywallUtils";
 import { REVENUECAT_ENTITLEMENT_ID } from "../lib/revenuecat/constants";
 import { useSubscription } from "../lib/revenuecat/SubscriptionProvider";
 import { getLastSubscriptionSyncSummary } from "../lib/revenuecat/subscriptionSync";
@@ -31,9 +38,7 @@ import {
   getRevenueCatErrorDetails,
   getRevenueCatDebugSnapshot,
   getSchedovaProEntitlement,
-  isSubscriptionOptionsUnavailableError,
   logRevenueCatError,
-  prefetchRevenueCatOfferings,
   purchasePackage,
   type RevenueCatDebugSnapshot,
 } from "../lib/revenuecat/revenueCatService";
@@ -59,8 +64,10 @@ const PRO_PURCHASE_DELAYED_MESSAGE =
 const PRO_UPGRADE_MESSAGE =
   "Upgrade to Schedova Pro to unlock advanced tools for your booking business.";
 const PRO_OPTIONS_LOAD_ERROR_MESSAGE = "Unable to load Pro options. Try again.";
-const PRO_DIRECT_PURCHASE_FALLBACK_MESSAGE =
-  "The Pro paywall could not be opened. You can choose a Pro plan below.";
+const DEFAULT_MONTHLY_PLAN_COPY: MonthlyPlanCopy = buildMonthlyPlanCopy({
+  product: null,
+  trialEligibility: "unavailable",
+});
 
 type ProFeature = {
   title: string;
@@ -245,6 +252,14 @@ function sortRevenueCatPackages(packages: PurchasesPackage[]) {
       getSubscriptionTitle(a).localeCompare(getSubscriptionTitle(b))
     );
   });
+}
+
+function getPackagePriceLine(pkg: PurchasesPackage | null | undefined) {
+  return (
+    getLocalizedRecurringPrice(pkg?.product || null) ||
+    String(pkg?.product.priceString || "").trim() ||
+    "Pricing will appear before checkout."
+  );
 }
 
 function createProPurchaseTimeoutError(label: string, timeoutMs: number) {
@@ -1102,7 +1117,6 @@ function SchedovaProEnabledScreen() {
     prefetchSubscriptionData,
     refresh,
     restore,
-    showPaywall,
     showCustomerCenter,
     userId,
   } = useSubscription();
@@ -1128,11 +1142,20 @@ function SchedovaProEnabledScreen() {
   >([]);
   const [subscriptionPackageSummaries, setSubscriptionPackageSummaries] =
     useState<SubscriptionPackageSummary[]>([]);
+  const [monthlyPackage, setMonthlyPackage] = useState<PurchasesPackage | null>(
+    null,
+  );
+  const [yearlyPackage, setYearlyPackage] = useState<PurchasesPackage | null>(
+    null,
+  );
+  const [lifetimePackage, setLifetimePackage] =
+    useState<PurchasesPackage | null>(null);
+  const [monthlyPlanCopy, setMonthlyPlanCopy] = useState<MonthlyPlanCopy>(
+    DEFAULT_MONTHLY_PLAN_COPY,
+  );
   const [showSubscriptionHelp, setShowSubscriptionHelp] = useState(false);
   const [purchaseStatusMessage, setPurchaseStatusMessage] = useState("");
   const [isRestoringPurchases, setIsRestoringPurchases] = useState(false);
-  const [showDirectPurchaseFallback, setShowDirectPurchaseFallback] =
-    useState(false);
   const [directPurchaseBusyProductId, setDirectPurchaseBusyProductId] =
     useState<string | null>(null);
   const subscriptionPrefetchedAtRef = useRef(0);
@@ -1183,10 +1206,8 @@ function SchedovaProEnabledScreen() {
 
   useEffect(() => {
     if (isPro) {
-      setSubscriptionPackages([]);
       setPurchaseStatusMessage("");
       setSubscriptionPackageStatus("available");
-      setShowDirectPurchaseFallback(false);
       setDirectPurchaseBusyProductId(null);
     }
   }, [isPro]);
@@ -1199,8 +1220,11 @@ function SchedovaProEnabledScreen() {
     subscriptionPrefetchedAtRef.current = 0;
     setSubscriptionPackages([]);
     setSubscriptionPackageSummaries([]);
+    setMonthlyPackage(null);
+    setYearlyPackage(null);
+    setLifetimePackage(null);
+    setMonthlyPlanCopy(DEFAULT_MONTHLY_PLAN_COPY);
     setSubscriptionPackageStatus("checking");
-    setShowDirectPurchaseFallback(false);
     setDirectPurchaseBusyProductId(null);
     setPurchaseStatusMessage("");
     setShowSubscriptionHelp(false);
@@ -1290,37 +1314,40 @@ function SchedovaProEnabledScreen() {
         );
       }
 
-      const offeringStartedAt = Date.now();
-      const offering = await withProPurchaseTimeout(
-        "RevenueCat prefetch offerings",
-        prefetchRevenueCatOfferings(),
+      const snapshotStartedAt = Date.now();
+      const snapshot = await withProPurchaseTimeout(
+        "RevenueCat Pro paywall snapshot",
+        loadProPaywallSnapshot(info),
         PRO_PURCHASE_PREFETCH_TIMEOUT_MS,
       );
 
       if (__DEV__) {
         console.log(
-          "[RevenueCat] Offering loaded in ms:",
-          Date.now() - offeringStartedAt,
+          "[RevenueCat] Pro paywall snapshot loaded in ms:",
+          Date.now() - snapshotStartedAt,
           {
-            offeringId: offering?.identifier ?? null,
-            packagesCount: offering?.availablePackages?.length ?? 0,
-            packageProductIds:
-              offering?.availablePackages?.map(
-                (pkg) => pkg.product.identifier,
-              ) ?? [],
+            offeringId: snapshot.offering?.identifier ?? null,
+            packagesCount: snapshot.availablePackages.length,
+            packageProductIds: snapshot.availablePackages.map(
+              (pkg) => pkg.product.identifier,
+            ),
+            monthlyProductId: snapshot.monthlyPackage?.product.identifier ?? null,
+            yearlyProductId: snapshot.yearlyPackage?.product.identifier ?? null,
+            lifetimeProductId:
+              snapshot.lifetimePackage?.product.identifier ?? null,
+            monthlyTrialEligibility:
+              snapshot.monthlyPlanCopy.trialEligibility,
           },
         );
       }
 
-      const sortedPackages = sortRevenueCatPackages(
-        offering?.availablePackages ?? [],
-      );
+      const sortedPackages = sortRevenueCatPackages(snapshot.availablePackages);
       const packageSummaries = sortSubscriptionPackages(
         sortedPackages.map(summarizeSubscriptionPackage),
       );
 
       console.log("[RevenueCat] Pro screen packages available", {
-        offeringId: offering?.identifier ?? null,
+        offeringId: snapshot.offering?.identifier ?? null,
         packageIdentifiers: packageSummaries.map(
           (pkg) => pkg.packageIdentifier,
         ),
@@ -1331,6 +1358,10 @@ function SchedovaProEnabledScreen() {
 
       setSubscriptionPackages(sortedPackages);
       setSubscriptionPackageSummaries(packageSummaries);
+      setMonthlyPackage(snapshot.monthlyPackage);
+      setYearlyPackage(snapshot.yearlyPackage);
+      setLifetimePackage(snapshot.lifetimePackage);
+      setMonthlyPlanCopy(snapshot.monthlyPlanCopy);
 
       if (packageSummaries.length) {
         setSubscriptionPackageStatus("available");
@@ -1338,14 +1369,19 @@ function SchedovaProEnabledScreen() {
       } else {
         console.log("[RevenueCat] Offerings/packages unavailable", {
           source: "pro_screen_prefetch",
-          reason: offering ? "packages_empty" : "no_offering",
-          offeringId: offering?.identifier ?? null,
-          packagesCount: offering?.availablePackages?.length ?? 0,
+          reason: snapshot.offering ? "packages_empty" : "no_offering",
+          offeringId: snapshot.offering?.identifier ?? null,
+          packagesCount: snapshot.availablePackages.length,
         });
         setSubscriptionPackages([]);
         setSubscriptionPackageSummaries([]);
+        setMonthlyPackage(null);
+        setYearlyPackage(null);
+        setLifetimePackage(null);
         setSubscriptionPackageStatus("unavailable");
-        setPurchaseStatusMessage(PRO_OPTIONS_LOAD_ERROR_MESSAGE);
+        setPurchaseStatusMessage(
+          snapshot.monthlyPlanCopy.priceLine || PRO_OPTIONS_LOAD_ERROR_MESSAGE,
+        );
       }
 
       subscriptionPrefetchedAtRef.current = Date.now();
@@ -1358,6 +1394,10 @@ function SchedovaProEnabledScreen() {
       logRevenueCatError("Pro screen prefetch failed", error);
       setSubscriptionPackages([]);
       setSubscriptionPackageSummaries([]);
+      setMonthlyPackage(null);
+      setYearlyPackage(null);
+      setLifetimePackage(null);
+      setMonthlyPlanCopy(DEFAULT_MONTHLY_PLAN_COPY);
       setSubscriptionPackageStatus("unavailable");
       setPurchaseStatusMessage(PRO_OPTIONS_LOAD_ERROR_MESSAGE);
       subscriptionPrefetchedAtRef.current = Date.now();
@@ -1391,39 +1431,19 @@ function SchedovaProEnabledScreen() {
       }
     }
 
-    setIsOpeningPaywall(true);
-    setShowDirectPurchaseFallback(false);
-    setPurchaseStatusMessage("");
-
-    try {
-      const upgraded = await showPaywall();
-
-      return upgraded;
-    } catch (error) {
-      console.log("[RevenueCat] Pro paywall open failed", {
-        error: getRevenueCatErrorDetails(error),
-        subscriptionPackageStatus,
-        packageProductIds: subscriptionPackages.map(
-          (pkg) => pkg.product.identifier,
-        ),
-      });
-      logRevenueCatError("Pro paywall open failed", error);
-
-      if (subscriptionPackages.length > 0) {
-        setShowDirectPurchaseFallback(true);
-        setPurchaseStatusMessage(PRO_DIRECT_PURCHASE_FALLBACK_MESSAGE);
-      } else {
-        setPurchaseStatusMessage(
-          isSubscriptionOptionsUnavailableError(error)
-            ? PRO_OPTIONS_LOAD_ERROR_MESSAGE
-            : "Unable to open Pro options right now. Try again.",
-        );
+    if (!monthlyPackage) {
+      if (subscriptionPackageStatus === "unavailable") {
+        subscriptionPrefetchedAtRef.current = 0;
+        void prefetchRevenueCatData();
       }
 
+      setPurchaseStatusMessage(
+        monthlyPlanCopy.priceLine || PRO_OPTIONS_LOAD_ERROR_MESSAGE,
+      );
       return false;
-    } finally {
-      setIsOpeningPaywall(false);
     }
+
+    return handleDirectPackagePurchase(monthlyPackage);
   }
 
   async function handleDirectPackagePurchase(pkg: PurchasesPackage) {
@@ -1458,15 +1478,20 @@ function SchedovaProEnabledScreen() {
 
       const { entitlementActive, delayed } =
         await refreshCustomerInfoForPurchase(`direct_purchase:${productIdentifier}`);
+      const purchaseOutcome = resolvePurchaseFlowOutcome({
+        purchaseCancelled: result.cancelled,
+        purchaseCompleted: result.isPro || entitlementActive,
+        refreshDelayed: delayed,
+      });
 
-      if (result.isPro || entitlementActive) {
-        setShowDirectPurchaseFallback(false);
+      if (purchaseOutcome === "success") {
         setPurchaseStatusMessage("");
         return true;
       }
 
-      if (delayed) {
+      if (purchaseOutcome === "pending_refresh") {
         setPurchaseStatusMessage(PRO_PURCHASE_DELAYED_MESSAGE);
+        return false;
       }
 
       return false;
@@ -1569,9 +1594,13 @@ function SchedovaProEnabledScreen() {
     Boolean(directPurchaseBusyProductId) ||
     isOpeningPaywall ||
     isRestoringPurchases;
+  const secondaryPackageSummaries = subscriptionPackageSummaries.filter(
+    (summary) =>
+      summary.productIdentifier !== monthlyPackage?.product.identifier,
+  );
   const upgradeDisabled =
     isCheckingSubscription ||
-    isOpeningPaywall ||
+    purchaseActionBusy ||
     isRestoringPurchases ||
     isPrefetchingSubscriptions ||
     subscriptionPackagesChecking;
@@ -1581,7 +1610,9 @@ function SchedovaProEnabledScreen() {
       ? "Checking subscription status..."
       : subscriptionPackagesChecking || isPrefetchingSubscriptions
         ? "Loading subscription options..."
-        : "Upgrade to Schedova Pro";
+        : monthlyPackage
+          ? monthlyPlanCopy.ctaLabel
+          : "View Pro Plans";
 
   return (
     <AppScreen
@@ -1820,7 +1851,18 @@ function SchedovaProEnabledScreen() {
           </Text>
 
           <Text style={{ color: colors.mutedText, lineHeight: 20 }}>
-            {PRO_UPGRADE_MESSAGE}
+            {monthlyPlanCopy.priceLine || PRO_UPGRADE_MESSAGE}
+          </Text>
+
+          <Text
+            style={{
+              color: colors.mutedText,
+              fontSize: 13,
+              lineHeight: 19,
+              marginTop: 10,
+            }}
+          >
+            {monthlyPlanCopy.autoRenewNotice}
           </Text>
 
           {REVENUECAT_DIAGNOSTICS_ENABLED &&
@@ -1923,6 +1965,59 @@ function SchedovaProEnabledScreen() {
               </Text>
             </Pressable>
 
+            <View
+              style={{
+                backgroundColor: colors.card,
+                borderColor: monthlyPackage ? colors.primary : colors.border,
+                borderWidth: 1,
+                borderRadius: 16,
+                padding: 16,
+                marginBottom: 12,
+              }}
+            >
+              <Text
+                style={{
+                  color: colors.text,
+                  fontSize: 18,
+                  fontWeight: "900",
+                }}
+              >
+                Monthly
+              </Text>
+              <Text
+                style={{
+                  color: colors.primary,
+                  fontSize: 14,
+                  fontWeight: "900",
+                  marginTop: 8,
+                }}
+              >
+                {monthlyPackage
+                  ? getPackagePriceLine(monthlyPackage)
+                  : "Monthly pricing will appear before checkout."}
+              </Text>
+              <Text
+                style={{
+                  color: colors.mutedText,
+                  fontSize: 13,
+                  lineHeight: 19,
+                  marginTop: 8,
+                }}
+              >
+                {monthlyPlanCopy.priceLine}
+              </Text>
+              <Text
+                style={{
+                  color: colors.mutedText,
+                  fontSize: 12,
+                  lineHeight: 18,
+                  marginTop: 8,
+                }}
+              >
+                {monthlyPlanCopy.autoRenewNotice}
+              </Text>
+            </View>
+
             {isPrefetchingSubscriptions ? (
               <Text
                 style={{
@@ -1957,7 +2052,6 @@ function SchedovaProEnabledScreen() {
               <Pressable
                 disabled={purchaseActionBusy || isPrefetchingSubscriptions}
                 onPress={() => {
-                  setShowDirectPurchaseFallback(false);
                   setPurchaseStatusMessage("");
                   subscriptionPrefetchedAtRef.current = 0;
                   void prefetchRevenueCatData();
@@ -1979,7 +2073,7 @@ function SchedovaProEnabledScreen() {
               </Pressable>
             ) : null}
 
-            {showDirectPurchaseFallback && subscriptionPackages.length > 0 ? (
+            {secondaryPackageSummaries.length > 0 ? (
               <View
                 style={{
                   backgroundColor: colors.card,
@@ -2008,11 +2102,11 @@ function SchedovaProEnabledScreen() {
                     marginBottom: 12,
                   }}
                 >
-                  The Pro paywall could not be opened right now. You can still
-                  buy Schedova Pro directly below.
+                  Yearly and lifetime are separate options. The 14-day free
+                  trial only applies to eligible monthly subscribers.
                 </Text>
 
-                {subscriptionPackageSummaries.map((summary, index) => {
+                {secondaryPackageSummaries.map((summary, index) => {
                   const pkg =
                     subscriptionPackages.find(
                       (candidate) =>
@@ -2026,6 +2120,12 @@ function SchedovaProEnabledScreen() {
                     null;
                   const isBusy =
                     directPurchaseBusyProductId === summary.productIdentifier;
+                  const isYearlyPlan =
+                    summary.productIdentifier ===
+                    yearlyPackage?.product.identifier;
+                  const isLifetimePlan =
+                    summary.productIdentifier ===
+                    lifetimePackage?.product.identifier;
 
                   if (!pkg) return null;
 
@@ -2053,7 +2153,11 @@ function SchedovaProEnabledScreen() {
                           fontWeight: "900",
                         }}
                       >
-                        {summary.title}
+                        {isYearlyPlan
+                          ? "Yearly"
+                          : isLifetimePlan
+                            ? "Lifetime"
+                            : summary.title}
                       </Text>
                       <Text
                         style={{
@@ -2063,7 +2167,23 @@ function SchedovaProEnabledScreen() {
                           marginTop: 4,
                         }}
                       >
-                        {summary.duration}
+                        {isLifetimePlan
+                          ? "One-time purchase"
+                          : summary.duration}
+                      </Text>
+                      <Text
+                        style={{
+                          color: colors.mutedText,
+                          fontSize: 13,
+                          lineHeight: 19,
+                          marginTop: 8,
+                        }}
+                      >
+                        {isYearlyPlan
+                          ? `${getPackagePriceLine(pkg)}. Billed yearly.`
+                          : isLifetimePlan
+                            ? `${getPackagePriceLine(pkg)} one-time purchase.`
+                            : getPackagePriceLine(pkg)}
                       </Text>
                       <Text
                         style={{
@@ -2073,7 +2193,13 @@ function SchedovaProEnabledScreen() {
                           marginTop: 8,
                         }}
                       >
-                        {isBusy ? "Opening purchase..." : `Buy for ${summary.price}`}
+                        {isBusy
+                          ? "Opening purchase..."
+                          : isYearlyPlan
+                            ? "Choose Yearly"
+                            : isLifetimePlan
+                              ? "Get Lifetime"
+                              : `Buy for ${summary.price}`}
                       </Text>
                     </Pressable>
                   );

@@ -1,8 +1,8 @@
 import { Ionicons } from "@expo/vector-icons";
 import { router, useFocusEffect } from "expo-router";
 import type { ReactNode } from "react";
-import { useCallback, useEffect, useState } from "react";
-import { Alert, Text, View } from "react-native";
+import { useCallback, useEffect, useRef, useState } from "react";
+import { ActivityIndicator, Alert, Text, View } from "react-native";
 import {
   AppScreen,
   ListRow,
@@ -13,13 +13,10 @@ import { getUserCountryRegion } from "../../lib/countrySettings";
 import { isSchedovaInternalDebugMode } from "../../lib/debugMode";
 import { isDemoScreenshotModeAvailable } from "../../lib/demoData";
 import { useAuthSession } from "../../lib/authSession";
-import { useFeatureAccess } from "../../lib/featureAccess";
+import { canUseFeature } from "../../lib/featureAccess";
 import { canChangePassword } from "../../lib/mobileAuth";
-import { ENABLE_PRO } from "../../lib/proFeatureFlag";
-import {
-  getSchedovaProFriendlyStatus,
-  hasAdminLifetimeSchedovaProAccess,
-} from "../../lib/subscriptionAccess";
+import { PRO_UPSELL_COPY, showProUpgradePrompt } from "../../lib/proUpsell";
+import { resolveSettingsProCardState } from "../../lib/settingsProCardState";
 import {
   ACCOUNT_DELETION_SUPPORT_INSTRUCTION,
   PRIVACY_POLICY_URL,
@@ -47,11 +44,12 @@ export default function SettingsScreen() {
     userEmail: authUserEmail,
     userId: authUserId,
   } = useAuthSession();
-  const { subscription, userId: featureAccessUserId } = useFeatureAccess();
-  const { isPro } = useSubscription();
+  const { proEntitlementStatus } = useSubscription();
   const [countryRegion, setCountryRegion] = useState("US");
   const [accountEmail, setAccountEmail] = useState("");
-  const [accountUserId, setAccountUserId] = useState("");
+  const [switchingAccount, setSwitchingAccount] = useState(false);
+  const switchingAccountRef = useRef(false);
+  const mountedRef = useRef(true);
   const isDarkTheme = themeName === "dark" || themeName === "black";
   const infoAccent = isDarkTheme ? "#60A5FA" : "#2563EB";
   const infoAccentSoft = isDarkTheme
@@ -72,54 +70,51 @@ export default function SettingsScreen() {
   const polishedBorder = isDarkTheme
     ? "rgba(148, 163, 184, 0.28)"
     : "rgba(15, 23, 42, 0.12)";
-  const hasLifetimeAccess = hasAdminLifetimeSchedovaProAccess(subscription);
   const passwordChangeVisible = canChangePassword(user);
-  const proUiVisible = true;
-  const proSubtitle = hasLifetimeAccess
-    ? "Lifetime access"
-    : isPro
-      ? getSchedovaProFriendlyStatus(subscription)
-      : "Manage subscription and Pro features.";
+  const proCard = resolveSettingsProCardState({
+    confirmedIsPro:
+      proEntitlementStatus === "checking"
+        ? null
+        : proEntitlementStatus === "active",
+  });
+
+  useEffect(() => {
+    return () => {
+      mountedRef.current = false;
+    };
+  }, []);
 
   useFocusEffect(
     useCallback(() => {
+      let active = true;
+
       if (authStatus !== "authenticated" || !authUserId) {
         setCountryRegion("US");
-        setAccountUserId("");
         setAccountEmail("");
-        return;
+        return () => {
+          active = false;
+        };
       }
 
-      setAccountUserId(authUserId);
       setAccountEmail(authUserEmail || "");
 
       void getUserCountryRegion()
-        .then(setCountryRegion)
+        .then((nextCountryRegion) => {
+          if (active) {
+            setCountryRegion(nextCountryRegion);
+          }
+        })
         .catch((error) => {
           if (__DEV__) {
             console.log("[Settings] country/region load failed", error);
           }
         });
+
+      return () => {
+        active = false;
+      };
     }, [authStatus, authUserEmail, authUserId]),
   );
-
-  useEffect(() => {
-    console.log("[Settings] ENABLE_PRO", ENABLE_PRO);
-    console.log("[Settings] current user id", accountUserId || featureAccessUserId || null);
-    console.log("[Settings] current user email", accountEmail || null);
-    console.log("[Settings] subscription row", subscription);
-    console.log("[Settings] adminLifetimeAccess", hasLifetimeAccess);
-    console.log("[Settings] final isPro", isPro);
-    console.log("[Settings] pro UI visible", proUiVisible);
-  }, [
-    accountEmail,
-    accountUserId,
-    featureAccessUserId,
-    hasLifetimeAccess,
-    isPro,
-    proUiVisible,
-    subscription,
-  ]);
 
   function openPrivacyPolicy() {
     void openExternalWebsite("Privacy Policy", PRIVACY_POLICY_URL);
@@ -129,8 +124,24 @@ export default function SettingsScreen() {
     void openExternalWebsite("Terms of Use", TERMS_OF_USE_URL);
   }
 
+  function openProFeatureRoute(
+    route: string,
+    feature: Parameters<typeof canUseFeature>[0],
+    message: string,
+  ) {
+    if (!canUseFeature(feature)) {
+      showProUpgradePrompt(message);
+      return;
+    }
+
+    router.push(route as any);
+  }
+
   async function switchAccount() {
-    if (isAuthTransitioning) return;
+    if (isAuthTransitioning || switchingAccountRef.current) return;
+
+    switchingAccountRef.current = true;
+    setSwitchingAccount(true);
 
     if (__DEV__) {
       console.log("[AuthSession] sign out started from Settings");
@@ -146,6 +157,11 @@ export default function SettingsScreen() {
     } catch (error) {
       console.log("Sign out failed", error);
       Alert.alert("Sign Out Error", "Unable to sign out. Please try again.");
+    } finally {
+      switchingAccountRef.current = false;
+      if (mountedRef.current) {
+        setSwitchingAccount(false);
+      }
     }
   }
 
@@ -319,12 +335,25 @@ export default function SettingsScreen() {
   }
 
   function ProRightLabel() {
-    const tone: SettingTone = isPro ? "info" : "primary";
-    const label = hasLifetimeAccess ? "Lifetime" : isPro ? "Active" : "Upgrade";
+    const tone: SettingTone =
+      proCard.status === "active"
+        ? "info"
+        : proCard.status === "inactive"
+          ? "primary"
+          : "neutral";
+
+    if (!proCard.badgeLabel) {
+      return (
+        <View style={{ flexDirection: "row", alignItems: "center", gap: spacing.sm }}>
+          <ActivityIndicator color={getToneColor(tone)} size="small" />
+          <Chevron tone={tone} />
+        </View>
+      );
+    }
 
     return (
       <View style={{ flexDirection: "row", alignItems: "center", gap: spacing.sm }}>
-        <PillLabel label={label} tone={tone} />
+        <PillLabel label={proCard.badgeLabel} tone={tone} />
         <Chevron tone={tone} />
       </View>
     );
@@ -392,12 +421,14 @@ export default function SettingsScreen() {
           title="Sign Out / Switch Account"
           subtitle={
             isAuthTransitioning
+              || switchingAccount
               ? "Signing out..."
               : "Leave this account and choose another."
           }
           leftIcon={<IconBadge name="log-out-outline" tone="neutral" />}
           right={<Chevron />}
           onPress={switchAccount}
+          disabled={isAuthTransitioning || switchingAccount}
           style={rowStyle()}
         />
       </Section>
@@ -408,16 +439,31 @@ export default function SettingsScreen() {
       >
         <ListRow
           title="Schedova Pro"
-          subtitle={proSubtitle}
+          subtitle={proCard.subtitle}
           leftIcon={
             <IconBadge
               name="sparkles-outline"
-              tone={isPro ? "info" : "primary"}
+              tone={
+                proCard.status === "active"
+                  ? "info"
+                  : proCard.status === "inactive"
+                    ? "primary"
+                    : "neutral"
+              }
             />
           }
           right={<ProRightLabel />}
           onPress={() => router.push("/schedova-pro" as any)}
-          style={rowStyle(isPro ? "info" : "primary", true)}
+          style={
+            rowStyle(
+              proCard.status === "active"
+                ? "info"
+                : proCard.status === "inactive"
+                  ? "primary"
+                  : "neutral",
+              true,
+            )
+          }
         />
         <ListRow
           title="Display & Theme"
@@ -483,7 +529,13 @@ export default function SettingsScreen() {
           subtitle="Create reusable client messages."
           leftIcon={<IconBadge name="document-text-outline" />}
           right={<Chevron />}
-          onPress={() => router.push("/settings/message-templates")}
+          onPress={() =>
+            openProFeatureRoute(
+              "/settings/message-templates",
+              "unlimitedMessageTemplates",
+              PRO_UPSELL_COPY.messageTemplates,
+            )
+          }
           style={rowStyle()}
         />
       </Section>
@@ -505,7 +557,13 @@ export default function SettingsScreen() {
           subtitle="Set the days and hours your business is open."
           leftIcon={<IconBadge name="time-outline" />}
           right={<Chevron />}
-          onPress={() => router.push("/availability-settings")}
+          onPress={() =>
+            openProFeatureRoute(
+              "/availability-settings",
+              "customBusinessHours",
+              PRO_UPSELL_COPY.customBusinessHours,
+            )
+          }
           style={rowStyle()}
         />
         <ListRow
@@ -521,7 +579,13 @@ export default function SettingsScreen() {
           subtitle="Reserve time when you are unavailable."
           leftIcon={<IconBadge name="remove-circle-outline" />}
           right={<Chevron />}
-          onPress={() => router.push("/block-time")}
+          onPress={() =>
+            openProFeatureRoute(
+              "/block-time",
+              "customBusinessHours",
+              PRO_UPSELL_COPY.blockedTime,
+            )
+          }
           style={rowStyle()}
         />
       </Section>
@@ -535,7 +599,9 @@ export default function SettingsScreen() {
           subtitle="Track schedule and business activity."
           leftIcon={<IconBadge name="bar-chart-outline" />}
           right={<Chevron />}
-          onPress={() => router.push("/reports")}
+          onPress={() =>
+            openProFeatureRoute("/reports", "reports", PRO_UPSELL_COPY.reports)
+          }
           style={rowStyle()}
         />
         <ListRow
@@ -543,7 +609,13 @@ export default function SettingsScreen() {
           subtitle="See which services are booked most often."
           leftIcon={<IconBadge name="analytics-outline" />}
           right={<Chevron />}
-          onPress={() => router.push("/service-reports" as any)}
+          onPress={() =>
+            openProFeatureRoute(
+              "/service-reports",
+              "reports",
+              PRO_UPSELL_COPY.reports,
+            )
+          }
           style={rowStyle()}
         />
       </Section>

@@ -11,6 +11,7 @@
     "ios": {
       "supportsTablet": true,
       "usesAppleSignIn": true,
+      "newArchEnabled": false,
       "buildNumber": "28",
       "bundleIdentifier": "com.davidellis34.schedova",
       "infoPlist": {

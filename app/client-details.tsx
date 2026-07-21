@@ -34,22 +34,26 @@ import {
   getAppointmentServiceTotal,
 } from "../lib/appointmentServices";
 import { sendManualClientEmail } from "../lib/appointmentEmail";
-import { sendManualClientSms } from "../lib/appointmentSms";
+import {
+  getFriendlySmsMessage,
+  sendAppointmentSms,
+  sendManualClientSms,
+} from "../lib/appointmentSms";
 import { normalizeClientTag } from "../lib/clientTags";
 import { copyTextToClipboard } from "../lib/clipboard";
 import {
   createPrimaryRecipient,
   sendConsentRequests,
 } from "../lib/communicationRecipients";
+import { normalizePhoneForSmsWithUserDefault } from "../lib/countrySettings";
 import {
   canUseFeature,
-  FREE_TIER_LIMITS,
   useFeatureAccess,
 } from "../lib/featureAccess";
+import { FREE_TIER_LIMITS } from "../lib/freePlanLimits";
 import { ENABLE_PRO } from "../lib/proFeatureFlag";
 import {
   BUILT_IN_MESSAGE_TEMPLATES,
-  fetchCustomMessageTemplates,
   renderMessageTemplate,
   type MessageTemplate,
 } from "../lib/messageTemplates";
@@ -238,15 +242,6 @@ function getClientEmail(clientRecord: any) {
 
 function getTemplateBody(template: any) {
   return template?.body || template?.message || template?.content || "";
-}
-
-function getInitialManualMessageChannel(clientRecord: ClientRecord | null) {
-  const canText = Boolean(normalizePhoneNumber(getClientPhone(clientRecord))) &&
-    Boolean(clientRecord?.sms_opt_in);
-  const canEmail = Boolean(getClientEmail(clientRecord)) &&
-    Boolean(clientRecord?.email_opt_in);
-
-  return canText ? "text" : canEmail ? "email" : "text";
 }
 
 function buildSmsUrls(phone: string, message: string) {
@@ -440,18 +435,17 @@ export default function ClientDetailsScreen() {
   useScreenLoadingTiming(loading);
   const [error, setError] = useState<string | null>(null);
   const [messageModalVisible, setMessageModalVisible] = useState(false);
-  const [messageTemplates, setMessageTemplates] = useState<MessageTemplate[]>(
-    BUILT_IN_MESSAGE_TEMPLATES,
-  );
+  const [messageTemplates] = useState<MessageTemplate[]>(BUILT_IN_MESSAGE_TEMPLATES);
   const [selectedTemplateId, setSelectedTemplateId] = useState(
     BUILT_IN_MESSAGE_TEMPLATES[0]?.id ?? "",
   );
-  const [messageTemplatesLoading, setMessageTemplatesLoading] = useState(false);
+  const [messageTemplatesLoading] = useState(false);
   const [manualMessageChannel, setManualMessageChannel] =
     useState<ManualMessageChannel>("text");
   const [manualEmailSubject, setManualEmailSubject] =
     useState("Appointment message");
   const [manualMessageSending, setManualMessageSending] = useState(false);
+  const [sendingReminder, setSendingReminder] = useState(false);
   const [androidTabletSmsFallback, setAndroidTabletSmsFallback] =
     useState<AndroidTabletSmsFallback | null>(null);
 
@@ -681,6 +675,27 @@ export default function ClientDetailsScreen() {
     );
   }, [clientAppointments]);
 
+  const reminderAppointment = useMemo(() => {
+    const today = new Date().toISOString().slice(0, 10);
+
+    return (
+      clientAppointments
+        .filter(
+          (appointment) =>
+            hasAppointmentStartTime(appointment) &&
+            (appointment.appointment_date || "") >= today &&
+            !["canceled", "cancelled", "completed", "no_show"].includes(
+              getAppointmentStatus(appointment),
+            ),
+        )
+        .sort((first, second) => {
+          const firstDate = `${first.appointment_date || ""} ${getAppointmentStartTime(first) || ""}`;
+          const secondDate = `${second.appointment_date || ""} ${getAppointmentStartTime(second) || ""}`;
+          return firstDate.localeCompare(secondDate);
+        })[0] || null
+    );
+  }, [clientAppointments]);
+
   const selectedTemplate =
     messageTemplates.find((template) => template.id === selectedTemplateId) ||
     messageTemplates[0] ||
@@ -727,46 +742,107 @@ export default function ClientDetailsScreen() {
     : "";
 
   async function openMessageClient() {
-    if (!canUseFeature("unlimitedMessageTemplates")) {
-      showProUpgradePrompt(PRO_UPSELL_COPY.messageTemplates);
+    const cleanClientId = String(clientIdValue || "").trim();
+
+    if (!canUseFeature("clientReplies")) {
+      showProUpgradePrompt(PRO_UPSELL_COPY.clientReplies);
       return;
     }
 
-    setManualMessageChannel(getInitialManualMessageChannel(client));
-    setManualEmailSubject(selectedTemplate?.title || "Appointment message");
-    setMessageModalVisible(true);
-
-    if (messageTemplates.length > BUILT_IN_MESSAGE_TEMPLATES.length) {
+    if (!cleanClientId) {
+      Alert.alert("Client required", "This client could not be loaded.");
       return;
     }
 
-    setMessageTemplatesLoading(true);
+    const normalizedPhone = await normalizePhoneForSmsWithUserDefault(
+      getClientPhone(client, messageAppointment),
+    );
+
+    router.push({
+      pathname: "/messages",
+      params: {
+        openClientId: cleanClientId,
+        openClientPhone: normalizedPhone || "",
+        openClientName: clientName,
+        openRequestAt: String(Date.now()),
+      },
+    } as never);
+  }
+
+  async function sendClientReminder() {
+    if (!reminderAppointment?.id || sendingReminder) return;
+
+    if (!canUseFeature("smsAutomation")) {
+      showProUpgradePrompt(PRO_UPSELL_COPY.sms);
+      return;
+    }
+
+    setSendingReminder(true);
 
     try {
-      const {
-        data: { user },
-      } = await supabase.auth.getUser();
+      const result = await sendAppointmentSms(reminderAppointment.id, "reminder", {
+        sendPathName: "client-details.send-reminder",
+        appointmentIdFromMutation: reminderAppointment.id,
+      });
 
-      if (!user) {
+      if (!result.ok || result.skipped) {
+        Alert.alert(
+          "Reminder not sent",
+          result.message ||
+            getFriendlySmsMessage(result.code) ||
+            "The reminder text could not be sent.",
+        );
         return;
       }
 
-      const customTemplates = await fetchCustomMessageTemplates(user.id);
-      const nextTemplates = [
-        ...BUILT_IN_MESSAGE_TEMPLATES,
-        ...customTemplates,
-      ];
-
-      setMessageTemplates(nextTemplates);
-      setSelectedTemplateId(
-        (currentId) => currentId || nextTemplates[0]?.id || "",
+      Alert.alert(
+        "Reminder sent",
+        "The appointment reminder text was sent to this client.",
       );
-    } catch (templateError) {
-      console.log("CLIENT MESSAGE TEMPLATE LOAD ERROR:", templateError);
-      setMessageTemplates(BUILT_IN_MESSAGE_TEMPLATES);
+    } catch (error) {
+      console.log("Client reminder send failed", error);
+      Alert.alert(
+        "Reminder not sent",
+        error instanceof Error
+          ? error.message
+          : "The reminder text could not be sent.",
+      );
     } finally {
-      setMessageTemplatesLoading(false);
+      setSendingReminder(false);
     }
+  }
+
+  function confirmSendReminder() {
+    if (!reminderAppointment?.id) {
+      Alert.alert(
+        "No upcoming appointment",
+        "This client does not have an upcoming appointment to remind them about.",
+      );
+      return;
+    }
+
+    const reminderTime = getAppointmentStartTime(reminderAppointment);
+    const reminderDateLabel = formatDate(reminderAppointment.appointment_date);
+    const reminderTimeLabel = formatTime(reminderTime);
+    const scheduleLabel = [reminderDateLabel, reminderTimeLabel]
+      .filter(Boolean)
+      .join(" at ");
+
+    Alert.alert(
+      "Send reminder?",
+      scheduleLabel
+        ? `Send an appointment reminder text to ${clientName} for ${scheduleLabel}?`
+        : `Send an appointment reminder text to ${clientName}?`,
+      [
+        { text: "Cancel", style: "cancel" },
+        {
+          text: "Send Reminder",
+          onPress: () => {
+            void sendClientReminder();
+          },
+        },
+      ],
+    );
   }
 
   async function openSmsUrl(phoneNumber: string, logSend = true) {
@@ -897,6 +973,11 @@ export default function ClientDetailsScreen() {
     const sendsEmail = manualMessageChannel === "email" || manualMessageChannel === "both";
     const textIssue = sendsText ? manualTextIssue() : "";
     const emailIssue = sendsEmail ? manualEmailIssue() : "";
+
+    if (sendsText && !canUseFeature("smsAutomation")) {
+      showProUpgradePrompt(PRO_UPSELL_COPY.sms);
+      return;
+    }
 
     if (sendsEmail && !canUseFeature("emailMessaging")) {
       showProUpgradePrompt(PRO_UPSELL_COPY.emailMessaging);
@@ -1133,6 +1214,17 @@ export default function ClientDetailsScreen() {
           fullWidth={false}
           style={{ flexGrow: 1, flexBasis: 150 }}
         />
+        {reminderAppointment?.id ? (
+          <AppButton
+            title={sendingReminder ? "Sending..." : "Send Reminder"}
+            variant="secondary"
+            onPress={confirmSendReminder}
+            loading={sendingReminder}
+            disabled={sendingReminder}
+            fullWidth={false}
+            style={{ flexGrow: 1, flexBasis: 150 }}
+          />
+        ) : null}
       </View>
 
       <AppCard style={[polishedCardStyle, { marginBottom: theme.spacing.lg }]}>

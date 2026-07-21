@@ -20,12 +20,16 @@ import {
 import { normalizeClientTag } from "../lib/clientTags";
 import {
   canUseFeature,
-  FREE_TIER_LIMITS,
   useFeatureAccess,
 } from "../lib/featureAccess";
 import { useAuthSession } from "../lib/authSession";
 import { sendConsentRequests } from "../lib/communicationRecipients";
-import { PRO_UPSELL_COPY, showProUpgradePrompt } from "../lib/proUpsell";
+import {
+  countActiveClients,
+  FREE_TIER_LIMITS,
+  getClientCreationAccess,
+} from "../lib/freePlanLimits";
+import { PRO_UPSELL_COPY, showFreePlanUpgradePrompt, showProUpgradePrompt } from "../lib/proUpsell";
 import { supabase } from "../lib/supabase";
 import { useScreenLoadingTiming } from "../lib/screenPerformance";
 import { useAppTheme } from "../lib/useAppTheme";
@@ -191,12 +195,16 @@ export default function ClientsScreen() {
     visibleSelectableIds.length > 0 &&
     visibleSelectableIds.every((id) => selectedClientIdSet.has(id));
 
-  const canAddMoreClients =
-    canUseFeature("moreClients") || clients.length < FREE_TIER_LIMITS.clients;
+  const clientCreationAccess = getClientCreationAccess({
+    activeClientCount: countActiveClients(clients),
+    isUnlimited: canUseFeature("moreClients"),
+    limit: FREE_TIER_LIMITS.clients,
+  });
+  const canAddMoreClients = clientCreationAccess.canCreate;
 
   async function openAddClient() {
     if (!canAddMoreClients) {
-      showProUpgradePrompt(PRO_UPSELL_COPY.freeLimit);
+      showFreePlanUpgradePrompt();
       return;
     }
 

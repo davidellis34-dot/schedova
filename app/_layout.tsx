@@ -3,17 +3,19 @@ import { useEffect, useRef, useState, type ReactNode } from "react";
 import {
   ActivityIndicator,
   AppState,
-  InteractionManager,
-  Keyboard,
   Linking,
   Platform,
   StyleSheet,
   Text,
-  TextInput,
   View,
 } from "react-native";
 import { GestureHandlerRootView } from "react-native-gesture-handler";
 import { SafeAreaProvider } from "react-native-safe-area-context";
+import { ProUpgradePromptHost } from "../components/ProUpgradePromptHost";
+import {
+  recordAccountTransitionEvent,
+  registerAccountScopedCleanup,
+} from "../lib/accountTransition";
 import {
   IOS_AUTH_NATIVE_ISOLATION,
   beginAuthNativeTransition,
@@ -80,20 +82,25 @@ function AuthTransitionScreen({ message }: { message: string }) {
 }
 
 function RevenueCatBootstrap({ children }: { children: ReactNode }) {
-  const { isHydrated, userId } = useAuthSession();
+  const { authStatus, isAccountReady, isHydrated, userId } = useAuthSession();
 
   return (
-    <SubscriptionProvider authReady={isHydrated} userId={userId}>
+    <SubscriptionProvider
+      authReady={
+        isHydrated && isAccountReady && authStatus === "authenticated"
+      }
+      userId={userId}
+    >
       {children}
     </SubscriptionProvider>
   );
 }
 
 function FeatureAccessBootstrap() {
-  const { isHydrated, session, userId } = useAuthSession();
+  const { isAccountReady, isHydrated, session, userId } = useAuthSession();
 
   useEffect(() => {
-    if (!isHydrated) return;
+    if (!isHydrated || !isAccountReady) return;
 
     async function refreshFromSession(source: string) {
       recordAuthDiagnosticEvent(source, session, "FeatureAccessBootstrap");
@@ -117,7 +124,7 @@ function FeatureAccessBootstrap() {
     return () => {
       appStateListener.remove();
     };
-  }, [isHydrated, session, userId]);
+  }, [isAccountReady, isHydrated, session, userId]);
 
   return null;
 }
@@ -125,7 +132,7 @@ function FeatureAccessBootstrap() {
 function PushNotificationsBootstrap() {
   const router = useRouter();
   const handledInitialNotification = useRef(false);
-  const { authStatus, isHydrated, userId } = useAuthSession();
+  const { authStatus, isAccountReady, isHydrated, userId } = useAuthSession();
 
   useEffect(() => {
     if (IOS_AUTH_NATIVE_ISOLATION) {
@@ -137,7 +144,7 @@ function PushNotificationsBootstrap() {
       return;
     }
 
-    if (!isHydrated || !userId) return;
+    if (!isHydrated || !isAccountReady || !userId) return;
 
     void syncUserTimezone(userId).catch((error) => {
       if (__DEV__) {
@@ -149,20 +156,30 @@ function PushNotificationsBootstrap() {
         console.log("Push registration bootstrap failed", error);
       }
     });
-  }, [authStatus, isHydrated, userId]);
+  }, [authStatus, isAccountReady, isHydrated, userId]);
 
   useEffect(() => {
+    if (!isHydrated || !isAccountReady || !userId) {
+      return;
+    }
+
+    let active = true;
     const removeListeners = addClientMessageNotificationListeners({
       onClientMessageTap: () => {
+        if (!active) return;
         router.push("/messages" as any);
       },
+    });
+    const unregisterAccountCleanup = registerAccountScopedCleanup(() => {
+      active = false;
+      removeListeners();
     });
 
     if (!handledInitialNotification.current) {
       handledInitialNotification.current = true;
       void getLastClientMessageNotificationRoute()
         .then((route) => {
-          if (route) {
+          if (active && route) {
             router.push(route as any);
           }
         })
@@ -173,8 +190,12 @@ function PushNotificationsBootstrap() {
         });
     }
 
-    return removeListeners;
-  }, [router]);
+    return () => {
+      active = false;
+      unregisterAccountCleanup();
+      removeListeners();
+    };
+  }, [isAccountReady, isHydrated, router, userId]);
 
   return null;
 }
@@ -205,13 +226,14 @@ function AuthNativeTransitionBootstrap() {
 }
 
 function AuthNativeServicesBootstrap() {
-  const { authStatus, isHydrated, userId } = useAuthSession();
+  const { authStatus, isAccountReady, isHydrated, userId } = useAuthSession();
   const { syncRevenueCatAfterAuthSettle } = useSubscription();
 
   useEffect(() => {
     if (
       !IOS_AUTH_NATIVE_ISOLATION ||
       !isHydrated ||
+      !isAccountReady ||
       authStatus !== "authenticated" ||
       !userId
     ) {
@@ -228,39 +250,20 @@ function AuthNativeServicesBootstrap() {
         await registerForPushNotifications(userId);
       },
     });
-  }, [authStatus, isHydrated, syncRevenueCatAfterAuthSettle, userId]);
+  }, [
+    authStatus,
+    isAccountReady,
+    isHydrated,
+    syncRevenueCatAfterAuthSettle,
+    userId,
+  ]);
 
   return null;
 }
 
-async function settleKeyboard() {
-  Keyboard.dismiss();
-  await new Promise((resolve) => setTimeout(resolve, 100));
-  await new Promise<void>((resolve) => {
-    requestAnimationFrame(() => resolve());
-  });
-}
-
-function hasFocusedInput() {
-  return Boolean(TextInput.State.currentlyFocusedInput?.());
-}
-
-async function waitForBlurredInputs() {
-  for (let attempt = 0; attempt < 3; attempt += 1) {
-    const focusedInput = TextInput.State.currentlyFocusedInput?.();
-    focusedInput?.blur?.();
-    await settleKeyboard();
-
-    if (!hasFocusedInput()) {
-      return;
-    }
-  }
-}
-
 async function waitForAuthNavigationWindow() {
-  await new Promise<void>((resolve) => {
-    InteractionManager.runAfterInteractions(() => resolve());
-  });
+  await new Promise<void>((resolve) => requestAnimationFrame(() => resolve()));
+  await new Promise<void>((resolve) => requestAnimationFrame(() => resolve()));
 
   if (Platform.OS === "ios") {
     await new Promise((resolve) => setTimeout(resolve, 180));
@@ -278,6 +281,7 @@ function AuthNavigationCoordinator() {
   const {
     authStatus,
     authTransitionState,
+    isAccountReady,
     isHydrated,
     userId,
   } = useAuthSession();
@@ -285,6 +289,16 @@ function AuthNavigationCoordinator() {
   const pendingTargetRef = useRef<string | null>(null);
   const transitionRunIdRef = useRef(0);
   const mountedRef = useRef(true);
+  const latestAuthenticatedUserIdRef = useRef<string | null>(null);
+  const latestAuthStateKeyRef = useRef("");
+
+  latestAuthenticatedUserIdRef.current =
+    authStatus === "authenticated" && isAccountReady ? userId : null;
+  latestAuthStateKeyRef.current = [
+    authStatus,
+    isAccountReady ? "ready" : "pending",
+    userId ?? "none",
+  ].join(":");
 
   useEffect(() => {
     return () => {
@@ -309,11 +323,16 @@ function AuthNavigationCoordinator() {
       firstSegment === "terms" ||
       firstSegment === "+not-found";
 
-    if (!isHydrated || authStatus === "loading") {
+    if (
+      !isHydrated ||
+      authStatus === "loading" ||
+      (authStatus === "authenticated" && !isAccountReady)
+    ) {
       return;
     }
 
     let cancelled = false;
+    const expectedAuthStateKey = latestAuthStateKeyRef.current;
 
     async function replaceRoute(
       target:
@@ -349,8 +368,6 @@ function AuthNavigationCoordinator() {
       }
 
       try {
-        await waitForBlurredInputs();
-        await settleKeyboard();
         await waitForAuthNavigationWindow();
 
         if (Platform.OS === "ios") {
@@ -362,12 +379,28 @@ function AuthNavigationCoordinator() {
         if (
           cancelled ||
           !mountedRef.current ||
-          transitionRunIdRef.current !== transitionRunId
+          transitionRunIdRef.current !== transitionRunId ||
+          latestAuthStateKeyRef.current !== expectedAuthStateKey
         ) {
+          recordAccountTransitionEvent("navigation-ignored-stale-transition", {
+            from: routeKey || "index",
+            to: targetKey,
+          });
           return;
         }
 
         router.replace(target as any);
+        recordAccountTransitionEvent("navigation-performed", {
+          from: routeKey || "index",
+          to: targetKey,
+        });
+      } catch (error) {
+        recordAccountTransitionEvent("navigation-error", {
+          error: error instanceof Error ? error.message : String(error),
+          from: routeKey || "index",
+          to: targetKey,
+        });
+        setBridgeMessage(null);
       } finally {
         if ((cancelled || !mountedRef.current) && pendingTargetRef.current === targetKey) {
           pendingTargetRef.current = null;
@@ -388,13 +421,21 @@ function AuthNavigationCoordinator() {
 
     if (authStatus === "authenticated" && userId && isAuthEntryRoute) {
       async function redirectAuthenticatedUser() {
-        const targetRoute = await resolveAuthenticatedAppRoute();
+        try {
+          const targetRoute = await resolveAuthenticatedAppRoute();
 
-        if (cancelled) {
-          return;
+          if (cancelled || userId !== latestAuthenticatedUserIdRef.current) {
+            return;
+          }
+
+          await replaceRoute(targetRoute, "Opening Schedova...");
+        } catch (error) {
+          recordAccountTransitionEvent("navigation-error", {
+            error: error instanceof Error ? error.message : String(error),
+            from: routeKey || "index",
+            to: "authenticated-route",
+          });
         }
-
-        await replaceRoute(targetRoute, "Opening Schedova...");
       }
 
       void redirectAuthenticatedUser();
@@ -406,6 +447,7 @@ function AuthNavigationCoordinator() {
   }, [
     authStatus,
     authTransitionState,
+    isAccountReady,
     isHydrated,
     routeKey,
     router,
@@ -413,7 +455,17 @@ function AuthNavigationCoordinator() {
     userId,
   ]);
 
-  return bridgeMessage ? <AuthTransitionScreen message={bridgeMessage} /> : null;
+  const transitionMessage =
+    bridgeMessage ||
+    (authTransitionState === "signingOut"
+      ? "Switching accounts..."
+      : authStatus === "authenticated" && !isAccountReady
+        ? "Loading your account..."
+        : null);
+
+  return transitionMessage ? (
+    <AuthTransitionScreen message={transitionMessage} />
+  ) : null;
 }
 
 function SchedovaDeepLinkHandler() {
@@ -466,6 +518,7 @@ export default function RootLayout() {
             <PushNotificationsBootstrap />
             <AuthNavigationCoordinator />
             <SchedovaDeepLinkHandler />
+            <ProUpgradePromptHost />
             <Stack
               screenOptions={{
                 animation: Platform.OS === "ios" ? "none" : undefined,

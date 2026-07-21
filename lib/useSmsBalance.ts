@@ -6,6 +6,7 @@ import {
   loadMessageCreditBalance,
   type MessageCreditBalance,
 } from "./messageCredits";
+import { registerAccountScopedCleanup } from "./accountTransition";
 import { subscribeToSmsBalanceEvents } from "./smsBalanceEvents";
 import { supabase } from "./supabase";
 import type { UserSubscription } from "./subscriptionAccess";
@@ -147,6 +148,19 @@ export function useSmsBalance({
     },
     [],
   );
+
+  useEffect(() => {
+    return registerAccountScopedCleanup(async () => {
+      // Invalidate a pending subscribe before removing the channel it belongs to.
+      subscriptionSerialRef.current += 1;
+      const channel = channelRef.current;
+      channelRef.current = null;
+      channelUserIdRef.current = null;
+      await enqueueChannelOperation(async () => {
+        await safeRemoveChannel(channel);
+      });
+    });
+  }, [enqueueChannelOperation, safeRemoveChannel]);
 
   useFocusEffect(
     useCallback(() => {

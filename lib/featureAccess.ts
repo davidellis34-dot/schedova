@@ -1,6 +1,7 @@
 import { useEffect, useSyncExternalStore } from "react";
 import AsyncStorage from "@react-native-async-storage/async-storage";
 
+import { FREE_TIER_LIMITS } from "./freePlanLimits";
 import { ENABLE_PRO } from "./proFeatureFlag";
 import {
   hasAdminLifetimeSchedovaProAccess,
@@ -9,14 +10,6 @@ import {
   type UserSubscription,
 } from "./subscriptionAccess";
 import { supabase } from "./supabase";
-
-export const FREE_TIER_LIMITS = {
-  clients: 25,
-  services: 5,
-  appointmentsPerMonth: 30,
-  messageTemplates: 3,
-  clientHistoryItems: 3,
-} as const;
 
 export const PRO_FEATURE_HIGHLIGHTS = [
   "Email appointment messages",
@@ -50,7 +43,8 @@ export type FeatureKey =
   | "depositTracking"
   | "photoGallery"
   | "serviceFormulas"
-  | "customBusinessHours";
+  | "customBusinessHours"
+  | "clientReplies";
 
 type FeatureAccessState = {
   userId: string | null;
@@ -469,10 +463,10 @@ export function canUseFeature(feature: FeatureKey) {
     case "photoGallery":
     case "serviceFormulas":
     case "customBusinessHours":
+    case "clientReplies":
       return isPro();
     case "smsAutomation":
-      // SMS sends are governed by opt-in status and message credits, not Pro.
-      return true;
+      return isPro();
     default:
       return false;
   }

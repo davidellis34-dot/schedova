@@ -818,6 +818,11 @@ export default function BookAppointmentScreen() {
     const textIssue = sendsText ? manualTextIssue() : "";
     const emailIssue = sendsEmail ? manualEmailIssue() : "";
 
+    if (sendsText && !canUseFeature("smsAutomation")) {
+      showProUpgradePrompt(PRO_UPSELL_COPY.sms);
+      return;
+    }
+
     if (sendsEmail && !canUseFeature("emailMessaging")) {
       showProUpgradePrompt(PRO_UPSELL_COPY.emailMessaging);
       return;
