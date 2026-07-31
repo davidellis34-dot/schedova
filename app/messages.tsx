@@ -1,9 +1,10 @@
 import { useFocusEffect, useLocalSearchParams, useRouter } from "expo-router";
-import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
 import {
   ActivityIndicator,
   Alert,
   Animated,
+  AppState,
   type LayoutChangeEvent,
   Keyboard,
   KeyboardAvoidingView,
@@ -33,6 +34,12 @@ import {
   getConversationThreadLayout,
 } from "../lib/conversationThreadLayout";
 import { canUseFeature, useFeatureAccess } from "../lib/featureAccess";
+import { emitClientMessageEvent } from "../lib/clientMessageEvents";
+import {
+  getUnreadUnresolvedMessageCount,
+  isMessageVisibleInInbox,
+  logMessageBadgeState,
+} from "../lib/messageBadge";
 import { resolveThreadOpenTarget } from "../lib/messagesThreadUtils";
 import { openSchedovaProScreen, PRO_UPSELL_COPY } from "../lib/proUpsell";
 import {
@@ -63,6 +70,7 @@ type SmsReplyRow = {
   status?: string | null;
   provider_message_id?: string | null;
   created_at?: string | null;
+  metadata?: Record<string, unknown> | null;
   needs_attention?: boolean | null;
   attention_reason?: string | null;
   read_at?: string | null;
@@ -425,6 +433,8 @@ export default function MessagesScreen() {
   const nextResolveUndoNoticeIdRef = useRef(1);
   const conversationMenuTranslateY = useRef(new Animated.Value(28)).current;
   const conversationMenuOverlayOpacity = useRef(new Animated.Value(0)).current;
+  const activeAccountIdRef = useRef<string | null>(userId);
+  const messagesAccountIdRef = useRef<string | null>(null);
 
   const openClientId = readRouteParam(routeParams.openClientId).trim();
   const openClientPhone = readRouteParam(routeParams.openClientPhone).trim();
@@ -592,9 +602,10 @@ export default function MessagesScreen() {
       messageFilter === "all"
         ? messages
         : messages.filter((message) => message.channel === messageFilter);
+    const visibleMessages = filteredMessages.filter(isMessageVisibleInInbox);
     const byConversation = new Map<string, SmsReplyRow[]>();
 
-    filteredMessages.forEach((message) => {
+    visibleMessages.forEach((message) => {
       const key = String(message.conversation_id || message.id);
       const current = byConversation.get(key) || [];
       current.push(message);
@@ -609,9 +620,7 @@ export default function MessagesScreen() {
             new Date(left.created_at || 0).getTime(),
         );
         const latest = sorted[0];
-        const unreadCount = rows.filter(
-          (message) => message.direction === "inbound" && !message.read_at,
-        ).length;
+        const unreadCount = getUnreadUnresolvedMessageCount(rows);
         const needsAttention = rows.some(
           (message) => message.needs_attention && !message.resolved_at,
         );
@@ -649,7 +658,7 @@ export default function MessagesScreen() {
   );
 
   const repliesToReviewCount = useMemo(
-    () => messages.filter(isReplyNeedingReview).length,
+    () => messages.filter(isMessageVisibleInInbox).filter(isReplyNeedingReview).length,
     [messages],
   );
 
@@ -788,6 +797,16 @@ export default function MessagesScreen() {
     setLoading(authStatus === "loading");
   }, [authStatus, resetConversationMenuState, userId]);
 
+  useLayoutEffect(() => {
+    activeAccountIdRef.current = userId;
+    messagesAccountIdRef.current = null;
+    setMessages([]);
+    setClientsById({});
+    setAppointmentsById({});
+    setSelectedMessage(null);
+    setSelectedConversationMessages([]);
+  }, [userId]);
+
   useEffect(() => {
     if (!shouldScrollToReviewResults) return;
 
@@ -821,6 +840,7 @@ export default function MessagesScreen() {
 
   const fetchMessages = useCallback(async () => {
     if (!clientRepliesAvailable) {
+      messagesAccountIdRef.current = null;
       setMessages([]);
       setClientsById({});
       setAppointmentsById({});
@@ -838,6 +858,7 @@ export default function MessagesScreen() {
     setLoading(true);
 
     if (!userId) {
+      messagesAccountIdRef.current = null;
       setMessages([]);
       setClientsById({});
       setAppointmentsById({});
@@ -847,16 +868,21 @@ export default function MessagesScreen() {
       return [] as SmsReplyRow[];
     }
 
-    console.log("Messages current user id", userId);
+    const requestAccountId = userId;
+    console.log("Messages current user id", requestAccountId);
     setSetupError("");
 
     const { data: logRows, error: logsError } = await supabase
       .from("messages")
       .select(
-        "id, account_id, client_id, appointment_id, conversation_id, channel, direction, sender, recipient, subject, body, status, provider_message_id, created_at, needs_attention, attention_reason, read_at, resolved_at",
+        "id, account_id, client_id, appointment_id, conversation_id, channel, direction, sender, recipient, subject, body, status, provider_message_id, created_at, metadata, needs_attention, attention_reason, read_at, resolved_at",
       )
-      .eq("account_id", userId)
+      .eq("account_id", requestAccountId)
       .order("created_at", { ascending: false });
+
+    if (activeAccountIdRef.current !== requestAccountId) {
+      return [] as SmsReplyRow[];
+    }
 
     if (logsError) {
       if (isMissingMessagesTableError(logsError)) {
@@ -878,6 +904,7 @@ export default function MessagesScreen() {
 
     const safeMessages = ((logRows || []).filter(Boolean) as SmsReplyRow[]) || [];
     console.log("Messages loaded", safeMessages);
+    messagesAccountIdRef.current = requestAccountId;
     setMessages(safeMessages);
 
     const clientIds = Array.from(
@@ -900,7 +927,7 @@ export default function MessagesScreen() {
         ? supabase
             .from("clients")
             .select("id, name, phone, email, sms_opt_in, email_opt_in")
-            .eq("user_id", userId)
+            .eq("user_id", requestAccountId)
             .in("id", clientIds)
         : Promise.resolve({ data: [], error: null }),
       appointmentIds.length > 0
@@ -909,10 +936,14 @@ export default function MessagesScreen() {
             .select(
               "id, client_id, client_name, appointment_date, appointment_time, end_time, duration_minutes, service_ids, status, needs_attention, attention_reason",
             )
-            .eq("user_id", userId)
+            .eq("user_id", requestAccountId)
             .in("id", appointmentIds)
         : Promise.resolve({ data: [], error: null }),
     ]);
+
+    if (activeAccountIdRef.current !== requestAccountId) {
+      return [] as SmsReplyRow[];
+    }
 
     if (clientsResult.error) {
       Alert.alert("Error", clientsResult.error.message);
@@ -938,6 +969,17 @@ export default function MessagesScreen() {
     setLoading(false);
     return safeMessages;
   }, [clientRepliesAvailable, isHydrated, userId]);
+
+  useEffect(() => {
+    if (!userId || messagesAccountIdRef.current !== userId) return;
+
+    logMessageBadgeState("Messages badge state", messages);
+    emitClientMessageEvent({
+      accountId: userId,
+      messages,
+      source: "local",
+    });
+  }, [messages, userId]);
 
   const ensureClientLoaded = useCallback(
     async (clientId?: string | null) => {
@@ -982,6 +1024,47 @@ export default function MessagesScreen() {
     }, [fetchMessages]),
   );
 
+  useEffect(() => {
+    const appStateSubscription = AppState.addEventListener("change", (state) => {
+      if (state === "active") {
+        void fetchMessages();
+      }
+    });
+
+    return () => {
+      appStateSubscription.remove();
+    };
+  }, [fetchMessages]);
+
+  useEffect(() => {
+    if (!isHydrated || !userId || !clientRepliesAvailable) return;
+
+    let active = true;
+    const channel = supabase
+      .channel(`messages-inbox-${userId}`)
+      .on(
+        "postgres_changes",
+        {
+          event: "*",
+          schema: "public",
+          table: "messages",
+          filter: `account_id=eq.${userId}`,
+        },
+        (payload) => {
+          if (!active) return;
+          console.log("Messages realtime event", payload.eventType);
+          emitClientMessageEvent({ accountId: userId, source: "realtime" });
+          void fetchMessages();
+        },
+      )
+      .subscribe();
+
+    return () => {
+      active = false;
+      void supabase.removeChannel(channel);
+    };
+  }, [clientRepliesAvailable, fetchMessages, isHydrated, userId]);
+
   const openMessage = useCallback(
     async (message: SmsReplyRow, options: OpenMessageOptions = {}) => {
       let nextMessage = message;
@@ -1001,6 +1084,28 @@ export default function MessagesScreen() {
 
       if (message.direction === "inbound" && !message.read_at) {
         const readAt = new Date().toISOString();
+        const previousReadAtById = new Map(
+          conversationRows.map((row) => [row.id, row.read_at || null]),
+        );
+        nextMessage = {
+          ...message,
+          read_at: readAt,
+        };
+        conversationRows = conversationRows.map((row) =>
+          row.direction === "inbound"
+            ? { ...row, read_at: row.read_at || readAt }
+            : row,
+        );
+        setMessages((current) =>
+          current.map((row) =>
+            String(row.conversation_id || row.id) === conversationId &&
+            row.direction === "inbound" &&
+            (!options.channelFilter || row.channel === options.channelFilter)
+              ? { ...row, read_at: row.read_at || readAt }
+              : row,
+          ),
+        );
+
         let query = supabase
           .from("messages")
           .update({ read_at: readAt })
@@ -1016,26 +1121,27 @@ export default function MessagesScreen() {
         const { error } = await query;
 
         if (error) {
-          Alert.alert("Error", error.message);
-        } else {
-          nextMessage = {
-            ...message,
-            read_at: readAt,
-          };
-          conversationRows = conversationRows.map((row) =>
-            row.direction === "inbound"
-              ? { ...row, read_at: row.read_at || readAt }
-              : row,
-          );
+          nextMessage = message;
+          conversationRows = sourceMessages
+            .filter(
+              (row) =>
+                String(row.conversation_id || row.id) === conversationId &&
+                (!options.channelFilter || row.channel === options.channelFilter),
+            )
+            .sort(
+              (left, right) =>
+                new Date(left.created_at || 0).getTime() -
+                new Date(right.created_at || 0).getTime(),
+            );
           setMessages((current) =>
             current.map((row) =>
               String(row.conversation_id || row.id) === conversationId &&
-              row.direction === "inbound" &&
-              (!options.channelFilter || row.channel === options.channelFilter)
-                ? { ...row, read_at: row.read_at || readAt }
+              previousReadAtById.has(row.id)
+                ? { ...row, read_at: previousReadAtById.get(row.id) || null }
                 : row,
             ),
           );
+          Alert.alert("Error", error.message);
         }
       }
 

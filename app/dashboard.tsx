@@ -4,6 +4,7 @@ import { useFocusEffect, useRouter } from "expo-router";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import {
   Alert,
+  AppState,
   Modal,
   Platform,
   Pressable,
@@ -53,6 +54,10 @@ import {
   loadMessageCreditBalance,
   type MessageCreditBalance,
 } from "../lib/messageCredits";
+import {
+  getOpenActionableConversationThreadCount,
+  logMessageBadgeState,
+} from "../lib/messageBadge";
 import { ENABLE_PRO } from "../lib/proFeatureFlag";
 import { openSchedovaProScreen, PRO_UPSELL_COPY, showProUpgradePrompt } from "../lib/proUpsell";
 import {
@@ -141,6 +146,7 @@ export default function Dashboard() {
     useState<DashboardSecondaryData>(EMPTY_DASHBOARD_SECONDARY_DATA);
   const longPressHandledAppointmentId = useRef<string | null>(null);
   const dashboardLoadIdRef = useRef(0);
+  const badgeRefreshIdRef = useRef(0);
   const userEmail = user?.email || "";
   const {
     hasBusiness,
@@ -204,6 +210,11 @@ export default function Dashboard() {
     setSelectedStatusAppointment(null);
     setActionAppointment(null);
   }, [authStatus, userId]);
+
+  useEffect(() => {
+    badgeRefreshIdRef.current += 1;
+    setSecondaryData((current) => ({ ...current, clientRepliesCount: 0 }));
+  }, [userId]);
 
   function getClientDisplayName(appointment: any) {
     if (!appointment) {
@@ -474,43 +485,31 @@ export default function Dashboard() {
       return 0;
     }
 
-    const preferredResult = await supabase
-      .from("sms_message_logs")
-      .select("id", { count: "exact", head: true })
-      .eq("user_id", userId)
-      .eq("direction", "inbound")
-      .is("read_at", null)
-      .is("resolved_at", null);
+    const { data, error } = await supabase
+      .from("messages")
+      .select("id, conversation_id, direction, read_at, resolved_at, status, metadata")
+      .eq("account_id", userId);
 
-    if (!preferredResult.error) {
-      const count = preferredResult.count || 0;
-      console.log("Dashboard reply badge count", count);
-      return count;
-    }
-
-    const fallbackResult = await supabase
-      .from("sms_message_logs")
-      .select("id", { count: "exact", head: true })
-      .eq("user_id", userId)
-      .eq("direction", "inbound")
-      .is("resolved_at", null);
-
-    if (fallbackResult.error) {
+    if (error) {
       console.log(
         "FETCH CLIENT REPLIES COUNT ERROR:",
-        fallbackResult.error.message,
+        error.message,
       );
       console.log("Dashboard reply badge count", 0);
       return 0;
     }
 
-    const count = fallbackResult.count || 0;
+    const messageRows = data || [];
+    logMessageBadgeState("Dashboard badge state", messageRows);
+    const count = getOpenActionableConversationThreadCount(messageRows);
     console.log("Dashboard reply badge count", count);
     return count;
   }, [isHydrated, userId]);
 
   const refreshClientRepliesCount = useCallback(async () => {
+    const refreshId = ++badgeRefreshIdRef.current;
     const count = await loadClientRepliesCount();
+    if (refreshId !== badgeRefreshIdRef.current) return;
     setSecondaryData((current) => ({ ...current, clientRepliesCount: count }));
   }, [loadClientRepliesCount]);
 
@@ -548,6 +547,8 @@ export default function Dashboard() {
       async function loadDashboard() {
         if (!isHydrated || !userId) return;
 
+        void refreshClientRepliesCount();
+
         const cached = getDashboardPrimaryCache(userId);
         let primaryAppointments = cached?.appointments || [];
 
@@ -576,14 +577,12 @@ export default function Dashboard() {
 
           void Promise.all([
             loadBusinessStatus(),
-            loadClientRepliesCount(),
             loadLatestAppointmentReplies(primaryAppointments),
             loadSmsBalance(),
             loadDisplayPreferences(),
           ]).then(
             ([
               nextHasBusiness,
-              nextClientRepliesCount,
               nextLatestRepliesByAppointmentId,
               nextSmsBalance,
               nextDisplayPreferences,
@@ -593,13 +592,13 @@ export default function Dashboard() {
               // All secondary dashboard values settle together so background
               // enrichment needs one render rather than one per request.
               setDisplayPreferences(nextDisplayPreferences);
-              setSecondaryData({
+              setSecondaryData((current) => ({
                 hasBusiness: nextHasBusiness,
-                clientRepliesCount: nextClientRepliesCount,
+                clientRepliesCount: current.clientRepliesCount,
                 latestRepliesByAppointmentId: nextLatestRepliesByAppointmentId,
                 smsBalance: nextSmsBalance.balance,
                 smsBalanceError: nextSmsBalance.error,
-              });
+              }));
               recordScreenBackgroundRefreshComplete("dashboard");
             },
           );
@@ -615,11 +614,11 @@ export default function Dashboard() {
     }, [
       applyDashboardPrimaryData,
       loadBusinessStatus,
-      loadClientRepliesCount,
       loadDashboardPrimaryData,
       loadDisplayPreferences,
       loadLatestAppointmentReplies,
       loadSmsBalance,
+      refreshClientRepliesCount,
       userId,
       isHydrated,
     ]),
@@ -690,9 +689,32 @@ export default function Dashboard() {
   }, [userId]);
 
   useEffect(() => {
-    return subscribeToClientMessageEvents(() => {
+    return subscribeToClientMessageEvents((event) => {
+      if (event.accountId && event.accountId !== userId) return;
+
+      if (event.messages) {
+        logMessageBadgeState("Dashboard badge event", event.messages);
+        setSecondaryData((current) => ({
+          ...current,
+          clientRepliesCount: getOpenActionableConversationThreadCount(event.messages || []),
+        }));
+        return;
+      }
+
       void refreshClientRepliesCount();
     });
+  }, [refreshClientRepliesCount, userId]);
+
+  useEffect(() => {
+    const appStateSubscription = AppState.addEventListener("change", (state) => {
+      if (state === "active") {
+        void refreshClientRepliesCount();
+      }
+    });
+
+    return () => {
+      appStateSubscription.remove();
+    };
   }, [refreshClientRepliesCount]);
 
   useEffect(() => {
@@ -707,19 +729,13 @@ export default function Dashboard() {
         {
           event: "*",
           schema: "public",
-          table: "sms_message_logs",
-          filter: `user_id=eq.${userId}`,
+          table: "messages",
+          filter: `account_id=eq.${userId}`,
         },
         (payload) => {
           if (!active) return;
-          const row = (payload.new || payload.old || {}) as {
-            direction?: unknown;
-          };
-
-          if (row.direction === "inbound") {
-            console.log("Dashboard client reply realtime event", payload.eventType);
-            void refreshClientRepliesCount();
-          }
+          console.log("Dashboard client reply realtime event", payload.eventType);
+          void refreshClientRepliesCount();
         },
       )
       .subscribe();
