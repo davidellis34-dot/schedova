@@ -11,7 +11,6 @@ import {
   createSchedovaUiTheme,
 } from "../components/ui";
 import { useAuthSession } from "../lib/authSession";
-import { hasSelectedUserCountryRegion } from "../lib/countrySettings";
 import { refreshFeatureAccess } from "../lib/featureAccess";
 import {
   AUTH_PASSWORD_MIN_LENGTH,
@@ -20,7 +19,7 @@ import {
   matchesAuthRedirectPath,
   PASSWORD_RESET_REDIRECT_PATH,
 } from "../lib/mobileAuth";
-import { hasCompletedOnboarding } from "../lib/onboarding";
+import { resolveAuthenticatedAppRoute } from "../lib/authRouting";
 import { supabase } from "../lib/supabase";
 import { useAppTheme } from "../lib/useAppTheme";
 
@@ -112,20 +111,7 @@ export default function ResetPasswordScreen() {
     }
 
     await refreshFeatureAccess(userId, "password-recovery");
-
-    const nextRoute = (await hasCompletedOnboarding()
-      ? "/dashboard"
-      : "/onboarding") as "/dashboard" | "/onboarding";
-
-    if (!(await hasSelectedUserCountryRegion())) {
-      router.replace({
-        pathname: "/country-region",
-        params: { next: nextRoute },
-      } as any);
-      return;
-    }
-
-    router.replace(nextRoute as any);
+    router.replace((await resolveAuthenticatedAppRoute(userId)) as any);
   }
 
   async function updatePassword() {
