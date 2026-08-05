@@ -1,4 +1,8 @@
 import { normalizePhoneForSmsWithUserDefault } from "./countrySettings";
+import {
+  createPrimaryCommunicationRecipient,
+  syncPrimaryCommunicationRecipient,
+} from "./primaryCommunicationRecipient";
 import { supabase } from "./supabase";
 
 export type CommunicationRecipient = {
@@ -25,6 +29,17 @@ type ClientContactRow = {
   is_primary: boolean | null;
 };
 
+type AppointmentMessageRecipientRow = {
+  client_contact_id: string | null;
+  client_id: string | null;
+  contact_name: string | null;
+  relationship: string | null;
+  phone: string | null;
+  email: string | null;
+  send_sms: boolean | null;
+  send_email: boolean | null;
+};
+
 function cleanEmail(value: string) {
   return String(value || "").trim().toLowerCase();
 }
@@ -37,19 +52,22 @@ export function createPrimaryRecipient(input: {
   smsOptIn?: boolean | null;
   emailOptIn?: boolean | null;
 }): CommunicationRecipient {
-  const phone = String(input.phone || "").trim();
-  const email = String(input.email || "").trim();
+  return createPrimaryCommunicationRecipient(input);
+}
 
-  return {
-    clientId: input.clientId || null,
-    name: String(input.name || "").trim(),
-    relationship: "",
-    phone,
-    email,
-    smsEnabled: Boolean(input.smsOptIn && phone),
-    emailEnabled: Boolean(input.emailOptIn && email),
-    isPrimary: true,
-  };
+export function syncPrimaryRecipient(
+  current: CommunicationRecipient | null | undefined,
+  input: {
+    clientId?: string | null;
+    name?: string | null;
+    phone?: string | null;
+    email?: string | null;
+    smsOptIn?: boolean | null;
+    emailOptIn?: boolean | null;
+    fallbackName?: string | null;
+  },
+): CommunicationRecipient {
+  return syncPrimaryCommunicationRecipient(current, input);
 }
 
 export function normalizeRecipient(row: ClientContactRow): CommunicationRecipient {
@@ -63,6 +81,22 @@ export function normalizeRecipient(row: ClientContactRow): CommunicationRecipien
     smsEnabled: Boolean(row.sms_enabled && row.phone),
     emailEnabled: Boolean(row.email_enabled && row.email),
     isPrimary: Boolean(row.is_primary),
+  };
+}
+
+function normalizeAppointmentRecipient(
+  row: AppointmentMessageRecipientRow,
+): CommunicationRecipient {
+  return {
+    id: row.client_contact_id,
+    clientId: row.client_id,
+    name: String(row.contact_name || "").trim(),
+    relationship: String(row.relationship || "").trim(),
+    phone: String(row.phone || "").trim(),
+    email: String(row.email || "").trim(),
+    smsEnabled: Boolean(row.send_sms && row.phone),
+    emailEnabled: Boolean(row.send_email && row.email),
+    isPrimary: false,
   };
 }
 
@@ -197,6 +231,26 @@ export async function saveClientCommunicationRecipients(input: {
   }
 
   return normalizedRecipients;
+}
+
+export async function fetchAppointmentCommunicationRecipients(input: {
+  userId: string;
+  appointmentId: string;
+}) {
+  const { data, error } = await supabase
+    .from("appointment_message_recipients")
+    .select(
+      "client_contact_id, client_id, contact_name, relationship, phone, email, send_sms, send_email",
+    )
+    .eq("user_id", input.userId)
+    .eq("appointment_id", input.appointmentId)
+    .order("created_at", { ascending: true });
+
+  if (error) throw error;
+
+  return ((data || []) as AppointmentMessageRecipientRow[]).map(
+    normalizeAppointmentRecipient,
+  );
 }
 
 export async function saveAppointmentCommunicationRecipients(input: {

@@ -15,6 +15,7 @@ import type { ClientTag } from "../lib/clientTags";
 import {
   createPrimaryRecipient,
   saveClientCommunicationRecipients,
+  syncPrimaryRecipient,
   type CommunicationRecipient,
 } from "../lib/communicationRecipients";
 import { normalizePhoneForSmsWithUserDefault } from "../lib/countrySettings";
@@ -88,6 +89,7 @@ export default function AddClientScreen() {
   const [birthday, setBirthday] = useState("");
   const [rebookingWeeks, setRebookingWeeks] = useState("6");
   const [smsOptIn, setSmsOptIn] = useState(false);
+  const [emailOptIn, setEmailOptIn] = useState(false);
   const [recipients, setRecipients] = useState<CommunicationRecipient[]>([
     createPrimaryRecipient({}),
   ]);
@@ -98,28 +100,30 @@ export default function AddClientScreen() {
   useEffect(() => {
     setRecipients((current) => {
       const next = current.length > 0 ? [...current] : [createPrimaryRecipient({})];
-      const primary = next[0];
-      const primaryPhone = primary.phone || phone;
-
-      next[0] = {
-        ...primary,
-        name: primary.name || name,
-        phone: primaryPhone,
-        email: primary.email || email,
-        smsEnabled: Boolean(primaryPhone.trim()) && (primary.smsEnabled || smsOptIn),
-        emailEnabled: primary.emailEnabled || Boolean(email.trim()),
-        isPrimary: true,
-      };
+      next[0] = syncPrimaryRecipient(next[0], {
+        name,
+        phone,
+        email,
+        smsOptIn,
+        emailOptIn,
+        fallbackName: name.trim() || phone.trim() || email.trim(),
+      });
 
       return next;
     });
-  }, [email, name, phone, smsOptIn]);
+  }, [email, emailOptIn, name, phone, smsOptIn]);
 
   useEffect(() => {
     if (!phone.trim() && smsOptIn) {
       setSmsOptIn(false);
     }
   }, [phone, smsOptIn]);
+
+  useEffect(() => {
+    if (!email.trim() && emailOptIn) {
+      setEmailOptIn(false);
+    }
+  }, [email, emailOptIn]);
 
   async function saveClient() {
     if (saving) return;
@@ -141,6 +145,8 @@ export default function AddClientScreen() {
       const trimmedBirthday = birthday.trim();
       const displayName = trimmedName || trimmedPhone || trimmedEmail;
       const nextSmsOptIn = Boolean(trimmedPhone) && smsOptIn;
+      const nextEmailOptIn = Boolean(trimmedEmail) && emailOptIn;
+      const now = new Date().toISOString();
 
       if (!displayName) {
         const message = "Enter a name, phone number, or email.";
@@ -250,6 +256,11 @@ export default function AddClientScreen() {
               rebooking_weeks: parseRebookingWeeks(rebookingWeeks),
               client_tag: clientTag,
               sms_opt_in: nextSmsOptIn,
+              sms_opt_in_at: nextSmsOptIn ? now : null,
+              sms_opt_in_source: nextSmsOptIn ? "Add Client" : null,
+              email_opt_in: nextEmailOptIn,
+              email_opt_in_at: nextEmailOptIn ? now : null,
+              email_opt_in_source: nextEmailOptIn ? "Add Client" : null,
             })
             .select("id")
             .single(),
@@ -278,22 +289,15 @@ export default function AddClientScreen() {
                 clientId,
                 recipients: recipients.map((recipient, index) =>
                   index === 0
-                    ? (() => {
-                        const primaryPhone = recipient.phone || trimmedPhone;
-
-                        return {
-                          ...recipient,
-                          name: recipient.name || displayName,
-                          phone: primaryPhone,
-                          email: recipient.email || trimmedEmail,
-                          smsEnabled:
-                            Boolean(primaryPhone) &&
-                            (recipient.smsEnabled || nextSmsOptIn),
-                          emailEnabled:
-                            recipient.emailEnabled || Boolean(trimmedEmail),
-                          isPrimary: true,
-                        };
-                      })()
+                    ? syncPrimaryRecipient(recipient, {
+                        clientId,
+                        name: trimmedName,
+                        phone: trimmedPhone,
+                        email: trimmedEmail,
+                        smsOptIn: nextSmsOptIn,
+                        emailOptIn: nextEmailOptIn,
+                        fallbackName: displayName,
+                      })
                     : recipient,
                 ),
               }),
@@ -515,6 +519,53 @@ export default function AddClientScreen() {
             {phone.trim()
               ? "Only enable this if the client has agreed to receive appointment text messages."
               : "Add a phone number before enabling SMS appointment texts."}
+          </Text>
+        </View>
+
+        <View
+          style={{
+            borderWidth: 1,
+            borderColor: infoAccentBorder,
+            borderLeftColor: infoAccent,
+            borderLeftWidth: 4,
+            borderRadius: 14,
+            padding: 14,
+            marginBottom: 18,
+            backgroundColor: infoAccentSoft,
+          }}
+        >
+          <View
+            style={{
+              flexDirection: "row",
+              alignItems: "center",
+              justifyContent: "space-between",
+              gap: 12,
+            }}
+          >
+            <Text style={{ color: colors.text, fontWeight: "800", flex: 1 }}>
+              Client agreed to receive appointment emails.
+            </Text>
+            <Switch
+              value={Boolean(email.trim()) && emailOptIn}
+              disabled={!email.trim()}
+              onValueChange={(value) => {
+                setEmailOptIn(Boolean(email.trim()) && value);
+              }}
+              thumbColor={email.trim() && emailOptIn ? colors.primary : undefined}
+            />
+          </View>
+
+          <Text
+            style={{
+              color: colors.mutedText,
+              marginTop: 8,
+              fontSize: 12,
+              lineHeight: 18,
+            }}
+          >
+            {email.trim()
+              ? "Only enable this if the client has agreed to receive appointment email messages."
+              : "Add an email address before enabling appointment emails."}
           </Text>
         </View>
 

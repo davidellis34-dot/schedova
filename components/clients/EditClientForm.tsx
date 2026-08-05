@@ -9,6 +9,7 @@ import {
   createPrimaryRecipient,
   fetchClientCommunicationRecipients,
   saveClientCommunicationRecipients,
+  syncPrimaryRecipient,
   type CommunicationRecipient,
 } from "../../lib/communicationRecipients";
 import { normalizePhoneForSmsWithUserDefault } from "../../lib/countrySettings";
@@ -222,6 +223,32 @@ export function EditClientForm({
     }
   }, [phone, smsOptIn]);
 
+  useEffect(() => {
+    if (!email.trim() && emailOptIn) {
+      setEmailOptIn(false);
+    }
+  }, [email, emailOptIn]);
+
+  useEffect(() => {
+    setRecipients((current) => {
+      const next =
+        current.length > 0
+          ? [...current]
+          : [createPrimaryRecipient({ clientId: normalizedClientId })];
+      next[0] = syncPrimaryRecipient(next[0], {
+        clientId: normalizedClientId,
+        name,
+        phone,
+        email,
+        smsOptIn,
+        emailOptIn,
+        fallbackName: name.trim() || phone.trim() || email.trim(),
+      });
+
+      return next;
+    });
+  }, [email, emailOptIn, name, normalizedClientId, phone, smsOptIn]);
+
   async function saveClient() {
     if (saving || loadingClient) return;
 
@@ -244,6 +271,7 @@ export function EditClientForm({
       const clientIdMessage = getClientIdValidationMessage(normalizedClientId);
       const now = new Date().toISOString();
       const nextSmsOptIn = Boolean(trimmedPhone) && smsOptIn;
+      const nextEmailOptIn = Boolean(trimmedEmail) && emailOptIn;
 
       if (clientIdMessage) {
         setErrorMessage(clientIdMessage);
@@ -325,9 +353,9 @@ export function EditClientForm({
               sms_opt_in: nextSmsOptIn,
               sms_opt_in_at: nextSmsOptIn ? now : null,
               sms_opt_in_source: nextSmsOptIn ? "Edit Client" : null,
-              email_opt_in: emailOptIn,
-              email_opt_in_at: emailOptIn ? now : null,
-              email_opt_in_source: emailOptIn ? "Edit Client" : null,
+              email_opt_in: nextEmailOptIn,
+              email_opt_in_at: nextEmailOptIn ? now : null,
+              email_opt_in_source: nextEmailOptIn ? "Edit Client" : null,
             })
             .eq("id", normalizedClientId)
             .eq("user_id", currentUserId),
@@ -354,21 +382,15 @@ export function EditClientForm({
               clientId: normalizedClientId,
               recipients: recipients.map((recipient, index) =>
                 index === 0
-                  ? (() => {
-                      const primaryPhone = recipient.phone || trimmedPhone;
-
-                      return {
-                        ...recipient,
-                        name: recipient.name || displayName,
-                        phone: primaryPhone,
-                        email: recipient.email || trimmedEmail,
-                        smsEnabled:
-                          Boolean(primaryPhone) &&
-                          (recipient.smsEnabled || nextSmsOptIn),
-                        emailEnabled: recipient.emailEnabled || emailOptIn,
-                        isPrimary: true,
-                      };
-                    })()
+                  ? syncPrimaryRecipient(recipient, {
+                      clientId: normalizedClientId,
+                      name: trimmedName,
+                      phone: trimmedPhone,
+                      email: trimmedEmail,
+                      smsOptIn: nextSmsOptIn,
+                      emailOptIn: nextEmailOptIn,
+                      fallbackName: displayName,
+                    })
                   : recipient,
               ),
             }),
@@ -615,9 +637,12 @@ export function EditClientForm({
               Email appointment messages
             </Text>
             <Switch
-              value={emailOptIn}
-              onValueChange={setEmailOptIn}
-              thumbColor={emailOptIn ? colors.primary : undefined}
+              value={Boolean(email.trim()) && emailOptIn}
+              disabled={!email.trim()}
+              onValueChange={(value) => {
+                setEmailOptIn(Boolean(email.trim()) && value);
+              }}
+              thumbColor={email.trim() && emailOptIn ? colors.primary : undefined}
             />
           </View>
 
