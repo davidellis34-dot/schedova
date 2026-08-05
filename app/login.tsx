@@ -19,7 +19,7 @@ import {
   createSchedovaUiTheme,
 } from "../components/ui";
 import { useAuthSession } from "../lib/authSession";
-import { isSchedovaInternalDebugMode } from "../lib/debugMode";
+import { isGoogleOAuthDiagnosticsEnabled } from "../lib/authDebugVisibility";
 import {
   PRIVACY_POLICY_URL,
   SUPPORT_EMAIL,
@@ -80,11 +80,7 @@ export default function LoginScreen() {
   const [googleProviderRedirectPreview, setGoogleProviderRedirectPreview] =
     useState<string | null>(null);
   const googleRedirectPreview = getGoogleOAuthRedirectUri();
-  const authDebugVisible =
-    isSchedovaInternalDebugMode() ||
-    (typeof envBuildProfile === "string" &&
-      envBuildProfile.trim().length > 0 &&
-      envBuildProfile.trim() !== "production");
+  const authDebugVisible = isGoogleOAuthDiagnosticsEnabled();
 
   useEffect(() => {
     return () => {
