@@ -6,6 +6,7 @@ export type SafeAreaInsetsLike = {
 export type ConversationHeaderAction = "close" | "more";
 
 export const CONVERSATION_HEADER_ACTION_SIZE = 44;
+export const CONVERSATION_KEYBOARD_VERTICAL_OFFSET = 0;
 
 function getSafeInset(value?: number | null) {
   return Math.max(0, Number(value) || 0);
@@ -25,6 +26,28 @@ export function getConversationThreadLayout(insets: SafeAreaInsetsLike) {
     headerPaddingTop: topInset + 8,
     menuPaddingBottom: Math.max(bottomInset, 10),
   };
+}
+
+export function getConversationKeyboardBehavior(
+  platform: string,
+): "height" | "padding" | "position" {
+  // The conversation is presented full-screen with no native navigation header.
+  // Keeping this here prevents individual screens from guessing a header offset.
+  // Padding keeps Android's normal-flow composer attached to the keyboard even
+  // when window resize is delayed by edge-to-edge system bars.
+  return "padding";
+}
+
+export function getAndroidKeyboardFallbackInset(
+  viewportHeight: number,
+  keyboardTop: number,
+) {
+  const safeViewportHeight = Math.max(0, Number(viewportHeight) || 0);
+  const safeKeyboardTop = Math.max(0, Number(keyboardTop) || 0);
+
+  // Only fill the overlap that remains after native keyboard avoidance has had
+  // a chance to resize the conversation viewport.
+  return Math.max(0, Math.round(safeViewportHeight - safeKeyboardTop));
 }
 
 export function getConversationHeaderActionOutcome(action: ConversationHeaderAction) {

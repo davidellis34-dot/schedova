@@ -309,7 +309,16 @@ export default function LoginScreen() {
     }
 
     setErrorMessage("");
-    const signedInUserId = data.user?.id ?? data.session?.user?.id ?? null;
+    let signedInUserId: string | null =
+      data.user?.id ?? data.session?.user?.id ?? null;
+
+    // Rarely, the password response arrives before the persisted session is
+    // visible to the client. Check the canonical session once before treating
+    // the otherwise successful sign-in as a failure.
+    if (!signedInUserId) {
+      const { data: sessionData } = await supabase.auth.getSession();
+      signedInUserId = sessionData.session?.user?.id ?? null;
+    }
 
     if (!signedInUserId) {
       setErrorMessage("Signed in, but the account session was not ready.");

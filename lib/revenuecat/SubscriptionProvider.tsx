@@ -18,6 +18,10 @@ import {
 } from "../authNativeIsolation";
 import { shouldStartRevenueCatIdentitySync } from "../accountSwitchUtils";
 import {
+  recordAccountTransitionEvent,
+  registerAccountScopedCleanup,
+} from "../accountTransition";
+import {
   refreshFeatureAccess,
   setCachedEntitlementFeatureAccess,
   setRevenueCatFeatureAccess,
@@ -249,17 +253,26 @@ export function SubscriptionProvider({
 
       console.log("[AuthNative] skipped RevenueCat during transition", {
         source,
-        userId: activeUserId,
+        hasAuthenticatedAccount: Boolean(activeUserId),
       });
       return true;
     },
     [userId],
   );
 
-  const clearLocalRevenueCatState = useCallback((source: string) => {
+  const clearLocalRevenueCatState = useCallback((
+    source: string,
+    nextUserId: string | null = null,
+  ) => {
+    // Invalidate listeners and every asynchronous customer-info result before
+    // clearing state. This prevents account A from updating account B's UI.
+    delayedAuthSyncRunIdRef.current += 1;
+    customerInfoListenerRunIdRef.current += 1;
+    customerInfoListenerRemoveRef.current?.();
+    customerInfoListenerRemoveRef.current = null;
+    customerInfoRefreshPromiseRef.current = null;
     activeUserIdRef.current = null;
-    cachedRevenueCatUserIdRef.current =
-      source === "revenuecat:user-switch" ? userId ?? null : null;
+    cachedRevenueCatUserIdRef.current = nextUserId;
     setCachedRevenueCatIsPro(false);
     customerInfoRef.current = null;
     setCustomerInfo(null);
@@ -270,19 +283,29 @@ export function SubscriptionProvider({
     setLastCustomerInfoRefreshAt(null);
     lastCustomerInfoRefreshAtRef.current = null;
     setCustomerInfoFetchStatus("idle");
-    setConfirmedEntitlement({ userId: userId ?? null, isPro: null });
-  }, [userId]);
+    setConfirmedEntitlement({ userId: nextUserId, isPro: null });
+    recordAccountTransitionEvent("local_user_state_cleared", { source });
+  }, []);
 
   useEffect(() => {
-    delayedAuthSyncRunIdRef.current += 1;
-    customerInfoListenerRunIdRef.current += 1;
-    customerInfoListenerRemoveRef.current?.();
-    customerInfoListenerRemoveRef.current = null;
-
     if (userId) return;
 
     clearLocalRevenueCatState("revenuecat:account-cleared");
     setLoading(false);
+  }, [clearLocalRevenueCatState, userId]);
+
+  useEffect(() => {
+    if (!userId) return;
+
+    return registerAccountScopedCleanup(
+      () => {
+        if (latestUserIdRef.current !== userId) return;
+
+        clearLocalRevenueCatState("revenuecat:account-transition");
+        setLoading(false);
+      },
+      "subscription",
+    );
   }, [clearLocalRevenueCatState, userId]);
 
   const applyCustomerInfo = useCallback(
@@ -301,7 +324,7 @@ export function SubscriptionProvider({
         if (__DEV__) {
           console.log(
             "[RevenueCat] customerInfo fetch returned no data; keeping previous subscription state",
-            { source, userId },
+            { source, hasAuthenticatedAccount: Boolean(userId) },
           );
         }
         return;
@@ -314,8 +337,8 @@ export function SubscriptionProvider({
         if (__DEV__) {
           console.log("[RevenueCat] Ignoring stale customerInfo result", {
             source,
-            sourceUserId: activeUserId,
-            latestUserId,
+            hasSourceAccount: Boolean(activeUserId),
+            hasLatestAccount: Boolean(latestUserId),
           });
         }
         return;
@@ -338,8 +361,8 @@ export function SubscriptionProvider({
       if (__DEV__) {
         console.log("[RevenueCat] customerInfo fetched", {
           source,
-          userId,
-          originalAppUserId: info.originalAppUserId,
+          hasAuthenticatedAccount: Boolean(userId),
+          hasOriginalAppUserId: Boolean(info.originalAppUserId),
         });
         console.log("revenuecat result", nextIsPro);
         console.log("final isPro value", featureAccess.isPro);
@@ -376,7 +399,7 @@ export function SubscriptionProvider({
         if (__DEV__) {
           console.log(
             "[RevenueCat] Preserved last-known Pro because inactive state was not confirmed",
-            { userId, source },
+            { hasAuthenticatedAccount: Boolean(userId), source },
           );
         }
 
@@ -412,7 +435,7 @@ export function SubscriptionProvider({
           if (__DEV__) {
             console.log(
               "[RevenueCat] Keeping last-known Pro recovery hint after confirmed inactive customerInfo",
-              { userId, source },
+              { hasAuthenticatedAccount: Boolean(userId), source },
             );
           }
         } else {
@@ -508,7 +531,7 @@ export function SubscriptionProvider({
       }
 
       if (__DEV__) {
-        console.log("[RevenueCat] Supabase user ID changed:", userId);
+        console.log("[RevenueCat] authenticated account changed");
       }
 
       if (cachedRevenueCatUserIdRef.current !== userId) {
@@ -587,7 +610,7 @@ export function SubscriptionProvider({
       if (__DEV__) {
         console.log(
           "[RevenueCat] Known Pro user returned inactive; attempting restore before marking Free",
-          { userId: activeUserId, source },
+          { hasAuthenticatedAccount: Boolean(activeUserId), source },
         );
       }
 
@@ -619,7 +642,7 @@ export function SubscriptionProvider({
 
         if (__DEV__) {
           console.log("[RevenueCat] customerInfo after login restore attempt", {
-            userId: activeUserId,
+            hasAuthenticatedAccount: Boolean(activeUserId),
             activeEntitlements:
               getActiveRevenueCatEntitlementIds(refreshedInfo),
             isPro: hasSchedovaPro(refreshedInfo),
@@ -819,7 +842,6 @@ export function SubscriptionProvider({
     syncPromise = (async () => {
       setLoading(true);
       setCustomerInfoFetchStatus("loading");
-
       try {
         const loginInfo = await logInRevenueCatUser(userId);
 
@@ -845,6 +867,10 @@ export function SubscriptionProvider({
         }
 
         activeUserIdRef.current = userId;
+        recordAccountTransitionEvent("revenuecat_logged_in", {
+          source: "revenuecat:delayed-auth-sync",
+          userId,
+        });
         await applyCustomerInfo(info, "revenuecat:delayed-auth-sync", {
           allowKnownProDowngrade: inactiveConfirmed,
           allowInactiveSync: inactiveConfirmed,
@@ -908,7 +934,7 @@ export function SubscriptionProvider({
 
     if (__DEV__) {
       console.log("[RevenueCat] Recover Pro for current user started", {
-        userId,
+        hasAuthenticatedAccount: true,
       });
     }
 
@@ -936,13 +962,13 @@ export function SubscriptionProvider({
       if (!recovered && knownProUser && __DEV__) {
         console.log(
           "[RevenueCat] Recovery returned inactive for a known-Pro user; inactive Supabase sync was skipped",
-          { userId },
+          { hasAuthenticatedAccount: true },
         );
       }
 
       if (__DEV__) {
         console.log("[RevenueCat] Recover Pro for current user completed", {
-          userId,
+          hasAuthenticatedAccount: true,
           recovered,
           activeEntitlements: getActiveRevenueCatEntitlementIds(finalInfo),
         });
@@ -1001,6 +1027,7 @@ export function SubscriptionProvider({
 
       setLoading(true);
       setCustomerInfoFetchStatus("loading");
+      let revenueCatLoginInFlight = false;
 
       try {
         if (!userId) {
@@ -1009,10 +1036,10 @@ export function SubscriptionProvider({
 
         if (activeUserIdRef.current && activeUserIdRef.current !== userId) {
           if (__DEV__) {
-            console.log("[RevenueCat] Supabase user ID changed:", userId);
+            console.log("[RevenueCat] authenticated account changed");
           }
 
-          clearLocalRevenueCatState("revenuecat:user-switch");
+          clearLocalRevenueCatState("revenuecat:user-switch", userId);
         }
 
         if (IOS_AUTH_NATIVE_ISOLATION) {
@@ -1029,13 +1056,17 @@ export function SubscriptionProvider({
           return;
         }
 
-        if (__DEV__) {
-          console.log("[RevenueCat] Supabase sign in user id", userId);
-          console.log("[RevenueCat] startup user id", userId);
-          console.log("[RevenueCat] logIn called with appUserID", userId);
-        }
+        if (__DEV__) console.log("[RevenueCat] beginning identity sync");
 
+        revenueCatLoginInFlight = true;
+        recordAccountTransitionEvent("revenuecat_login_started", {
+          source: "revenuecat:init",
+        });
         const loginInfo = await logInRevenueCatUser(userId);
+        recordAccountTransitionEvent("revenuecat_login_finished", {
+          source: "revenuecat:init",
+        });
+        revenueCatLoginInFlight = false;
         const { info, inactiveConfirmed } =
           await resolvePotentialInactiveCustomerInfo(
             loginInfo,
@@ -1049,6 +1080,10 @@ export function SubscriptionProvider({
           latestUserIdRef.current === userId
         ) {
           activeUserIdRef.current = userId;
+          recordAccountTransitionEvent("revenuecat_logged_in", {
+            source: "revenuecat:init",
+            userId,
+          });
           await applyCustomerInfo(info, "revenuecat:init", {
             allowKnownProDowngrade: inactiveConfirmed,
             allowInactiveSync: inactiveConfirmed,
@@ -1057,9 +1092,18 @@ export function SubscriptionProvider({
           void logRevenueCatDebugStatus(info);
         }
       } catch (error) {
+        if (revenueCatLoginInFlight) {
+          recordAccountTransitionEvent("revenuecat_login_finished", {
+            outcome: "failed",
+            source: "revenuecat:init",
+          });
+        }
         logRevenueCatError("RevenueCat init failed", error);
         setLastRevenueCatError(getRevenueCatErrorDetails(error));
         setCustomerInfoFetchStatus("error");
+        // A failed identity refresh must never leave a prior account's access
+        // visible. Manual Supabase grants can still resolve independently.
+        setRevenueCatFeatureAccess(false, "revenuecat:init-failed");
 
         if (__DEV__) {
           console.log("RevenueCat init failed:", error);

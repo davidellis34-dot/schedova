@@ -1,5 +1,6 @@
 import { Ionicons } from "@expo/vector-icons";
 import AsyncStorage from "@react-native-async-storage/async-storage";
+import type { RealtimeChannel } from "@supabase/supabase-js";
 import { useFocusEffect, useRouter } from "expo-router";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import {
@@ -16,9 +17,11 @@ import {
   AppButton,
   AppCard,
   AppScreen,
+  ContextTip,
   EmptyState,
   ScreenHeader,
   StatusBadge,
+  SuccessToast,
 } from "../components/ui";
 import SwipeDownSheet from "../components/SwipeDownSheet";
 import {
@@ -48,7 +51,10 @@ import {
   setDashboardPrimaryCache,
   updateDashboardCachedAppointments,
 } from "../lib/dashboardCache";
-import { registerAccountScopedCleanup } from "../lib/accountTransition";
+import {
+  recordAccountTransitionEvent,
+  registerAccountScopedCleanup,
+} from "../lib/accountTransition";
 import { canUseFeature } from "../lib/featureAccess";
 import { cancelAppointmentReminder } from "../lib/localNotifications";
 import {
@@ -61,6 +67,15 @@ import {
 } from "../lib/messageBadge";
 import { ENABLE_PRO } from "../lib/proFeatureFlag";
 import { openSchedovaProScreen, PRO_UPSELL_COPY, showProUpgradePrompt } from "../lib/proUpsell";
+import {
+  openUserScopedRealtimeChannel,
+  removeRealtimeChannel,
+} from "../lib/realtimeChannelLifecycle";
+import {
+  getDueRebookingClients,
+  SMART_REMINDERS_ENABLED,
+} from "../lib/smartReminders";
+import { subscribeToSmartReminderChanges } from "../lib/smartReminderEvents";
 import {
   subscribeToSaveNotices,
   type SaveNotice,
@@ -104,8 +119,11 @@ const EMPTY_SMS_BALANCE: MessageCreditBalance = {
 
 type DashboardSecondaryData = {
   hasBusiness: boolean | null;
+  hasBusinessHours: boolean | null;
+  hasSmsSettings: boolean | null;
   clientRepliesCount: number;
   latestRepliesByAppointmentId: Record<string, AppointmentReplySummary>;
+  readyToRebookCount: number;
   smsBalance: MessageCreditBalance;
   smsBalanceError: string | null;
 };
@@ -117,18 +135,31 @@ type DashboardDisplayPreferences = {
 
 const EMPTY_DASHBOARD_SECONDARY_DATA: DashboardSecondaryData = {
   hasBusiness: null,
+  hasBusinessHours: null,
+  hasSmsSettings: null,
   clientRepliesCount: 0,
   latestRepliesByAppointmentId: {},
+  readyToRebookCount: 0,
   smsBalance: EMPTY_SMS_BALANCE,
   smsBalanceError: null,
 };
+
+const DASHBOARD_CLIENT_REPLIES_CHANNEL_PREFIX = "dashboard-client-replies-";
 
 export default function Dashboard() {
   const router = useRouter();
   useManualScreenInteractiveTiming("dashboard");
   const { colors, themeName } = useAppTheme();
   const { width } = useWindowDimensions();
-  const { authStatus, isHydrated, user, userId } = useAuthSession();
+  const { authStatus, isAccountReady, isHydrated, user, userId } = useAuthSession();
+  const dashboardMountedUserIdRef = useRef<string | null>(null);
+  useEffect(() => {
+    if (!isAccountReady || !userId) return;
+    if (dashboardMountedUserIdRef.current === userId) return;
+
+    dashboardMountedUserIdRef.current = userId;
+    recordAccountTransitionEvent("dashboard_mounted");
+  }, [isAccountReady, userId]);
   const [clients, setClients] = useState<any[]>([]);
   const [statusModalOpen, setStatusModalOpen] = useState(false);
   const [selectedStatusAppointment, setSelectedStatusAppointment] = useState<
@@ -151,8 +182,11 @@ export default function Dashboard() {
   const userEmail = user?.email || "";
   const {
     hasBusiness,
+    hasBusinessHours,
+    hasSmsSettings,
     clientRepliesCount,
     latestRepliesByAppointmentId,
+    readyToRebookCount,
     smsBalance,
     smsBalanceError,
   } = secondaryData;
@@ -280,6 +314,47 @@ export default function Dashboard() {
 
     return (data || []).length > 0;
   }, [isHydrated, userId]);
+
+  const loadSetupConfiguration = useCallback(async () => {
+    if (!isHydrated || !userId) {
+      return { hasBusinessHours: null, hasSmsSettings: null };
+    }
+
+    const [smsResult, hoursResult] = await Promise.all([
+      supabase.from("sms_settings").select("id").eq("user_id", userId).limit(1),
+      supabase.from("availability_rules").select("id").eq("user_id", userId).limit(1),
+    ]);
+
+    return {
+      hasBusinessHours: hoursResult.error ? null : (hoursResult.data || []).length > 0,
+      hasSmsSettings: smsResult.error ? null : (smsResult.data || []).length > 0,
+    };
+  }, [isHydrated, userId]);
+
+  const loadReadyToRebookCount = useCallback(async () => {
+    if (!SMART_REMINDERS_ENABLED || !userId || !canUseFeature("smartReminders")) {
+      return 0;
+    }
+
+    try {
+      return (await getDueRebookingClients(userId)).length;
+    } catch {
+      // Smart Reminders is only a gated preview. A failed optional query must
+      // never block the dashboard or suggest that a message was sent.
+      return 0;
+    }
+  }, [userId]);
+
+  useEffect(() => {
+    return subscribeToSmartReminderChanges(() => {
+      void loadReadyToRebookCount().then((count) => {
+        setSecondaryData((current) => ({
+          ...current,
+          readyToRebookCount: count,
+        }));
+      });
+    });
+  }, [loadReadyToRebookCount]);
 
   const fetchAppointments = useCallback(async () => {
     if (!isHydrated) return;
@@ -479,7 +554,7 @@ export default function Dashboard() {
       return 0;
     }
 
-    console.log("Dashboard current user id", userId || null);
+    console.log("Dashboard has authenticated account", Boolean(userId));
 
     if (!userId) {
       console.log("Dashboard reply badge count", 0);
@@ -578,15 +653,19 @@ export default function Dashboard() {
 
           void Promise.all([
             loadBusinessStatus(),
+            loadSetupConfiguration(),
             loadLatestAppointmentReplies(primaryAppointments),
             loadSmsBalance(),
             loadDisplayPreferences(),
+            loadReadyToRebookCount(),
           ]).then(
             ([
               nextHasBusiness,
+              nextSetupConfiguration,
               nextLatestRepliesByAppointmentId,
               nextSmsBalance,
               nextDisplayPreferences,
+              nextReadyToRebookCount,
             ]) => {
               if (!active) return;
 
@@ -595,8 +674,11 @@ export default function Dashboard() {
               setDisplayPreferences(nextDisplayPreferences);
               setSecondaryData((current) => ({
                 hasBusiness: nextHasBusiness,
+                hasBusinessHours: nextSetupConfiguration.hasBusinessHours,
+                hasSmsSettings: nextSetupConfiguration.hasSmsSettings,
                 clientRepliesCount: current.clientRepliesCount,
                 latestRepliesByAppointmentId: nextLatestRepliesByAppointmentId,
+                readyToRebookCount: nextReadyToRebookCount,
                 smsBalance: nextSmsBalance.balance,
                 smsBalanceError: nextSmsBalance.error,
               }));
@@ -615,11 +697,13 @@ export default function Dashboard() {
     }, [
       applyDashboardPrimaryData,
       loadBusinessStatus,
+      loadSetupConfiguration,
       loadDashboardPrimaryData,
       loadDisplayPreferences,
       loadLatestAppointmentReplies,
       loadSmsBalance,
       refreshClientRepliesCount,
+      loadReadyToRebookCount,
       userId,
       isHydrated,
     ]),
@@ -722,34 +806,59 @@ export default function Dashboard() {
     if (!isHydrated || !userId) return;
 
     let active = true;
+    let ownedChannel: RealtimeChannel | null = null;
 
-    const channel = supabase
-      .channel(`dashboard-client-replies-${userId}`)
-      .on(
-        "postgres_changes",
-        {
-          event: "*",
-          schema: "public",
-          table: "messages",
-          filter: `account_id=eq.${userId}`,
-        },
-        (payload) => {
-          if (!active) return;
-          console.log("Dashboard client reply realtime event", payload.eventType);
-          void refreshClientRepliesCount();
-        },
-      )
-      .subscribe();
-
-    const unregisterAccountCleanup = registerAccountScopedCleanup(async () => {
+    const releaseChannel = async () => {
       active = false;
-      await supabase.removeChannel(channel);
-    });
+
+      const channel = ownedChannel;
+      ownedChannel = null;
+      await removeRealtimeChannel(supabase, channel);
+    };
+
+    void openUserScopedRealtimeChannel(supabase, {
+      prefix: DASHBOARD_CLIENT_REPLIES_CHANNEL_PREFIX,
+      shouldAbort: () => !active,
+      userId,
+      registerCallbacks: (channel) => {
+        channel.on(
+          "postgres_changes",
+          {
+            event: "*",
+            schema: "public",
+            table: "messages",
+            filter: `account_id=eq.${userId}`,
+          },
+          (payload) => {
+            if (!active) return;
+            console.log("Dashboard client reply realtime event", payload.eventType);
+            void refreshClientRepliesCount();
+          },
+        );
+      },
+    })
+      .then(async (channel) => {
+        if (!channel || !active) {
+          await removeRealtimeChannel(supabase, channel);
+          return;
+        }
+
+        ownedChannel = channel;
+      })
+      .catch((error) => {
+        if (__DEV__) {
+          console.log("Dashboard realtime setup failed", error);
+        }
+      });
+
+    const unregisterAccountCleanup = registerAccountScopedCleanup(
+      releaseChannel,
+      "realtime",
+    );
 
     return () => {
-      active = false;
       unregisterAccountCleanup();
-      void supabase.removeChannel(channel);
+      void releaseChannel();
     };
   }, [isHydrated, refreshClientRepliesCount, userId]);
 
@@ -1544,6 +1653,52 @@ export default function Dashboard() {
     );
   }
 
+  const setupChecklist = [
+    {
+      complete: hasBusiness === true,
+      label: "Business profile completed",
+      route: "/business-setup",
+    },
+    {
+      complete: services.length > 0,
+      label: "First service added",
+      route: "/add-service",
+    },
+    {
+      complete: clients.length > 0,
+      label: "First client added",
+      route: "/clients",
+    },
+    {
+      complete: appointments.some((appointment) => appointment?.status !== "canceled"),
+      label: "First appointment booked",
+      route: "/book-appointment",
+    },
+    {
+      complete: hasSmsSettings === true,
+      label: "SMS settings reviewed",
+      route: "/settings/sms",
+    },
+    {
+      complete: hasBusinessHours === true,
+      label: "Business hours configured",
+      route: "/availability-settings",
+    },
+  ];
+  const incompleteSetupItems = setupChecklist.filter((item) => !item.complete);
+  const completedSetupCount = setupChecklist.length - incompleteSetupItems.length;
+
+  function openSmartRemindersPreview() {
+    if (!canUseProFeature("smartReminders")) {
+      showProUpgradePrompt(
+        "Smart Rebooking Reminders are included with Schedova Pro.",
+      );
+      return;
+    }
+
+    router.push("/smart-reminders" as any);
+  }
+
   return (
     <AppScreen scroll backgroundColor={colors.background} bottomPadding={72}>
       <ScreenHeader
@@ -1648,6 +1803,13 @@ export default function Dashboard() {
         }
       />
 
+      <ContextTip
+        tipId="dashboard_getting_started"
+        userId={userId}
+        visible={clients.length === 0 && appointments.length === 0}
+        message="Use Quick Actions to book appointments, add clients, or add services. Tap your SMS balance for Message Packs, and use the setup checklist for anything left to finish."
+      />
+
       {userEmail ? (
         <Text
           style={{
@@ -1663,7 +1825,16 @@ export default function Dashboard() {
       ) : null}
 
       {saveNotice ? (
+        <SuccessToast
+          message={saveNotice.message}
+          onDismiss={() => setSaveNotice(null)}
+          style={{ marginBottom: 16 }}
+        />
+      ) : null}
+
+      {clientRepliesCount > 0 ? (
         <AppCard
+          onPress={openClientReplies}
           style={{
             borderColor: dashboardAccentBorder,
             borderLeftColor: dashboardSummaryAccent,
@@ -1672,15 +1843,18 @@ export default function Dashboard() {
             marginBottom: 16,
           }}
         >
-          <Text
-            style={{
-              color: colors.text,
-              fontWeight: "900",
-              textAlign: "center",
-            }}
-          >
-            {saveNotice.message}
-          </Text>
+          <View style={{ flexDirection: "row", alignItems: "center", gap: 12 }}>
+            <Ionicons name="mail-unread-outline" size={23} color={dashboardSummaryAccent} />
+            <View style={{ flex: 1 }}>
+              <Text style={{ color: colors.text, fontWeight: "900" }}>
+                {clientRepliesCount} unread client {clientRepliesCount === 1 ? "reply" : "replies"}
+              </Text>
+              <Text style={{ color: colors.mutedText, fontSize: getFontSize(13), marginTop: 3 }}>
+                Review messages that still need your attention.
+              </Text>
+            </View>
+            <Ionicons name="chevron-forward" size={20} color={colors.mutedText} />
+          </View>
         </AppCard>
       ) : null}
 
@@ -1708,6 +1882,56 @@ export default function Dashboard() {
           >
             Add your business info to personalize your schedule.
           </Text>
+        </AppCard>
+      ) : null}
+
+      {incompleteSetupItems.length > 0 ? (
+        <AppCard style={{ marginBottom: 24, borderColor: dashboardAccentBorder }}>
+          <Text style={{ color: colors.text, fontSize: getFontSize(18), fontWeight: "900" }}>
+            Finish setting up Schedova
+          </Text>
+          <Text style={{ color: colors.mutedText, fontSize: getFontSize(13), lineHeight: 19, marginTop: 5, marginBottom: 10 }}>
+            {completedSetupCount} of {setupChecklist.length} setup steps complete. You can change these any time.
+          </Text>
+          {incompleteSetupItems.map((item) => (
+            <Pressable
+              key={item.label}
+              accessibilityRole="button"
+              accessibilityLabel={item.label}
+              onPress={() => router.push(item.route as any)}
+              style={({ pressed }) => ({
+                minHeight: 44,
+                flexDirection: "row",
+                alignItems: "center",
+                gap: 10,
+                borderTopWidth: 1,
+                borderTopColor: colors.border,
+                opacity: pressed ? 0.7 : 1,
+              })}
+            >
+              <Ionicons name="ellipse-outline" size={18} color={colors.mutedText} />
+              <Text style={{ color: colors.text, flex: 1, fontWeight: "800" }}>{item.label}</Text>
+              <Ionicons name="chevron-forward" size={18} color={colors.mutedText} />
+            </Pressable>
+          ))}
+        </AppCard>
+      ) : null}
+
+      {SMART_REMINDERS_ENABLED && readyToRebookCount > 0 ? (
+        <AppCard
+          onPress={openSmartRemindersPreview}
+          style={{ marginBottom: 24, borderColor: dashboardAccentBorder }}
+        >
+          <View style={{ flexDirection: "row", alignItems: "center", gap: 12 }}>
+            <Ionicons name="calendar-outline" size={23} color={dashboardSummaryAccent} />
+            <View style={{ flex: 1 }}>
+              <Text style={{ color: colors.text, fontWeight: "900" }}>Clients ready to rebook</Text>
+              <Text style={{ color: colors.mutedText, fontSize: getFontSize(13), lineHeight: 19, marginTop: 3 }}>
+                {readyToRebookCount} client{readyToRebookCount === 1 ? " may" : "s may"} be ready to schedule again.
+              </Text>
+            </View>
+            <Text style={{ color: dashboardSummaryAccent, fontWeight: "900" }}>Review</Text>
+          </View>
         </AppCard>
       ) : null}
 
@@ -1926,24 +2150,21 @@ export default function Dashboard() {
       )}
 
       <SectionTitle>Upcoming appointments</SectionTitle>
-      <AppCard>
-        {upcomingAppointments.length === 0 ? (
-          <Text
-            style={{
-              color: colors.mutedText,
-              fontSize: getFontSize(15),
-              textAlign: "center",
-              paddingVertical: 16,
-            }}
-          >
-            No upcoming appointments yet.
-          </Text>
-        ) : (
-          upcomingAppointments.map((appointment) => (
+      {upcomingAppointments.length === 0 ? (
+        <EmptyState
+          title="No appointments yet"
+          message="Book your first appointment to start building your schedule."
+          actionLabel="Book Appointment"
+          onAction={() => router.push("/book-appointment" as any)}
+          style={{ marginBottom: 18 }}
+        />
+      ) : (
+        <AppCard>
+          {upcomingAppointments.map((appointment) => (
             <AppointmentCard key={appointment.id} appointment={appointment} />
-          ))
-        )}
-      </AppCard>
+          ))}
+        </AppCard>
+      )}
 
       <SwipeDownSheet
         visible={!!actionAppointment}

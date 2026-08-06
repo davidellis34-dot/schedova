@@ -19,6 +19,8 @@ import {
   recordAccountTransitionEvent,
 } from "./accountTransition";
 import { recordAuthDiagnosticEvent } from "./authDiagnostics";
+import { clearCalendarFinderCache } from "./calendarFinderCache";
+import { clearDashboardPrimaryCache } from "./dashboardCache";
 import { clearFeatureAccess } from "./featureAccess";
 import {
   logOutRevenueCatUser,
@@ -67,8 +69,11 @@ export function AuthSessionProvider({ children }: { children: ReactNode }) {
   const signOutWaitersRef = useRef<Array<() => void>>([]);
   const latestSessionUserIdRef = useRef<string | null>(null);
   const accountReadyUserIdRef = useRef<string | null>(null);
+  const lastClearedAccountUserIdRef = useRef<string | null>(null);
   const sessionVerificationRunIdRef = useRef(0);
   const authEventVersionRef = useRef(0);
+  const authStatusRef = useRef<AuthStatus>("loading");
+  const initialSessionAppliedRef = useRef(false);
 
   const resolvePendingSignOuts = useCallback(() => {
     const waiters = [...signOutWaitersRef.current];
@@ -94,15 +99,66 @@ export function AuthSessionProvider({ children }: { children: ReactNode }) {
     });
   }, []);
 
+  const clearAccountScopedWorkOnce = useCallback(
+    async (accountId: string | null, source: string, runId: number) => {
+      if (!accountId || lastClearedAccountUserIdRef.current === accountId) {
+        return;
+      }
+
+      lastClearedAccountUserIdRef.current = accountId;
+      clearDashboardPrimaryCache(accountId);
+      clearCalendarFinderCache(accountId);
+      recordAccountTransitionEvent("account_caches_cleared", { source }, runId);
+      recordAccountTransitionEvent("query_cache_cleared", {}, runId);
+      await cancelAccountScopedWork(source, runId);
+    },
+    [],
+  );
+
   const applySession = useCallback(
     (nextSession: Session | null, source: string) => {
       const nextUserId = nextSession?.user?.id ?? null;
       const previousUserId = latestSessionUserIdRef.current;
       const hasAuthenticatedUser = Boolean(nextSession && nextUserId);
+      const isInitialSessionSource =
+        source === "initial-session" || source === "auth-callback:INITIAL_SESSION";
+
+      // Supabase emits INITIAL_SESSION in addition to our initial getSession()
+      // hydration. Let whichever result arrives first own the bootstrap so the
+      // second one cannot cancel it while account readiness is being resolved.
+      if (
+        source === "auth-callback:INITIAL_SESSION" &&
+        initialSessionAppliedRef.current
+      ) {
+        recordAccountTransitionEvent("duplicate_initial_session_ignored", {
+          source,
+        });
+        return;
+      }
+
+      if (isInitialSessionSource) {
+        initialSessionAppliedRef.current = true;
+      }
+
+      // Supabase can emit a second SIGNED_OUT event after global sign-out. The
+      // serialized sign-out path already cleared the old account, so ignore
+      // that duplicate rather than invalidating a newly arriving session.
+      if (
+        !nextUserId &&
+        !previousUserId &&
+        authStatusRef.current === "unauthenticated"
+      ) {
+        recordAccountTransitionEvent("duplicate_signed_out_ignored", { source });
+        resolvePendingSignOuts();
+        return;
+      }
 
       latestSessionUserIdRef.current = nextUserId;
       setSession(nextSession);
       setIsHydrated(true);
+      authStatusRef.current = hasAuthenticatedUser
+        ? "authenticated"
+        : "unauthenticated";
       setAuthStatus(
         hasAuthenticatedUser ? "authenticated" : "unauthenticated",
       );
@@ -117,11 +173,24 @@ export function AuthSessionProvider({ children }: { children: ReactNode }) {
           previousUserId,
           source,
         });
+        void clearAccountScopedWorkOnce(previousUserId, `${source}:signed-out`, 0).catch((error) => {
+          recordAccountTransitionEvent("account_switch_failed", {
+            source: `${source}:cleanup`,
+            error: error instanceof Error ? error.message : String(error),
+          });
+        });
         resolvePendingSignOuts();
         return;
       }
 
       const transition = continueAccountTransition(source, nextUserId);
+      recordAccountTransitionEvent(
+        "supabase_session_received",
+        { source },
+        transition.runId,
+      );
+      // A newly authenticated account needs its own cleanup lifecycle later.
+      lastClearedAccountUserIdRef.current = null;
       setRevenueCatIdentityTarget(nextUserId);
 
       if (
@@ -139,32 +208,34 @@ export function AuthSessionProvider({ children }: { children: ReactNode }) {
       sessionVerificationRunIdRef.current = verificationRunId;
       accountReadyUserIdRef.current = null;
       setAccountReadyUserId(null);
+      recordAccountTransitionEvent(
+        "user_bootstrap_started",
+        { source },
+        transition.runId,
+      );
 
       // Both the Supabase user and account-scoped business profile must settle
       // before the authenticated navigator can mount for this account.
       void (async () => {
         try {
-          const { data, error } = await supabase.auth.getUser();
+          if (previousUserId && previousUserId !== nextUserId) {
+            await clearAccountScopedWorkOnce(
+              previousUserId,
+              `${source}:account-changed`,
+              transition.runId,
+            );
 
-          if (
-            verificationRunId !== sessionVerificationRunIdRef.current ||
-            latestSessionUserIdRef.current !== nextUserId ||
-            !isCurrentAccountTransition(transition.runId)
-          ) {
-            recordAccountTransitionEvent("previous-async-result-ignored", {
-              source: `${source}:get-user`,
-              userId: nextUserId,
-            });
-            return;
-          }
-
-          if (error || data.user?.id !== nextUserId) {
-            recordAccountTransitionEvent("supabase-session-verification-warning", {
-              error: error?.message || null,
-              expectedUserId: nextUserId,
-              returnedUserId: data.user?.id || null,
-              source,
-            });
+            if (
+              verificationRunId !== sessionVerificationRunIdRef.current ||
+              latestSessionUserIdRef.current !== nextUserId ||
+              !isCurrentAccountTransition(transition.runId)
+            ) {
+              recordAccountTransitionEvent("previous-async-result-ignored", {
+                source: `${source}:account-cleanup`,
+                userId: nextUserId,
+              });
+              return;
+            }
           }
 
           const { data: profileRows, error: profileError } = await supabase
@@ -190,8 +261,18 @@ export function AuthSessionProvider({ children }: { children: ReactNode }) {
             profileError: profileError?.message || null,
             userId: nextUserId,
           });
+          recordAccountTransitionEvent("new_user_data_loaded", {
+            hasBusinessProfile: Array.isArray(profileRows) && profileRows.length > 0,
+            profileError: profileError?.message || null,
+            userId: nextUserId,
+          });
           accountReadyUserIdRef.current = nextUserId;
           setAccountReadyUserId(nextUserId);
+          recordAccountTransitionEvent(
+            "user_bootstrap_finished",
+            {},
+            transition.runId,
+          );
           completeAccountTransition(transition.runId, `${source}:profile-ready`);
         } catch (error) {
           if (
@@ -205,6 +286,11 @@ export function AuthSessionProvider({ children }: { children: ReactNode }) {
             });
             accountReadyUserIdRef.current = nextUserId;
             setAccountReadyUserId(nextUserId);
+            recordAccountTransitionEvent(
+              "user_bootstrap_finished",
+              { outcome: "profile-warning" },
+              transition.runId,
+            );
             completeAccountTransition(transition.runId, `${source}:profile-error`);
             return;
           }
@@ -216,11 +302,11 @@ export function AuthSessionProvider({ children }: { children: ReactNode }) {
         }
       })();
     },
-    [resolvePendingSignOuts],
+    [clearAccountScopedWorkOnce, resolvePendingSignOuts],
   );
 
   const beginSignInTransition = useCallback(() => {
-    recordAccountTransitionEvent("sign-in-started");
+    recordAccountTransitionEvent("sign_in_started");
     setAuthTransitionState((current) =>
       current === "signingOut" ? current : "signingIn",
     );
@@ -249,7 +335,6 @@ export function AuthSessionProvider({ children }: { children: ReactNode }) {
         if (__DEV__) {
           console.log("[AuthSession] initial session loaded", {
             hasSession: Boolean(data.session),
-            userId: data.session?.user?.id || null,
             error: error?.message || null,
           });
         }
@@ -283,7 +368,6 @@ export function AuthSessionProvider({ children }: { children: ReactNode }) {
           console.log("[AuthSession] auth state changed", {
             event,
             hasSession: Boolean(nextSession),
-            userId: nextSession?.user?.id || null,
           });
         }
 
@@ -330,6 +414,7 @@ export function AuthSessionProvider({ children }: { children: ReactNode }) {
     }
 
     const currentUserId = session?.user?.id ?? latestSessionUserIdRef.current;
+    recordAccountTransitionEvent("sign_out_pressed");
     const transition = beginAccountTransition(
       "auth-session-sign-out",
       currentUserId,
@@ -341,22 +426,37 @@ export function AuthSessionProvider({ children }: { children: ReactNode }) {
     setAuthStatus((current) =>
       current === "unauthenticated" ? current : "signingOut",
     );
+    authStatusRef.current = "signingOut";
     setAuthTransitionState("signingOut");
 
     const signOutPromise = (async () => {
       try {
-        recordAccountTransitionEvent("supabase-sign-out-started", {
-          userId: currentUserId ?? null,
-        }, transition.runId);
-        await cancelAccountScopedWork("auth-session-sign-out", transition.runId);
+        recordAccountTransitionEvent("revenuecat_logout_started", {}, transition.runId);
+        try {
+          await logOutRevenueCatUser();
+        } catch (revenueCatError) {
+          recordAccountTransitionEvent("revenuecat_logout_failed", {
+            error:
+              revenueCatError instanceof Error
+                ? revenueCatError.message
+                : String(revenueCatError),
+          }, transition.runId);
+        } finally {
+          recordAccountTransitionEvent("revenuecat_logout_finished", {}, transition.runId);
+        }
+
+        await clearAccountScopedWorkOnce(
+          currentUserId,
+          "auth-session-sign-out",
+          transition.runId,
+        );
         clearFeatureAccess("auth:signing-out");
         recordAccountTransitionEvent("old-account-state-cleared", {
           userId: currentUserId ?? null,
         }, transition.runId);
 
         setRevenueCatIdentityTarget(null);
-        await logOutRevenueCatUser();
-
+        recordAccountTransitionEvent("supabase_signout_started", {}, transition.runId);
         const { error } = await supabase.auth.signOut();
 
         if (error) {
@@ -368,7 +468,7 @@ export function AuthSessionProvider({ children }: { children: ReactNode }) {
         }
 
         await waitForSignedOutConfirmation();
-        recordAccountTransitionEvent("supabase-sign-out-completed", {}, transition.runId);
+        recordAccountTransitionEvent("supabase_signout_finished", {}, transition.runId);
         return { error: null };
       } catch (error) {
         try {
@@ -378,6 +478,10 @@ export function AuthSessionProvider({ children }: { children: ReactNode }) {
           applySession(null, "sign-out-exception-fallback");
         }
         resolvePendingSignOuts();
+        recordAccountTransitionEvent("account_switch_failed", {
+          source: "auth-session-sign-out",
+          error: error instanceof Error ? error.message : String(error),
+        }, transition.runId);
         completeAccountTransition(transition.runId, "sign-out-exception");
 
         return {
@@ -396,6 +500,7 @@ export function AuthSessionProvider({ children }: { children: ReactNode }) {
   }, [
     applySession,
     authStatus,
+    clearAccountScopedWorkOnce,
     resolvePendingSignOuts,
     session,
     waitForSignedOutConfirmation,

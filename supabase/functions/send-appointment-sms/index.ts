@@ -30,6 +30,7 @@ type AppointmentRecord = {
   client_name: string | null;
   appointment_date: string | null;
   appointment_time: string | null;
+  sms_notifications_enabled?: boolean | null;
   sms_confirmation_sent_at?: string | null;
   sms_reminder_sent_at?: string | null;
 };
@@ -541,7 +542,7 @@ Deno.serve(async (req) => {
   } = await serviceClient
     .from("appointments")
     .select(
-      "id, user_id, client_id, client_name, appointment_date, appointment_time, sms_confirmation_sent_at, sms_reminder_sent_at",
+      "id, user_id, client_id, client_name, appointment_date, appointment_time, sms_notifications_enabled, sms_confirmation_sent_at, sms_reminder_sent_at",
     )
     .eq("id", appointmentId)
     .eq("user_id", user.id)
@@ -602,6 +603,14 @@ Deno.serve(async (req) => {
         code: "missing_appointment",
       },
     );
+  }
+
+  if (appointment.sms_notifications_enabled === false) {
+    return jsonResponse({
+      ok: true,
+      skipped: true,
+      code: "sms_disabled",
+    });
   }
 
   const { data: smsSettingsData, error: smsSettingsError } = await serviceClient

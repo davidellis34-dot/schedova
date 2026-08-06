@@ -1,10 +1,12 @@
+import type { RealtimeChannel } from "@supabase/supabase-js";
 import { useFocusEffect, useLocalSearchParams, useRouter } from "expo-router";
 import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
 import {
-  ActivityIndicator,
   Alert,
   Animated,
   AppState,
+  BackHandler,
+  Dimensions,
   type LayoutChangeEvent,
   Keyboard,
   KeyboardAvoidingView,
@@ -22,16 +24,23 @@ import {
   AppButton,
   AppCard,
   AppScreen,
+  ContextTip,
   EmptyState,
+  LoadingCard,
   ProGateCard,
   ScreenHeader,
+  SuccessToast,
 } from "../components/ui";
 import { sendManualClientEmail } from "../lib/appointmentEmail";
 import { sendManualClientSms } from "../lib/appointmentSms";
+import { registerAccountScopedCleanup } from "../lib/accountTransition";
 import { useAuthSession } from "../lib/authSession";
 import {
   getConversationHeaderActionOutcome,
+  getAndroidKeyboardFallbackInset,
+  getConversationKeyboardBehavior,
   getConversationThreadLayout,
+  CONVERSATION_KEYBOARD_VERTICAL_OFFSET,
 } from "../lib/conversationThreadLayout";
 import { canUseFeature, useFeatureAccess } from "../lib/featureAccess";
 import { emitClientMessageEvent } from "../lib/clientMessageEvents";
@@ -46,6 +55,10 @@ import {
   subscribeToSaveNotices,
   type SaveNotice,
 } from "../lib/saveNoticeEvents";
+import {
+  openUserScopedRealtimeChannel,
+  removeRealtimeChannel,
+} from "../lib/realtimeChannelLifecycle";
 import { supabase } from "../lib/supabase";
 import { useScreenLoadingTiming } from "../lib/screenPerformance";
 import { useAppTheme } from "../lib/useAppTheme";
@@ -79,6 +92,8 @@ type SmsReplyRow = {
 
 type MessageFilter = "all" | "sms" | "email";
 type ReplyChannel = "sms" | "email";
+
+const MESSAGES_INBOX_CHANNEL_PREFIX = "messages-inbox-";
 
 type ClientSummary = {
   id: string;
@@ -424,8 +439,15 @@ export default function MessagesScreen() {
   const [shouldScrollToReviewResults, setShouldScrollToReviewResults] =
     useState(false);
   const [conversationMenuVisible, setConversationMenuVisible] = useState(false);
+  const [androidKeyboardInset, setAndroidKeyboardInset] = useState(0);
   const scrollViewRef = useRef<ScrollView | null>(null);
   const threadScrollRef = useRef<ScrollView | null>(null);
+  const threadNearBottomRef = useRef(true);
+  const selectedThreadKeyRef = useRef<string | null>(null);
+  const conversationViewportHeightRef = useRef(0);
+  const androidKeyboardFrameRef = useRef<{ height: number; screenY: number } | null>(
+    null,
+  );
   const resultsSectionYRef = useRef(0);
   const handledOpenRequestRef = useRef("");
   const resolveUndoTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null);
@@ -461,6 +483,57 @@ export default function MessagesScreen() {
   const conversationMenuBorder = "rgba(45, 212, 191, 0.22)";
   const conversationMenuOverlayColor = "rgba(2, 6, 23, 0.72)";
   const conversationThreadLayout = getConversationThreadLayout(safeAreaInsets);
+
+  const scrollThreadToLatest = useCallback((animated = false) => {
+    requestAnimationFrame(() => {
+      threadScrollRef.current?.scrollToEnd({ animated });
+    });
+  }, []);
+
+  const updateAndroidKeyboardInset = useCallback(() => {
+    if (Platform.OS !== "android") return;
+
+    const keyboardFrame = androidKeyboardFrameRef.current;
+    if (!keyboardFrame) {
+      setAndroidKeyboardInset(0);
+      return;
+    }
+
+    const keyboardTop =
+      keyboardFrame.screenY > 0
+        ? keyboardFrame.screenY
+        : Dimensions.get("window").height - keyboardFrame.height;
+    const inset = getAndroidKeyboardFallbackInset(
+      conversationViewportHeightRef.current,
+      keyboardTop,
+    );
+
+    setAndroidKeyboardInset((current) => (current === inset ? current : inset));
+  }, []);
+
+  const syncAndroidKeyboardMetrics = useCallback(() => {
+    if (Platform.OS !== "android") return;
+
+    const metrics = Keyboard.metrics();
+    if (!metrics) return;
+
+    androidKeyboardFrameRef.current = {
+      height: metrics.height,
+      screenY: metrics.screenY,
+    };
+    updateAndroidKeyboardInset();
+  }, [updateAndroidKeyboardInset]);
+
+  const handleConversationViewportLayout = useCallback(
+    (event: LayoutChangeEvent) => {
+      conversationViewportHeightRef.current = event.nativeEvent.layout.height;
+
+      if (Platform.OS === "android" && androidKeyboardFrameRef.current) {
+        requestAnimationFrame(updateAndroidKeyboardInset);
+      }
+    },
+    [updateAndroidKeyboardInset],
+  );
 
   const resetConversationMenuState = useCallback(() => {
     conversationMenuTranslateY.stopAnimation();
@@ -1040,28 +1113,60 @@ export default function MessagesScreen() {
     if (!isHydrated || !userId || !clientRepliesAvailable) return;
 
     let active = true;
-    const channel = supabase
-      .channel(`messages-inbox-${userId}`)
-      .on(
-        "postgres_changes",
-        {
-          event: "*",
-          schema: "public",
-          table: "messages",
-          filter: `account_id=eq.${userId}`,
-        },
-        (payload) => {
-          if (!active) return;
-          console.log("Messages realtime event", payload.eventType);
-          emitClientMessageEvent({ accountId: userId, source: "realtime" });
-          void fetchMessages();
-        },
-      )
-      .subscribe();
+    let ownedChannel: RealtimeChannel | null = null;
+
+    const releaseChannel = async () => {
+      active = false;
+
+      const channel = ownedChannel;
+      ownedChannel = null;
+      await removeRealtimeChannel(supabase, channel);
+    };
+
+    void openUserScopedRealtimeChannel(supabase, {
+      prefix: MESSAGES_INBOX_CHANNEL_PREFIX,
+      shouldAbort: () => !active,
+      userId,
+      registerCallbacks: (channel) => {
+        channel.on(
+          "postgres_changes",
+          {
+            event: "*",
+            schema: "public",
+            table: "messages",
+            filter: `account_id=eq.${userId}`,
+          },
+          (payload) => {
+            if (!active) return;
+            console.log("Messages realtime event", payload.eventType);
+            emitClientMessageEvent({ accountId: userId, source: "realtime" });
+            void fetchMessages();
+          },
+        );
+      },
+    })
+      .then(async (channel) => {
+        if (!channel || !active) {
+          await removeRealtimeChannel(supabase, channel);
+          return;
+        }
+
+        ownedChannel = channel;
+      })
+      .catch((error) => {
+        if (__DEV__) {
+          console.log("Messages realtime setup failed", error);
+        }
+      });
+
+    const unregisterAccountCleanup = registerAccountScopedCleanup(
+      releaseChannel,
+      "realtime",
+    );
 
     return () => {
-      active = false;
-      void supabase.removeChannel(channel);
+      unregisterAccountCleanup();
+      void releaseChannel();
     };
   }, [clientRepliesAvailable, fetchMessages, isHydrated, userId]);
 
@@ -1774,14 +1879,29 @@ export default function MessagesScreen() {
     } as any);
   }
 
-  function closeSelectedThread() {
+  const closeSelectedThread = useCallback(() => {
     if (!getConversationHeaderActionOutcome("close").closeThread) return;
 
     Keyboard.dismiss();
     resetConversationMenuState();
+    selectedThreadKeyRef.current = null;
+    threadNearBottomRef.current = true;
     setSelectedMessage(null);
     setSelectedConversationMessages([]);
-  }
+  }, [resetConversationMenuState]);
+
+  useEffect(() => {
+    if (!selectedMessage || Platform.OS !== "android") return;
+
+    const subscription = BackHandler.addEventListener("hardwareBackPress", () => {
+      closeSelectedThread();
+      return true;
+    });
+
+    return () => {
+      subscription.remove();
+    };
+  }, [closeSelectedThread, selectedMessage]);
 
   function openConversationMenu() {
     if (!selectedMessage || !getConversationHeaderActionOutcome("more").openOptions) {
@@ -1802,14 +1922,44 @@ export default function MessagesScreen() {
   useEffect(() => {
     if (!selectedMessage) return;
 
-    const frameId = requestAnimationFrame(() => {
-      threadScrollRef.current?.scrollToEnd({ animated: false });
+    const threadKey = String(selectedMessage.conversation_id || selectedMessage.id);
+    const openedNewThread = selectedThreadKeyRef.current !== threadKey;
+
+    if (openedNewThread) {
+      threadNearBottomRef.current = true;
+    }
+
+    if (openedNewThread || threadNearBottomRef.current) {
+      scrollThreadToLatest(false);
+    }
+
+    selectedThreadKeyRef.current = threadKey;
+  }, [scrollThreadToLatest, selectedConversationToRender.length, selectedMessage]);
+
+  useEffect(() => {
+    if (!selectedMessage) return;
+
+    const keyboardEvent = Platform.OS === "ios" ? "keyboardWillShow" : "keyboardDidShow";
+    const keyboardSubscription = Keyboard.addListener(keyboardEvent, (event) => {
+      if (Platform.OS === "android") {
+        androidKeyboardFrameRef.current = event.endCoordinates;
+        requestAnimationFrame(updateAndroidKeyboardInset);
+      }
+      scrollThreadToLatest(false);
     });
+    const keyboardHideSubscription =
+      Platform.OS === "android"
+        ? Keyboard.addListener("keyboardDidHide", () => {
+            androidKeyboardFrameRef.current = null;
+            setAndroidKeyboardInset(0);
+          })
+        : null;
 
     return () => {
-      cancelAnimationFrame(frameId);
+      keyboardSubscription.remove();
+      keyboardHideSubscription?.remove();
     };
-  }, [selectedConversationToRender.length, selectedMessage]);
+  }, [scrollThreadToLatest, selectedMessage, updateAndroidKeyboardInset]);
 
   function renderSectionHeader(
     title: string,
@@ -2032,38 +2182,32 @@ export default function MessagesScreen() {
   }
 
   return (
-    <AppScreen
-      ref={scrollViewRef}
-      scroll
-      backgroundColor={colors.background}
-      bottomPadding={72}
-    >
+    <View style={{ flex: 1, backgroundColor: colors.background }}>
+      <AppScreen
+        ref={scrollViewRef}
+        scroll
+        backgroundColor={colors.background}
+        bottomPadding={72}
+      >
       <ScreenHeader
         title="Messages"
         subtitle="Review text replies and outbound emails in one place."
         showBack
       />
 
+      <ContextTip
+        tipId="messages_client_replies"
+        userId={userId}
+        visible={!loading && conversationCards.length === 0}
+        message="Client replies appear here when they respond to your texts."
+      />
+
       {saveNotice ? (
-        <AppCard
-          style={{
-            borderColor: infoAccent,
-            borderLeftColor: infoAccent,
-            borderLeftWidth: 4,
-            borderWidth: 1,
-            marginBottom: 16,
-          }}
-        >
-          <Text
-            style={{
-              color: colors.text,
-              fontWeight: "900",
-              textAlign: "center",
-            }}
-          >
-            {saveNotice.message}
-          </Text>
-        </AppCard>
+        <SuccessToast
+          message={saveNotice.message}
+          onDismiss={() => setSaveNotice(null)}
+          style={{ marginBottom: 16 }}
+        />
       ) : null}
 
       {resolveUndoNotice ? (
@@ -2249,12 +2393,7 @@ export default function MessagesScreen() {
             </Text>
           </AppCard>
         ) : loading ? (
-          <View style={{ alignItems: "center", paddingVertical: 36 }}>
-            <ActivityIndicator color={colors.primary} />
-            <Text style={{ color: colors.mutedText, marginTop: 12 }}>
-              Loading client replies...
-            </Text>
-          </View>
+          <LoadingCard label="Loading conversations..." style={{ marginBottom: 16 }} />
         ) : reviewFilterActive ? (
           visibleOpenConversationCards.length === 0 ? (
             <EmptyState
@@ -2274,8 +2413,8 @@ export default function MessagesScreen() {
           )
         ) : conversationCards.length === 0 ? (
           <EmptyState
-            title="No messages yet"
-            message="Text replies and outbound emails will appear here. Email replies go to your normal email inbox for now."
+            title="No conversations yet"
+            message="Client conversations will appear here."
           />
         ) : (
           <View>
@@ -2349,17 +2488,34 @@ export default function MessagesScreen() {
         )}
       </View>
 
-      <Modal
-        visible={Boolean(selectedMessage)}
-        animationType="slide"
-        presentationStyle="fullScreen"
-        onRequestClose={closeSelectedThread}
-      >
+      </AppScreen>
+
+      {selectedMessage ? (
+        <View
+          style={{
+            position: "absolute",
+            top: 0,
+            right: 0,
+            bottom: 0,
+            left: 0,
+            zIndex: 10,
+            elevation: 10,
+            backgroundColor: colors.background,
+          }}
+        >
         <KeyboardAvoidingView
           style={{ flex: 1, backgroundColor: colors.background }}
-          behavior={Platform.OS === "ios" ? "padding" : undefined}
+          behavior={getConversationKeyboardBehavior(Platform.OS)}
+          keyboardVerticalOffset={CONVERSATION_KEYBOARD_VERTICAL_OFFSET}
         >
-          <View style={{ flex: 1, backgroundColor: colors.background }}>
+          <View
+            onLayout={handleConversationViewportLayout}
+            style={{
+              flex: 1,
+              backgroundColor: colors.background,
+              paddingBottom: Platform.OS === "android" ? androidKeyboardInset : 0,
+            }}
+          >
             <View
               style={{
                 backgroundColor: colors.card,
@@ -2475,10 +2631,20 @@ export default function MessagesScreen() {
                 paddingBottom: 24,
               }}
               onContentSizeChange={() => {
-                threadScrollRef.current?.scrollToEnd({ animated: false });
+                if (threadNearBottomRef.current) {
+                  scrollThreadToLatest(false);
+                }
               }}
+              onScroll={(event) => {
+                const { contentOffset, contentSize, layoutMeasurement } = event.nativeEvent;
+                threadNearBottomRef.current =
+                  contentSize.height - (contentOffset.y + layoutMeasurement.height) < 72;
+              }}
+              onScrollBeginDrag={Keyboard.dismiss}
+              scrollEventThrottle={16}
               showsVerticalScrollIndicator
               keyboardShouldPersistTaps="handled"
+              keyboardDismissMode={Platform.OS === "ios" ? "interactive" : "on-drag"}
             >
               {selectedAppointment ? (
                 <View style={{ alignItems: "center", marginBottom: 14 }}>
@@ -2831,6 +2997,18 @@ export default function MessagesScreen() {
                   }
                   placeholderTextColor={colors.mutedText}
                   multiline
+                  scrollEnabled
+                  onFocus={() => {
+                    scrollThreadToLatest(false);
+                    syncAndroidKeyboardMetrics();
+
+                    // Some Android versions suppress keyboardDidShow while the
+                    // activity uses adjustResize, so sample the live metric as
+                    // the keyboard finishes its opening animation.
+                    [50, 180, 360].forEach((delay) => {
+                      setTimeout(syncAndroidKeyboardMetrics, delay);
+                    });
+                  }}
                   textAlignVertical="top"
                   style={{
                     flex: 1,
@@ -2865,7 +3043,8 @@ export default function MessagesScreen() {
             </View>
           </View>
         </KeyboardAvoidingView>
-      </Modal>
+        </View>
+      ) : null}
 
       <Modal
         visible={conversationMenuVisible}
@@ -3038,6 +3217,6 @@ export default function MessagesScreen() {
           </Animated.View>
         </View>
       </Modal>
-    </AppScreen>
+    </View>
   );
 }

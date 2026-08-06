@@ -13,20 +13,21 @@
       "supportsTablet": true,
       "usesAppleSignIn": true,
       "newArchEnabled": true,
-      "buildNumber": "33",
+      "buildNumber": "34",
       "bundleIdentifier": "com.davidellis34.schedova",
       "infoPlist": {
         "ITSAppUsesNonExemptEncryption": false
       }
     },
     "android": {
+      "softwareKeyboardLayoutMode": "resize",
       "adaptiveIcon": {
         "foregroundImage": "./assets/images/adaptive-icon-foreground.png",
         "backgroundColor": "#0F172A",
         "monochromeImage": "./assets/images/adaptive-icon-monochrome.png"
       },
       "package": "com.davidellis34.schedova",
-      "versionCode": 33
+      "versionCode": 34
     },
     "web": {
       "favicon": "./assets/images/favicon.png"

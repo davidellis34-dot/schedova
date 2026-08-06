@@ -19,12 +19,13 @@ function nextPath(value: unknown) {
   if (
     path === "/dashboard" ||
     path === "/onboarding" ||
+    path === "/walkthrough" ||
     path === "/settings"
   ) {
     return path;
   }
 
-  return "/onboarding";
+  return "/walkthrough";
 }
 
 export default function CountryRegionScreen() {

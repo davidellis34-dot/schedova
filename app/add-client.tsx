@@ -34,7 +34,9 @@ import {
   measureSaveStep,
   scheduleSaveCompletionTiming,
 } from "../lib/savePerformance";
+import { settleActiveTextInput } from "../lib/settleTextInputs";
 import { supabase } from "../lib/supabase";
+import { useTrackedTextInputValue } from "../lib/textInputDraft";
 import { useAppTheme } from "../lib/useAppTheme";
 import { useAuthSession } from "../lib/authSession";
 
@@ -82,12 +84,18 @@ export default function AddClientScreen() {
     ? "rgba(248, 113, 113, 0.36)"
     : "rgba(220, 38, 38, 0.22)";
   useFeatureAccess();
-  const [name, setName] = useState("");
-  const [phone, setPhone] = useState("");
-  const [email, setEmail] = useState("");
-  const [notes, setNotes] = useState("");
-  const [birthday, setBirthday] = useState("");
-  const [rebookingWeeks, setRebookingWeeks] = useState("6");
+  const nameField = useTrackedTextInputValue("");
+  const phoneField = useTrackedTextInputValue("");
+  const emailField = useTrackedTextInputValue("");
+  const notesField = useTrackedTextInputValue("");
+  const birthdayField = useTrackedTextInputValue("");
+  const rebookingWeeksField = useTrackedTextInputValue("6");
+  const name = nameField.value;
+  const phone = phoneField.value;
+  const email = emailField.value;
+  const notes = notesField.value;
+  const birthday = birthdayField.value;
+  const rebookingWeeks = rebookingWeeksField.value;
   const [smsOptIn, setSmsOptIn] = useState(false);
   const [emailOptIn, setEmailOptIn] = useState(false);
   const [recipients, setRecipients] = useState<CommunicationRecipient[]>([
@@ -128,6 +136,8 @@ export default function AddClientScreen() {
   async function saveClient() {
     if (saving) return;
 
+    await settleActiveTextInput();
+
     const flowName = "client save (create)";
     const saveStartedAt = getSavePerformanceNow();
     let postSupabaseStartedAt: number | null = null;
@@ -136,13 +146,13 @@ export default function AddClientScreen() {
     setErrorMessage("");
 
     try {
-      const trimmedName = name.trim();
-      const trimmedPhoneInput = phone.trim();
+      const trimmedName = nameField.getValue().trim();
+      const trimmedPhoneInput = phoneField.getValue().trim();
       const trimmedPhone =
         await normalizePhoneForSmsWithUserDefault(trimmedPhoneInput);
-      const trimmedEmail = email.trim();
-      const trimmedNotes = notes.trim();
-      const trimmedBirthday = birthday.trim();
+      const trimmedEmail = emailField.getValue().trim();
+      const trimmedNotes = notesField.getValue().trim();
+      const trimmedBirthday = birthdayField.getValue().trim();
       const displayName = trimmedName || trimmedPhone || trimmedEmail;
       const nextSmsOptIn = Boolean(trimmedPhone) && smsOptIn;
       const nextEmailOptIn = Boolean(trimmedEmail) && emailOptIn;
@@ -253,7 +263,9 @@ export default function AddClientScreen() {
               email: trimmedEmail || null,
               notes: trimmedNotes || null,
               birthday: trimmedBirthday || null,
-              rebooking_weeks: parseRebookingWeeks(rebookingWeeks),
+              rebooking_weeks: parseRebookingWeeks(
+                rebookingWeeksField.getValue(),
+              ),
               client_tag: clientTag,
               sms_opt_in: nextSmsOptIn,
               sms_opt_in_at: nextSmsOptIn ? now : null,
@@ -417,7 +429,8 @@ export default function AddClientScreen() {
         <AppTextInput
           label="Client name (optional)"
           value={name}
-          onChangeText={setName}
+          onChangeText={nameField.onChangeText}
+          onEndEditing={nameField.onEndEditing}
           placeholder="Client name"
           helperText="Use at least one contact field: name, phone, or email."
         />
@@ -425,15 +438,18 @@ export default function AddClientScreen() {
         <AppTextInput
           label="Phone number (optional)"
           value={phone}
-          onChangeText={setPhone}
+          onChangeText={phoneField.onChangeText}
+          onEndEditing={phoneField.onEndEditing}
           onBlur={() => {
-            if (!phone.trim()) {
-              setPhone("");
+            const livePhone = phoneField.getValue().trim();
+
+            if (!livePhone) {
+              phoneField.setValue("");
               return;
             }
 
-            void normalizePhoneForSmsWithUserDefault(phone.trim())
-              .then(setPhone)
+            void normalizePhoneForSmsWithUserDefault(livePhone)
+              .then(phoneField.setValue)
               .catch((error) => {
                 console.log("Phone normalization failed", error);
               });
@@ -445,7 +461,8 @@ export default function AddClientScreen() {
         <AppTextInput
           label="Email (optional)"
           value={email}
-          onChangeText={setEmail}
+          onChangeText={emailField.onChangeText}
+          onEndEditing={emailField.onEndEditing}
           keyboardType="email-address"
           autoCapitalize="none"
           autoCorrect={false}
@@ -455,7 +472,8 @@ export default function AddClientScreen() {
         <AppTextInput
           label="Birthday (optional)"
           value={birthday}
-          onChangeText={(text) => setBirthday(formatBirthdayInput(text))}
+          onChangeText={(text) => birthdayField.setValue(formatBirthdayInput(text))}
+          onEndEditing={birthdayField.onEndEditing}
           placeholder="MM/DD"
           maxLength={5}
           keyboardType="number-pad"
@@ -464,7 +482,8 @@ export default function AddClientScreen() {
         <AppTextInput
           label="Rebooking interval (weeks)"
           value={rebookingWeeks}
-          onChangeText={setRebookingWeeks}
+          onChangeText={rebookingWeeksField.onChangeText}
+          onEndEditing={rebookingWeeksField.onEndEditing}
           keyboardType="numeric"
           placeholder="6"
         />
@@ -572,7 +591,8 @@ export default function AddClientScreen() {
         <AppTextInput
           label="Client notes (optional)"
           value={notes}
-          onChangeText={setNotes}
+          onChangeText={notesField.onChangeText}
+          onEndEditing={notesField.onEndEditing}
           multiline
           placeholder="Client preferences, allergies, etc..."
           containerStyle={{ marginBottom: 0 }}

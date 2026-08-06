@@ -29,6 +29,8 @@ export const AppTextInput = forwardRef<TextInput, AppTextInputProps>(
       error,
       containerStyle,
       inputStyle,
+      onChangeText,
+      onEndEditing,
       placeholderTextColor,
       multiline,
       secureTextEntry,
@@ -64,6 +66,8 @@ export const AppTextInput = forwardRef<TextInput, AppTextInputProps>(
             multiline={multiline}
             placeholderTextColor={placeholderTextColor || colors.mutedText}
             secureTextEntry={hasPasswordToggle ? !passwordVisible : secureTextEntry}
+            onChangeText={onChangeText}
+            onEndEditing={onEndEditing}
             style={[
               {
                 minHeight: multiline ? 112 : 54,

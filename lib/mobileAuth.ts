@@ -326,7 +326,7 @@ export async function beginNativeAppleSignIn(): Promise<NativeAppleSignInResult>
 
     if (__DEV__) {
       console.log("[AppleAuth] session created", Boolean(confirmedSession?.user));
-      console.log("[AppleAuth] user email if available", confirmedSession?.user?.email ?? null);
+      console.log("[AppleAuth] user email present", Boolean(confirmedSession?.user?.email));
     }
 
     if (!confirmedSession?.user) {
@@ -462,7 +462,7 @@ export async function completeAuthSessionFromUrl(
   if (__DEV__) {
     console.log(`${logPrefix} exchangeCodeForSession success`, false);
     console.log(`${logPrefix} session exists after exchange`, false);
-    console.log(`${logPrefix} user email if available`, null);
+    console.log(`${logPrefix} user email present`, false);
   }
 
   return {

@@ -3,9 +3,11 @@ import { createClient } from "https://esm.sh/@supabase/supabase-js@2";
 import {
   asNullableUuid,
   asTrimmedString,
+  buildReplyAddress,
   buildSchedovaFromHeader,
   buildEmailContent,
   corsHeaders,
+  createReplyToken,
   EMAIL_PROVIDER,
   getBusinessName,
   getErrorMessage,
@@ -151,7 +153,15 @@ Deno.serve(async (req) => {
 
     conversationId = asTrimmedString(conversationResult.data);
   }
-  const ownerReplyTo = asTrimmedString(user.email) || "support@schedova.com";
+  const replyToken = await createReplyToken({
+    serviceClient,
+    accountId: user.id,
+    clientId,
+    appointmentId: appointmentId || null,
+    conversationId,
+    messageType: "manual",
+  });
+  const replyTo = buildReplyAddress(replyToken);
 
   const queuedMessage = await insertMessage({
     serviceClient,
@@ -169,8 +179,8 @@ Deno.serve(async (req) => {
     provider: EMAIL_PROVIDER,
     metadata: {
       messageType: "manual",
-      replyMode: "owner_email_inbox",
-      replyTo: ownerReplyTo,
+      replyMode: "schedova_messages_inbox",
+      replyTo,
     },
   });
 
@@ -181,7 +191,7 @@ Deno.serve(async (req) => {
       subject,
       html: emailContent.html,
       text: emailContent.plainText,
-      replyTo: ownerReplyTo,
+      replyTo,
     });
 
     await serviceClient

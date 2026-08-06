@@ -13,10 +13,38 @@ type AccountTransition = {
 };
 
 type AccountScopedCleanup = () => void | Promise<void>;
+type AccountScopedCleanupKind =
+  | "notifications"
+  | "realtime"
+  | "subscription"
+  | "other";
 
 const MAX_TRANSITION_EVENTS = 120;
-const scopedCleanups = new Set<AccountScopedCleanup>();
+const scopedCleanups = new Map<AccountScopedCleanup, AccountScopedCleanupKind>();
 const transitionEvents: AccountTransitionEvent[] = [];
+
+const PRIVATE_DETAIL_KEY =
+  /(app.?user.?id|client|email|message|name|phone|token|user.?id)/i;
+
+function sanitizeDetails(
+  details?: Record<string, unknown>,
+): Record<string, unknown> | undefined {
+  if (!details) return undefined;
+
+  return Object.fromEntries(
+    Object.entries(details).map(([key, value]) => {
+      if (PRIVATE_DETAIL_KEY.test(key)) {
+        return [key.replace(/id$/i, "IdPresent"), Boolean(value)];
+      }
+
+      if (value instanceof Error) {
+        return [key, value.message];
+      }
+
+      return [key, value];
+    }),
+  );
+}
 
 let nextTransitionRunId = 1;
 let currentTransition: AccountTransition = {
@@ -35,7 +63,9 @@ export function recordAccountTransitionEvent(
 ) {
   const entry: AccountTransitionEvent = {
     at: new Date().toISOString(),
-    details,
+    // Account switching is production-diagnosed from device logs. Keep the
+    // event sequence useful without persisting account or client identifiers.
+    details: sanitizeDetails(details),
     event,
     runId,
   };
@@ -65,8 +95,13 @@ export function beginAccountTransition(
     targetUserId: null,
   };
   recordAccountTransitionEvent(
-    "switch-button-pressed",
-    { source, userId: previousUserId ?? null },
+    "account_switch_started",
+    { source, previousUserId: previousUserId ?? null },
+    currentTransition.runId,
+  );
+  recordAccountTransitionEvent(
+    "account_transition_lock_acquired",
+    { source },
     currentTransition.runId,
   );
 
@@ -92,8 +127,8 @@ export function continueAccountTransition(
   }
 
   recordAccountTransitionEvent(
-    "new-supabase-session-established",
-    { source, userId: targetUserId },
+    "new_supabase_session_ready",
+    { source, targetUserId },
     currentTransition.runId,
   );
 
@@ -110,7 +145,7 @@ export function completeAccountTransition(runId: number, source: string) {
     return false;
   }
 
-  recordAccountTransitionEvent("transition-completed", { source }, runId);
+  recordAccountTransitionEvent("account_switch_completed", { source }, runId);
   currentTransition = {
     active: false,
     previousUserId: null,
@@ -120,8 +155,11 @@ export function completeAccountTransition(runId: number, source: string) {
   return true;
 }
 
-export function registerAccountScopedCleanup(cleanup: AccountScopedCleanup) {
-  scopedCleanups.add(cleanup);
+export function registerAccountScopedCleanup(
+  cleanup: AccountScopedCleanup,
+  kind: AccountScopedCleanupKind = "other",
+) {
+  scopedCleanups.set(cleanup, kind);
 
   return () => {
     scopedCleanups.delete(cleanup);
@@ -132,7 +170,14 @@ export async function cancelAccountScopedWork(
   source: string,
   runId: number,
 ) {
-  const cleanups = [...scopedCleanups];
+  const cleanups = [...scopedCleanups.entries()];
+  const cleanupCounts = cleanups.reduce(
+    (counts, [, kind]) => ({
+      ...counts,
+      [kind]: counts[kind] + 1,
+    }),
+    { notifications: 0, realtime: 0, subscription: 0, other: 0 },
+  );
   recordAccountTransitionEvent(
     "previous-account-async-work-canceling",
     { cleanupCount: cleanups.length, source },
@@ -140,9 +185,25 @@ export async function cancelAccountScopedWork(
   );
 
   const results = await Promise.allSettled(
-    cleanups.map(async (cleanup) => cleanup()),
+    cleanups.map(async ([cleanup]) => cleanup()),
   );
   const rejectedCount = results.filter((result) => result.status === "rejected").length;
+
+  recordAccountTransitionEvent(
+    "old_listeners_removed",
+    { cleanupCount: cleanups.length, rejectedCount, source },
+    runId,
+  );
+  recordAccountTransitionEvent(
+    "realtime_listeners_removed",
+    { cleanupCount: cleanupCounts.realtime },
+    runId,
+  );
+  recordAccountTransitionEvent(
+    "notification_listeners_removed",
+    { cleanupCount: cleanupCounts.notifications },
+    runId,
+  );
 
   recordAccountTransitionEvent(
     "previous-account-async-work-canceled",

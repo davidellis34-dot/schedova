@@ -12,10 +12,12 @@ import {
 import { shouldRunAppointmentSmsMutation } from "../../lib/appointmentSmsMutationGate";
 import {
   sendAppointmentEmailNonBlocking,
-  shouldSendEmail,
-  shouldSendText,
   type AppointmentDeliveryChoice,
 } from "../../lib/appointmentEmail";
+import {
+  getAppointmentDeliveryFlags,
+  resolveAppointmentDeliveryValidation,
+} from "../../lib/appointmentDelivery";
 import { emitAppointmentUpserted } from "../../lib/appointmentEvents";
 import {
   saveAppointmentCommunicationRecipients,
@@ -53,8 +55,11 @@ import {
   scheduleSaveCompletionTiming,
 } from "../../lib/savePerformance";
 import { emitSaveNotice } from "../../lib/saveNoticeEvents";
+import { settleActiveTextInput } from "../../lib/settleTextInputs";
 import { supabase } from "../../lib/supabase";
+import { useTrackedTextInputValue } from "../../lib/textInputDraft";
 import { useAuthSession } from "../../lib/authSession";
+import { trackAnalyticsEvent } from "../../lib/analytics";
 import {
   blockTitleFor,
   calculateEndTime,
@@ -504,6 +509,35 @@ function getUnknownErrorCode(error: unknown) {
   return "";
 }
 
+const APPOINTMENT_DELIVERY_FLAG_COLUMNS = [
+  "sms_notifications_enabled",
+  "email_notifications_enabled",
+] as const;
+
+function withoutAppointmentDeliveryFlags<T extends Record<string, unknown>>(
+  payload: T,
+): Omit<T, (typeof APPOINTMENT_DELIVERY_FLAG_COLUMNS)[number]> {
+  const {
+    sms_notifications_enabled: _smsNotificationsEnabled,
+    email_notifications_enabled: _emailNotificationsEnabled,
+    ...rest
+  } = payload;
+
+  return rest;
+}
+
+function isAppointmentDeliveryFlagSchemaError(error: unknown) {
+  const message = getUnknownErrorMessage(error).toLowerCase();
+
+  return (
+    message.includes("appointments") &&
+    message.includes("schema cache") &&
+    APPOINTMENT_DELIVERY_FLAG_COLUMNS.some((column) =>
+      message.includes(column),
+    )
+  );
+}
+
 function routeParam(value: string | string[] | undefined) {
   if (Array.isArray(value)) return value[0] || "";
   return typeof value === "string" ? value : "";
@@ -517,7 +551,8 @@ function routeParamList(value: string | string[] | undefined) {
 }
 
 function sanitizePostSaveDestination(value: string) {
-  return value === "/messages" ? "/messages" : "/dashboard";
+  if (value === "/messages" || value === "/onboarding") return value;
+  return "/dashboard";
 }
 type UseBookAppointmentFormOptions = {
   requestProAccess?: (message?: string) => Promise<boolean>;
@@ -572,6 +607,7 @@ export function useBookAppointmentForm({
   const [loading, setLoading] = useState(true);
   const [saving, setSaving] = useState(false);
   const savingRef = useRef(false);
+  const appointmentDeliveryFlagsSupportedRef = useRef<boolean | null>(null);
   const baseDataLoadedRef = useRef(false);
   const [editLoaded, setEditLoaded] = useState(false);
 
@@ -590,13 +626,23 @@ export function useBookAppointmentForm({
     useState("");
   const [existingAppointmentClientName, setExistingAppointmentClientName] =
     useState("");
+  const [savedAppointmentSmsEnabled, setSavedAppointmentSmsEnabled] =
+    useState<boolean | null>(null);
+  const [savedAppointmentEmailEnabled, setSavedAppointmentEmailEnabled] =
+    useState<boolean | null>(null);
   const [selectedServices, setSelectedServices] = useState<Service[]>([]);
   const [appointmentDurationMinutes, setAppointmentDurationMinutesState] =
     useState(30);
   const [durationEdited, setDurationEdited] = useState(false);
-  const [appointmentNotes, setAppointmentNotes] = useState("");
-  const [finalPrice, setFinalPrice] = useState("");
-  const [title, setTitle] = useState("");
+  const appointmentNotesField = useTrackedTextInputValue("");
+  const finalPriceField = useTrackedTextInputValue("");
+  const titleField = useTrackedTextInputValue("");
+  const appointmentNotes = appointmentNotesField.value;
+  const setAppointmentNotes = appointmentNotesField.onChangeText;
+  const finalPrice = finalPriceField.value;
+  const setFinalPrice = finalPriceField.onChangeText;
+  const title = titleField.value;
+  const setTitle = titleField.onChangeText;
 
   const [appointmentDate, setAppointmentDate] = useState(
     cleanDateOnly(appointmentDateParam || todayIso()),
@@ -609,14 +655,26 @@ export function useBookAppointmentForm({
   const [repeatUntil, setRepeatUntil] = useState(todayIso());
 
   const [showQuickClient, setShowQuickClient] = useState(false);
-  const [newClientName, setNewClientName] = useState("");
-  const [newClientPhone, setNewClientPhone] = useState("");
-  const [newClientEmail, setNewClientEmail] = useState("");
+  const newClientNameField = useTrackedTextInputValue("");
+  const newClientPhoneField = useTrackedTextInputValue("");
+  const newClientEmailField = useTrackedTextInputValue("");
+  const newClientName = newClientNameField.value;
+  const setNewClientName = newClientNameField.onChangeText;
+  const newClientPhone = newClientPhoneField.value;
+  const setNewClientPhone = newClientPhoneField.onChangeText;
+  const newClientEmail = newClientEmailField.value;
+  const setNewClientEmail = newClientEmailField.onChangeText;
 
   const [showQuickService, setShowQuickService] = useState(false);
-  const [newServiceName, setNewServiceName] = useState("");
-  const [newServicePrice, setNewServicePrice] = useState("");
-  const [newServiceDuration, setNewServiceDuration] = useState("30");
+  const newServiceNameField = useTrackedTextInputValue("");
+  const newServicePriceField = useTrackedTextInputValue("");
+  const newServiceDurationField = useTrackedTextInputValue("30");
+  const newServiceName = newServiceNameField.value;
+  const setNewServiceName = newServiceNameField.onChangeText;
+  const newServicePrice = newServicePriceField.value;
+  const setNewServicePrice = newServicePriceField.onChangeText;
+  const newServiceDuration = newServiceDurationField.value;
+  const setNewServiceDuration = newServiceDurationField.onChangeText;
 
   const totalDuration = useMemo(
     () => getTotalDuration(selectedServices),
@@ -866,6 +924,8 @@ export function useBookAppointmentForm({
     setSelectedClient("");
     setExistingAppointmentClientId("");
     setExistingAppointmentClientName("");
+    setSavedAppointmentSmsEnabled(null);
+    setSavedAppointmentEmailEnabled(null);
     setSelectedServices([]);
     setAppointmentNotes("");
     setFinalPrice("");
@@ -874,7 +934,7 @@ export function useBookAppointmentForm({
     setEndTime(cleanEnd);
     setTitle(data.title || "");
     setAllDay(isAllDayBlock);
-  }, []);
+  }, [setAppointmentNotes, setFinalPrice, setTitle]);
 
   const loadAppointmentForEdit = useCallback(
     async (id: string) => {
@@ -914,6 +974,16 @@ export function useBookAppointmentForm({
       setSelectedClient(matchedClient ? normalizeId(matchedClient.id) : "");
       setExistingAppointmentClientId(clientId);
       setExistingAppointmentClientName(data.client_name || "");
+      setSavedAppointmentSmsEnabled(
+        typeof data.sms_notifications_enabled === "boolean"
+          ? data.sms_notifications_enabled
+          : null,
+      );
+      setSavedAppointmentEmailEnabled(
+        typeof data.email_notifications_enabled === "boolean"
+          ? data.email_notifications_enabled
+          : null,
+      );
       setSelectedServices(matchedServices);
       setAppointmentDurationMinutesState(loadedDuration);
       setDurationEdited(loadedDuration !== defaultLoadedDuration);
@@ -930,7 +1000,14 @@ export function useBookAppointmentForm({
           : "",
       );
     },
-    [calendarIntervalMinutes, clients, services],
+    [
+      calendarIntervalMinutes,
+      clients,
+      services,
+      setAppointmentNotes,
+      setFinalPrice,
+      setTitle,
+    ],
   );
 
   useEffect(() => {
@@ -977,6 +1054,8 @@ export function useBookAppointmentForm({
     setSelectedClient(matchedClientId);
     setExistingAppointmentClientId("");
     setExistingAppointmentClientName("");
+    setSavedAppointmentSmsEnabled(null);
+    setSavedAppointmentEmailEnabled(null);
     setSelectedServices(
       matchedServices.length > 0 ? matchedServices : matchedService ? [matchedService] : [],
     );
@@ -1006,6 +1085,9 @@ export function useBookAppointmentForm({
     loadBlockForEdit,
     serviceIdParam,
     services,
+    setAppointmentNotes,
+    setFinalPrice,
+    setTitle,
   ]);
 
   function addServiceToAppointment(service: Service) {
@@ -1028,12 +1110,17 @@ export function useBookAppointmentForm({
   }
 
   async function saveQuickClient() {
-    const trimmedName = newClientName.trim();
-    const trimmedEmail = newClientEmail.trim();
+    await settleActiveTextInput();
+
+    const trimmedName = newClientNameField.getValue().trim();
+    const trimmedEmail = newClientEmailField.getValue().trim();
     const normalizedPhone =
-      await normalizePhoneForSmsWithUserDefault(newClientPhone.trim());
+      await normalizePhoneForSmsWithUserDefault(
+        newClientPhoneField.getValue().trim(),
+      );
     const displayName = trimmedName || normalizedPhone || trimmedEmail;
     const currentUserId = sessionUserId || "";
+    const isFirstClient = countActiveClients(clients) === 0;
 
     if (!currentUserId) {
       Alert.alert("Login Required", "Please sign in to add a client.");
@@ -1093,17 +1180,23 @@ export function useBookAppointmentForm({
     setNewClientPhone("");
     setNewClientEmail("");
     setShowQuickClient(false);
+    if (isFirstClient) {
+      trackAnalyticsEvent("first_client_created");
+    }
   }
 
   async function saveQuickService() {
+    await settleActiveTextInput();
+
     const currentUserId = sessionUserId || "";
+    const isFirstService = services.length === 0;
 
     if (!currentUserId) {
       Alert.alert("Login Required", "Please sign in to add a service.");
       return;
     }
 
-    if (!newServiceName.trim()) {
+    if (!newServiceNameField.getValue().trim()) {
       Alert.alert("Missing Info", "Enter a service name.");
       return;
     }
@@ -1123,8 +1216,8 @@ export function useBookAppointmentForm({
       }
     }
 
-    const priceNumber = Number(newServicePrice);
-    const durationNumber = Number(newServiceDuration);
+    const priceNumber = Number(newServicePriceField.getValue());
+    const durationNumber = Number(newServiceDurationField.getValue());
 
     if (!Number.isFinite(priceNumber) || priceNumber < 0) {
       Alert.alert("Invalid Price", "Price must be zero or higher.");
@@ -1140,7 +1233,7 @@ export function useBookAppointmentForm({
       .from("services")
       .insert({
         user_id: currentUserId,
-        name: newServiceName.trim(),
+        name: newServiceNameField.getValue().trim(),
         price: priceNumber,
         duration_minutes: durationNumber,
       })
@@ -1165,6 +1258,9 @@ export function useBookAppointmentForm({
     setNewServicePrice("");
     setNewServiceDuration("30");
     setShowQuickService(false);
+    if (isFirstService) {
+      trackAnalyticsEvent("first_service_created");
+    }
   }
 
   function navigateAfterSave() {
@@ -1343,6 +1439,8 @@ export function useBookAppointmentForm({
     };
 
     try {
+      await settleActiveTextInput();
+
       const currentUserId = await resolveCurrentUserIdForSave(flowName);
 
       if (!currentUserId) {
@@ -1376,7 +1474,13 @@ export function useBookAppointmentForm({
       }
 
       logAppointmentSaveCheckpoint("appointment save success");
-      emitSaveNotice(entryType === "appointment" ? "Appointment saved." : "Saved.");
+      emitSaveNotice(
+        entryType === "appointment"
+          ? isEditMode
+            ? "Appointment updated."
+            : "Appointment booked."
+          : "Saved.",
+      );
       scheduleSaveCompletionTiming(flowName, timing.saveStartedAt, {
         postSupabaseStartedAt: timing.postSupabaseStartedAt,
         context: {
@@ -1628,8 +1732,16 @@ export function useBookAppointmentForm({
       timing?: SaveTimingState;
     },
   ) {
-    const deliveryChoice = options?.deliveryChoice || "text";
-    const messageRecipients = options?.recipients || [];
+    const deliveryChoice = options?.deliveryChoice ?? "none";
+    const deliveryValidation = await resolveAppointmentDeliveryValidation({
+      deliveryChoice,
+      recipients: options?.recipients || [],
+      normalizePhone: normalizePhoneForSmsWithUserDefault,
+    });
+    const messageRecipients = deliveryValidation.recipients;
+    const { smsEnabled, emailEnabled } = getAppointmentDeliveryFlags(
+      deliveryChoice,
+    );
     const timing = options?.timing;
     const flowName =
       timing?.flowName ||
@@ -1788,6 +1900,14 @@ export function useBookAppointmentForm({
       return false;
     }
 
+    if (deliveryValidation.issues.length > 0) {
+      Alert.alert(
+        "Update client contact info",
+        deliveryValidation.issues.join("\n"),
+      );
+      return false;
+    }
+
     logSaveTiming(
       flowName,
       "validation",
@@ -1795,6 +1915,8 @@ export function useBookAppointmentForm({
       {
         recurringDates: recurringDates.length,
         deliveryChoice,
+        smsEnabled,
+        emailEnabled,
       },
     );
 
@@ -2039,7 +2161,9 @@ export function useBookAppointmentForm({
       }
     }
 
-    const finalPriceNumber = Number(finalPrice);
+    const liveAppointmentNotes = appointmentNotesField.getValue();
+    const liveFinalPrice = finalPriceField.getValue();
+    const finalPriceNumber = Number(liveFinalPrice);
     const serviceIds = cleanSelectedServices
       .map((service) => normalizeId(service.id))
       .filter(Boolean);
@@ -2064,8 +2188,8 @@ export function useBookAppointmentForm({
       duration_minutes: safeAppointmentDuration,
       appointment_time: newStartTime,
       end_time: newEndTime,
-      appointment_notes: appointmentNotes.trim() || null,
-      final_price: finalPrice.trim()
+      appointment_notes: liveAppointmentNotes.trim() || null,
+      final_price: liveFinalPrice.trim()
         ? Number.isFinite(finalPriceNumber)
           ? finalPriceNumber
           : 0
@@ -2075,7 +2199,14 @@ export function useBookAppointmentForm({
       double_booked_with:
         doubleBookedWith.length > 0 ? doubleBookedWith : null,
       double_booking_confirmed_at: doubleBookingConfirmedAt,
+      sms_notifications_enabled: smsEnabled,
+      email_notifications_enabled: emailEnabled,
     };
+
+    const getAppointmentMutationData = () =>
+      appointmentDeliveryFlagsSupportedRef.current === false
+        ? withoutAppointmentDeliveryFlags(baseAppointmentData)
+        : baseAppointmentData;
 
     const primaryMutationStartedAt = getSavePerformanceNow();
     logSaveTiming(
@@ -2094,10 +2225,7 @@ export function useBookAppointmentForm({
       let recipientSavePromise: Promise<void> | null = null;
 
       return () => {
-        if (
-          messageRecipients.length === 0 ||
-          appointmentsForRecipients.length === 0
-        ) {
+        if (appointmentsForRecipients.length === 0) {
           return Promise.resolve();
         }
 
@@ -2144,22 +2272,54 @@ export function useBookAppointmentForm({
     };
 
     if (isEditMode && appointmentId) {
-      const { error } = await measureSaveStep(
-        flowName,
+      const runAppointmentUpdate = (
+        mutationLabel: string,
+        payload: Record<string, unknown>,
+      ) =>
+        measureSaveStep(
+          flowName,
+          mutationLabel,
+          () =>
+            supabase
+              .from("appointments")
+              .update({
+                ...payload,
+                appointment_date: safeDate,
+              })
+              .eq("id", appointmentId)
+              .eq("user_id", currentUserId),
+          {
+            mode: "edit",
+          },
+        );
+
+      const attemptedUpdateWithDeliveryFlags =
+        appointmentDeliveryFlagsSupportedRef.current !== false;
+      let { error } = await runAppointmentUpdate(
         "appointment update",
-        () =>
-          supabase
-            .from("appointments")
-            .update({
-              ...baseAppointmentData,
-              appointment_date: safeDate,
-            })
-            .eq("id", appointmentId)
-            .eq("user_id", currentUserId),
-        {
-          mode: "edit",
-        },
+        getAppointmentMutationData(),
       );
+
+      if (
+        error &&
+        attemptedUpdateWithDeliveryFlags &&
+        isAppointmentDeliveryFlagSchemaError(error)
+      ) {
+        appointmentDeliveryFlagsSupportedRef.current = false;
+        logSaveContext("DELIVERY FLAG FALLBACK", {
+          mode: "edit",
+          operation: "appointments.update",
+          missingColumns: APPOINTMENT_DELIVERY_FLAG_COLUMNS.filter((column) =>
+            getUnknownErrorMessage(error).toLowerCase().includes(column),
+          ),
+        });
+        ({ error } = await runAppointmentUpdate(
+          "appointment update fallback",
+          getAppointmentMutationData(),
+        ));
+      } else if (!error && attemptedUpdateWithDeliveryFlags) {
+        appointmentDeliveryFlagsSupportedRef.current = true;
+      }
 
       if (error) {
         logSupabaseSaveError("appointments.update", error);
@@ -2199,7 +2359,7 @@ export function useBookAppointmentForm({
         shouldRunAppointmentSmsMutation({
           mutation: "update",
           smsAutomationAvailable: canUseProFeature("smsAutomation"),
-          smsNotificationsEnabled: shouldSendText(deliveryChoice),
+          smsNotificationsEnabled: smsEnabled,
         })
       ) {
         queueMeasuredBackgroundSaveTask({
@@ -2255,7 +2415,7 @@ export function useBookAppointmentForm({
       }
 
       if (
-        shouldSendEmail(deliveryChoice) &&
+        emailEnabled &&
         canUseProFeature("emailMessaging")
       ) {
         queueMeasuredBackgroundSaveTask({
@@ -2344,21 +2504,59 @@ export function useBookAppointmentForm({
         ),
     );
 
-    const { data: insertedAppointments, error } = await measureSaveStep(
-      flowName,
+    const runAppointmentInsert = (
+      mutationLabel: string,
+      appointments: Record<string, unknown>[],
+    ) =>
+      measureSaveStep(
+        flowName,
+        mutationLabel,
+        () =>
+          supabase
+            .from("appointments")
+            .insert(appointments)
+            .select(
+              "id, client_id, appointment_date, appointment_time, client_name",
+            ),
+        {
+          appointmentCount: appointments.length,
+          mode: "create",
+        },
+      );
+
+    const attemptedInsertWithDeliveryFlags =
+      appointmentDeliveryFlagsSupportedRef.current !== false;
+    let { data: insertedAppointments, error } = await runAppointmentInsert(
       "appointment insert",
-      () =>
-        supabase
-          .from("appointments")
-          .insert(uniqueAppointments)
-          .select(
-            "id, client_id, appointment_date, appointment_time, client_name",
-          ),
-      {
-        appointmentCount: uniqueAppointments.length,
-        mode: "create",
-      },
+      appointmentDeliveryFlagsSupportedRef.current === false
+        ? uniqueAppointments.map((appointment) =>
+            withoutAppointmentDeliveryFlags(appointment),
+          )
+        : uniqueAppointments,
     );
+
+    if (
+      error &&
+      attemptedInsertWithDeliveryFlags &&
+      isAppointmentDeliveryFlagSchemaError(error)
+    ) {
+      appointmentDeliveryFlagsSupportedRef.current = false;
+      logSaveContext("DELIVERY FLAG FALLBACK", {
+        mode: "create",
+        operation: "appointments.insert",
+        missingColumns: APPOINTMENT_DELIVERY_FLAG_COLUMNS.filter((column) =>
+          getUnknownErrorMessage(error).toLowerCase().includes(column),
+        ),
+      });
+      ({ data: insertedAppointments, error } = await runAppointmentInsert(
+        "appointment insert fallback",
+        uniqueAppointments.map((appointment) =>
+          withoutAppointmentDeliveryFlags(appointment),
+        ),
+      ));
+    } else if (!error && attemptedInsertWithDeliveryFlags) {
+      appointmentDeliveryFlagsSupportedRef.current = true;
+    }
 
     if (error) {
       logSupabaseSaveError("appointments.insert", error);
@@ -2427,12 +2625,12 @@ export function useBookAppointmentForm({
       void ensureRecipientSavePromise();
     });
 
-    if (deliveryChoice !== "none" && newAppointment?.id) {
+    if ((smsEnabled || emailEnabled) && newAppointment?.id) {
       if (
         shouldRunAppointmentSmsMutation({
           mutation: "create",
           smsAutomationAvailable: canUseProFeature("smsAutomation"),
-          smsNotificationsEnabled: shouldSendText(deliveryChoice),
+          smsNotificationsEnabled: smsEnabled,
         })
       ) {
         queueMeasuredBackgroundSaveTask({
@@ -2488,7 +2686,7 @@ export function useBookAppointmentForm({
       }
 
       if (
-        shouldSendEmail(deliveryChoice) &&
+        emailEnabled &&
         canUseProFeature("emailMessaging")
       ) {
         queueMeasuredBackgroundSaveTask({
@@ -2701,7 +2899,7 @@ export function useBookAppointmentForm({
 
     const blockData = {
       user_id: currentUserId,
-      title: title.trim() || blockTitleFor(entryType),
+      title: titleField.getValue().trim() || blockTitleFor(entryType),
       block_date: safeDate,
       start_time: safeStartTime,
       end_time: safeEndTime,
@@ -2790,13 +2988,18 @@ export function useBookAppointmentForm({
     setEntryType,
     selectedClient,
     setSelectedClient,
+    savedAppointmentSmsEnabled,
+    savedAppointmentEmailEnabled,
     selectedServices,
     title,
     setTitle,
+    titleOnEndEditing: titleField.onEndEditing,
     appointmentNotes,
     setAppointmentNotes,
+    appointmentNotesOnEndEditing: appointmentNotesField.onEndEditing,
     finalPrice,
     setFinalPrice,
+    finalPriceOnEndEditing: finalPriceField.onEndEditing,
     appointmentDate,
     setAppointmentDate,
     startTime,
@@ -2820,20 +3023,26 @@ export function useBookAppointmentForm({
     setShowQuickClient,
     newClientName,
     setNewClientName,
+    newClientNameOnEndEditing: newClientNameField.onEndEditing,
     newClientPhone,
     setNewClientPhone,
+    newClientPhoneOnEndEditing: newClientPhoneField.onEndEditing,
     newClientEmail,
     setNewClientEmail,
+    newClientEmailOnEndEditing: newClientEmailField.onEndEditing,
     saveQuickClient,
 
     showQuickService,
     setShowQuickService,
     newServiceName,
     setNewServiceName,
+    newServiceNameOnEndEditing: newServiceNameField.onEndEditing,
     newServicePrice,
     setNewServicePrice,
+    newServicePriceOnEndEditing: newServicePriceField.onEndEditing,
     newServiceDuration,
     setNewServiceDuration,
+    newServiceDurationOnEndEditing: newServiceDurationField.onEndEditing,
     saveQuickService,
 
     addServiceToAppointment,

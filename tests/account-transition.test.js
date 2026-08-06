@@ -62,3 +62,18 @@ test("only the current transition can complete after account B is ready", () => 
   assert.equal(isCurrentAccountTransition(transition.runId), false);
   assert.equal(completeAccountTransition(transition.runId, "stale-result"), false);
 });
+
+test("records the account-switch lifecycle without retaining account identifiers", async () => {
+  const transition = beginAccountTransition("settings", "account-a-sensitive");
+  await cancelAccountScopedWork("settings", transition.runId);
+  continueAccountTransition("auth-callback", "account-b-sensitive");
+  completeAccountTransition(transition.runId, "profile-ready");
+
+  const events = getAccountTransitionEvents();
+  assert.equal(events.some((entry) => entry.event === "account_switch_started"), true);
+  assert.equal(events.some((entry) => entry.event === "old_listeners_removed"), true);
+  assert.equal(events.some((entry) => entry.event === "new_supabase_session_ready"), true);
+  assert.equal(events.some((entry) => entry.event === "account_switch_completed"), true);
+  assert.equal(JSON.stringify(events).includes("account-a-sensitive"), false);
+  assert.equal(JSON.stringify(events).includes("account-b-sensitive"), false);
+});

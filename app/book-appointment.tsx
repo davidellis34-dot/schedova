@@ -42,12 +42,27 @@ import {
   type AppointmentDeliveryChoice,
 } from "../lib/appointmentEmail";
 import {
+  applyDeliveryChoiceToRecipients,
+  getAvailableAppointmentDeliveryChoice,
+  getAppointmentDeliveryChoiceFromFlags,
+  getAppointmentDeliveryPreview,
+} from "../lib/appointmentDelivery";
+import {
   sendAppointmentSmsNonBlocking,
   sendManualClientSms,
 } from "../lib/appointmentSms";
 import { shouldRunAppointmentSmsMutation } from "../lib/appointmentSmsMutationGate";
 import { copyTextToClipboard } from "../lib/clipboard";
 import { confirmDestructiveAction } from "../lib/confirmDestructiveAction";
+import {
+  isSmsConfigurationError,
+  isSmsCreditError,
+  isTemporarySmsError,
+  showAddClientPhonePrompt,
+  showSmsCreditsPrompt,
+  showSmsSetupPrompt,
+  showTemporarySmsFailurePrompt,
+} from "../lib/guidedWorkflows";
 import { canUseFeature, useFeatureAccess } from "../lib/featureAccess";
 import { useAuthSession } from "../lib/authSession";
 import { cancelAppointmentReminder } from "../lib/localNotifications";
@@ -73,9 +88,8 @@ import { supabase } from "../lib/supabase";
 import { useAppTheme } from "../lib/useAppTheme";
 import {
   createPrimaryRecipient,
+  fetchAppointmentCommunicationRecipients,
   fetchClientCommunicationRecipients,
-  getEmailRecipientCount,
-  getSmsRecipientCount,
   sendConsentRequests,
   type CommunicationRecipient,
 } from "../lib/communicationRecipients";
@@ -467,85 +481,115 @@ export default function BookAppointmentScreen() {
         : null,
     [form.clients, form.selectedClient],
   );
-  const selectedClientPhone = getClientPhone(selectedClientRecord);
-  const selectedClientEmail = getClientEmail(selectedClientRecord);
-  const selectedClientCanReceiveText =
-    Boolean(normalizePhoneNumber(selectedClientPhone)) &&
-    Boolean(selectedClientRecord?.sms_opt_in);
-  const selectedClientCanReceiveEmail =
-    Boolean(selectedClientEmail) && Boolean(selectedClientRecord?.email_opt_in);
-  const deliveryNeedsText = shouldSendText(appointmentDeliveryChoice);
-  const deliveryNeedsEmail = shouldSendEmail(appointmentDeliveryChoice);
-  const selectedRecipientSmsCount = getSmsRecipientCount(appointmentRecipients);
-  const selectedRecipientEmailCount =
-    getEmailRecipientCount(appointmentRecipients);
-  const missingDeliveryContactWarning =
-    appointmentDeliveryChoice === "none"
-      ? ""
-      : [
-          deliveryNeedsText &&
-          selectedRecipientSmsCount === 0 &&
-          !selectedClientCanReceiveText
-            ? "Text needs a phone number and SMS opt-in."
-            : "",
-          deliveryNeedsEmail &&
-          selectedRecipientEmailCount === 0 &&
-          !selectedClientCanReceiveEmail
-            ? "Email needs an email address and email opt-in."
-            : "",
-        ]
-          .filter(Boolean)
-          .join(" ");
-  const appointmentSmsRecipientCount =
-    appointmentDeliveryChoice === "none"
-      ? 0
-      : shouldSendText(appointmentDeliveryChoice)
-        ? getSmsRecipientCount(appointmentRecipients)
-        : 0;
-  const appointmentEmailRecipientCount =
-    appointmentDeliveryChoice === "none"
-      ? 0
-      : shouldSendEmail(appointmentDeliveryChoice)
-        ? getEmailRecipientCount(appointmentRecipients)
-        : 0;
+  const deliveryPreview = useMemo(
+    () =>
+      getAppointmentDeliveryPreview({
+        deliveryChoice: appointmentDeliveryChoice,
+        recipients: appointmentRecipients,
+      }),
+    [appointmentDeliveryChoice, appointmentRecipients],
+  );
+  const missingDeliveryContactWarning = deliveryPreview.issues.join("\n");
+  const appointmentSmsRecipientCount = deliveryPreview.smsRecipientCount;
+  const appointmentEmailRecipientCount = deliveryPreview.emailRecipientCount;
 
   useEffect(() => {
     let active = true;
 
     async function loadRecipients() {
-      if (!form.selectedClient || !form.userId) {
+      if (
+        !form.userId ||
+        (!form.selectedClient && !(form.isEditMode && form.appointmentId))
+      ) {
         setAppointmentRecipients([]);
         return;
       }
 
-      try {
-        const loaded = await fetchClientCommunicationRecipients({
-          userId: form.userId,
-          clientId: form.selectedClient,
-          primary: {
-            name: selectedClientRecord?.name || selectedClientLabel,
-            phone: selectedClientRecord?.phone,
-            email: selectedClientRecord?.email,
-            smsOptIn: selectedClientRecord?.sms_opt_in,
-            emailOptIn: selectedClientRecord?.email_opt_in,
-          },
-        });
+      const selectedClientId = String(form.selectedClient || "").trim();
+      const appointmentId = String(form.appointmentId || "").trim();
+      const primaryRecipient = createPrimaryRecipient({
+        clientId: selectedClientId || null,
+        name: selectedClientRecord?.name || selectedClientLabel,
+        phone: selectedClientRecord?.phone,
+        email: selectedClientRecord?.email,
+        smsOptIn: selectedClientRecord?.sms_opt_in,
+        emailOptIn: selectedClientRecord?.email_opt_in,
+      });
+      let fallbackRecipients = [primaryRecipient];
 
-        if (active) setAppointmentRecipients(loaded);
-      } catch (error) {
-        console.log("Appointment recipients load failed", error);
-        if (active) {
-          setAppointmentRecipients([
-            createPrimaryRecipient({
-              clientId: form.selectedClient,
+      try {
+        if (selectedClientId) {
+          fallbackRecipients = await fetchClientCommunicationRecipients({
+            userId: form.userId,
+            clientId: selectedClientId,
+            primary: {
               name: selectedClientRecord?.name || selectedClientLabel,
               phone: selectedClientRecord?.phone,
               email: selectedClientRecord?.email,
               smsOptIn: selectedClientRecord?.sms_opt_in,
               emailOptIn: selectedClientRecord?.email_opt_in,
-            }),
-          ]);
+            },
+          });
         }
+      } catch (error) {
+        console.log("Appointment recipients load failed", error);
+      }
+
+      let loadedRecipients = fallbackRecipients;
+      let loadedDeliveryChoice: AppointmentDeliveryChoice = "none";
+
+      if (form.isEditMode && appointmentId) {
+        try {
+          const appointmentSpecificRecipients =
+            await fetchAppointmentCommunicationRecipients({
+              userId: form.userId,
+              appointmentId,
+            });
+          const recipientDeliveryChoice = getAppointmentDeliveryChoiceFromFlags({
+            smsEnabled: appointmentSpecificRecipients.some(
+              (recipient) => recipient.smsEnabled,
+            ),
+            emailEnabled: appointmentSpecificRecipients.some(
+              (recipient) => recipient.emailEnabled,
+            ),
+            fallbackChoice: "none",
+          });
+
+          loadedDeliveryChoice = getAppointmentDeliveryChoiceFromFlags({
+            smsEnabled: form.savedAppointmentSmsEnabled,
+            emailEnabled: form.savedAppointmentEmailEnabled,
+            fallbackChoice: recipientDeliveryChoice,
+          });
+          loadedRecipients = applyDeliveryChoiceToRecipients(
+            appointmentSpecificRecipients.length > 0
+              ? appointmentSpecificRecipients
+              : fallbackRecipients,
+            loadedDeliveryChoice,
+          );
+        } catch (error) {
+          console.log("Appointment-specific recipients load failed", error);
+          loadedDeliveryChoice = getAppointmentDeliveryChoiceFromFlags({
+            smsEnabled: form.savedAppointmentSmsEnabled,
+            emailEnabled: form.savedAppointmentEmailEnabled,
+            fallbackChoice: "none",
+          });
+          loadedRecipients = applyDeliveryChoiceToRecipients(
+            fallbackRecipients,
+            loadedDeliveryChoice,
+          );
+        }
+      }
+
+      loadedDeliveryChoice = getAvailableAppointmentDeliveryChoice({
+        recipients: loadedRecipients,
+        preferredChoice: loadedDeliveryChoice,
+      });
+
+      if (active) {
+        if (form.isEditMode && appointmentId) {
+          setAppointmentDeliveryChoice(loadedDeliveryChoice);
+        }
+        setAppointmentRecipients(loadedRecipients);
       }
     }
 
@@ -556,13 +600,41 @@ export default function BookAppointmentScreen() {
     };
   }, [
     form.selectedClient,
+    form.savedAppointmentEmailEnabled,
+    form.savedAppointmentSmsEnabled,
     form.userId,
+    form.isEditMode,
+    form.appointmentId,
     selectedClientLabel,
     selectedClientRecord?.email,
     selectedClientRecord?.email_opt_in,
     selectedClientRecord?.name,
     selectedClientRecord?.phone,
     selectedClientRecord?.sms_opt_in,
+  ]);
+
+  useEffect(() => {
+    const hasRecipientContext = Boolean(form.selectedClient) ||
+      Boolean(form.isEditMode && form.appointmentId);
+
+    if (!hasRecipientContext || appointmentRecipients.length === 0) {
+      return;
+    }
+
+    const nextDeliveryChoice = getAvailableAppointmentDeliveryChoice({
+      recipients: appointmentRecipients,
+      preferredChoice: appointmentDeliveryChoice,
+    });
+
+    if (nextDeliveryChoice !== appointmentDeliveryChoice) {
+      setAppointmentDeliveryChoice(nextDeliveryChoice);
+    }
+  }, [
+    appointmentDeliveryChoice,
+    appointmentRecipients,
+    form.selectedClient,
+    form.isEditMode,
+    form.appointmentId,
   ]);
 
   function openEditSelectedClient() {
@@ -834,6 +906,14 @@ export default function BookAppointmentScreen() {
       return;
     }
 
+    if (sendsText && !normalizePhoneNumber(getClientPhone(appointmentMessageClient))) {
+      showAddClientPhonePrompt(() => {
+        setMessageModalVisible(false);
+        openEditSelectedClient();
+      });
+      return;
+    }
+
     if (textIssue || emailIssue) {
       Alert.alert("Update client contact info", [textIssue, emailIssue].filter(Boolean).join("\n"), [
         { text: "Cancel", style: "cancel" },
@@ -875,6 +955,23 @@ export default function BookAppointmentScreen() {
         if (smsResult.ok) {
           results.push("Text sent");
         } else {
+          if (isSmsConfigurationError(smsResult.code)) {
+            showSmsSetupPrompt((route) => router.push(route as any));
+            return;
+          }
+
+          if (isSmsCreditError(smsResult.code)) {
+            showSmsCreditsPrompt((route) => router.push(route as any));
+            return;
+          }
+
+          if (isTemporarySmsError(smsResult.code)) {
+            showTemporarySmsFailurePrompt(() => {
+              void sendAppointmentManualMessage();
+            });
+            return;
+          }
+
           textFailed = true;
           results.push(`Text failed: ${smsResult.message || "Please try again."}`);
         }
@@ -932,7 +1029,9 @@ export default function BookAppointmentScreen() {
       }
     } catch (error) {
       console.log("Manual appointment message failed", error);
-      Alert.alert("Message not sent", "Please try again.");
+      showTemporarySmsFailurePrompt(() => {
+        void sendAppointmentManualMessage();
+      });
     } finally {
       setManualEmailSending(false);
     }
@@ -973,7 +1072,7 @@ export default function BookAppointmentScreen() {
           shouldRunAppointmentSmsMutation({
             mutation: "deletion",
             smsAutomationAvailable: canUseFeature("smsAutomation"),
-            smsNotificationsEnabled: shouldSendText(appointmentDeliveryChoice),
+            smsNotificationsEnabled: form.savedAppointmentSmsEnabled,
           })
         ) {
           await sendAppointmentSmsNonBlocking(appointmentId, "cancellation", {
@@ -1070,23 +1169,10 @@ export default function BookAppointmentScreen() {
   ];
   function getDeliveryDisabledReason(choice: AppointmentDeliveryChoice) {
     if (choice === "none") return "";
-
-    const needsText = shouldSendText(choice);
-    const needsEmail = shouldSendEmail(choice);
-    const hasTextRecipient =
-      selectedRecipientSmsCount > 0 || selectedClientCanReceiveText;
-    const hasEmailRecipient =
-      selectedRecipientEmailCount > 0 || selectedClientCanReceiveEmail;
-
-    if (needsText && !hasTextRecipient) {
-      return "Text needs a phone number and SMS opt-in.";
-    }
-
-    if (needsEmail && !hasEmailRecipient) {
-      return "Email needs an email address and email opt-in.";
-    }
-
-    return "";
+    return getAppointmentDeliveryPreview({
+      deliveryChoice: choice,
+      recipients: appointmentRecipients,
+    }).issues.join("\n");
   }
 
   return (
@@ -1491,6 +1577,7 @@ export default function BookAppointmentScreen() {
             <TextInput
               value={form.title}
               onChangeText={form.setTitle}
+              onEndEditing={form.titleOnEndEditing}
               placeholder={`${blockTitleFor(form.entryType)} title`}
               placeholderTextColor={colors.mutedText}
               style={inputStyle}
@@ -1649,6 +1736,7 @@ export default function BookAppointmentScreen() {
             <TextInput
               value={form.finalPrice}
               onChangeText={form.setFinalPrice}
+              onEndEditing={form.finalPriceOnEndEditing}
               placeholder="Final price"
               placeholderTextColor={colors.mutedText}
               keyboardType="decimal-pad"
@@ -1664,6 +1752,7 @@ export default function BookAppointmentScreen() {
             <TextInput
               value={form.appointmentNotes}
               onChangeText={form.setAppointmentNotes}
+              onEndEditing={form.appointmentNotesOnEndEditing}
               placeholder="Appointment notes"
               placeholderTextColor={colors.mutedText}
               multiline
@@ -1744,8 +1833,11 @@ export default function BookAppointmentScreen() {
         phone={form.newClientPhone}
         email={form.newClientEmail}
         onChangeName={form.setNewClientName}
+        onNameEndEditing={form.newClientNameOnEndEditing}
         onChangePhone={form.setNewClientPhone}
+        onPhoneEndEditing={form.newClientPhoneOnEndEditing}
         onChangeEmail={form.setNewClientEmail}
+        onEmailEndEditing={form.newClientEmailOnEndEditing}
         onCancel={() => form.setShowQuickClient(false)}
         onSave={form.saveQuickClient}
       />
@@ -1757,8 +1849,11 @@ export default function BookAppointmentScreen() {
         price={form.newServicePrice}
         duration={form.newServiceDuration}
         onChangeName={form.setNewServiceName}
+        onNameEndEditing={form.newServiceNameOnEndEditing}
         onChangePrice={form.setNewServicePrice}
+        onPriceEndEditing={form.newServicePriceOnEndEditing}
         onChangeDuration={form.setNewServiceDuration}
+        onDurationEndEditing={form.newServiceDurationOnEndEditing}
         onCancel={() => form.setShowQuickService(false)}
         onSaved={(service: any) => {
           form.addServiceToAppointment(service);

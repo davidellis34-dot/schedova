@@ -1,11 +1,13 @@
 import {
   KeyboardAvoidingView,
   Modal,
+  NativeSyntheticEvent,
   Platform,
   Pressable,
   ScrollView,
   Text,
   TextInput,
+  TextInputEndEditingEventData,
   View,
 } from "react-native";
 import { useSafeAreaInsets } from "react-native-safe-area-context";
@@ -31,8 +33,11 @@ export function QuickClientModal({
   phone,
   email,
   onChangeName,
+  onNameEndEditing,
   onChangePhone,
+  onPhoneEndEditing,
   onChangeEmail,
+  onEmailEndEditing,
   onCancel,
   onSave,
 }: {
@@ -42,8 +47,17 @@ export function QuickClientModal({
   phone: string;
   email: string;
   onChangeName: (value: string) => void;
+  onNameEndEditing?: (
+    event: NativeSyntheticEvent<TextInputEndEditingEventData>,
+  ) => void;
   onChangePhone: (value: string) => void;
+  onPhoneEndEditing?: (
+    event: NativeSyntheticEvent<TextInputEndEditingEventData>,
+  ) => void;
   onChangeEmail: (value: string) => void;
+  onEmailEndEditing?: (
+    event: NativeSyntheticEvent<TextInputEndEditingEventData>,
+  ) => void;
   onCancel: () => void;
   onSave: () => void;
 }) {
@@ -94,6 +108,7 @@ export function QuickClientModal({
               placeholderTextColor={colors.mutedText}
               value={name}
               onChangeText={onChangeName}
+              onEndEditing={onNameEndEditing}
               style={inputStyle(colors)}
             />
             <TextInput
@@ -101,6 +116,7 @@ export function QuickClientModal({
               placeholderTextColor={colors.mutedText}
               value={phone}
               onChangeText={onChangePhone}
+              onEndEditing={onPhoneEndEditing}
               onBlur={() => {
                 if (!phone.trim()) {
                   onChangePhone("");
@@ -121,6 +137,7 @@ export function QuickClientModal({
               placeholderTextColor={colors.mutedText}
               value={email}
               onChangeText={onChangeEmail}
+              onEndEditing={onEmailEndEditing}
               keyboardType="email-address"
               autoCapitalize="none"
               style={inputStyle(colors)}

@@ -3,7 +3,10 @@ const assert = require("node:assert/strict");
 
 const {
   CONVERSATION_HEADER_ACTION_SIZE,
+  CONVERSATION_KEYBOARD_VERTICAL_OFFSET,
+  getAndroidKeyboardFallbackInset,
   getConversationHeaderActionOutcome,
+  getConversationKeyboardBehavior,
   getConversationThreadLayout,
 } = require("../lib/conversationThreadLayout.ts");
 
@@ -36,4 +39,16 @@ test("conversation header actions provide separate close and options intents", (
     closeThread: false,
     openOptions: true,
   });
+});
+
+test("conversation keyboard handling uses the native resize behavior without a guessed header offset", () => {
+  assert.equal(getConversationKeyboardBehavior("ios"), "padding");
+  assert.equal(getConversationKeyboardBehavior("android"), "padding");
+  assert.equal(CONVERSATION_KEYBOARD_VERTICAL_OFFSET, 0);
+});
+
+test("Android only adds a keyboard inset when a full-screen modal did not resize", () => {
+  assert.equal(getAndroidKeyboardFallbackInset(800, 500), 300);
+  assert.equal(getAndroidKeyboardFallbackInset(500, 500), 0);
+  assert.equal(getAndroidKeyboardFallbackInset(480, 500), 0);
 });

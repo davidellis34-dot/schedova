@@ -2,7 +2,6 @@ import { useRouter } from "expo-router";
 import { useEffect, useRef, useState } from "react";
 import {
   ActivityIndicator,
-  InteractionManager,
   Text,
   TextInput,
   View,
@@ -22,7 +21,9 @@ import {
 } from "../lib/accountSwitchUtils";
 import { recordAccountTransitionEvent } from "../lib/accountTransition";
 import { useAuthSession } from "../lib/authSession";
+import { settleActiveTextInput } from "../lib/settleTextInputs";
 import { supabase } from "../lib/supabase";
+import { useTrackedTextInputValue } from "../lib/textInputDraft";
 import { useAppTheme } from "../lib/useAppTheme";
 
 type BusinessProfile = {
@@ -65,29 +66,15 @@ function readBusinessProfile(value: unknown): BusinessProfile | null {
   };
 }
 
-async function settleBusinessSetupInputs() {
-  // Blur once and wait for the native input hierarchy to settle before this
-  // screen is unmounted. Calling blur and Keyboard.dismiss together can race
-  // Fabric's own input teardown on iOS.
-  const focusedInput = TextInput.State.currentlyFocusedInput?.();
-  focusedInput?.blur?.();
-
-  await new Promise<void>((resolve) => {
-    InteractionManager.runAfterInteractions(() => resolve());
-  });
-  await new Promise<void>((resolve) => requestAnimationFrame(() => resolve()));
-  await new Promise<void>((resolve) => requestAnimationFrame(() => resolve()));
-
-  return !TextInput.State.currentlyFocusedInput?.();
-}
-
 export default function BusinessSetup() {
   const router = useRouter();
   const { colors } = useAppTheme();
   const uiColors = createSchedovaUiTheme(colors).colors;
   const { authStatus, isAccountReady, isHydrated, userId } = useAuthSession();
-  const [businessName, setBusinessName] = useState("");
-  const [category, setCategory] = useState("");
+  const businessNameField = useTrackedTextInputValue("");
+  const categoryField = useTrackedTextInputValue("");
+  const hydrateBusinessName = businessNameField.setValue;
+  const hydrateCategory = categoryField.setValue;
   const [profileState, setProfileState] = useState<BusinessProfileState>(
     EMPTY_BUSINESS_PROFILE_STATE,
   );
@@ -126,8 +113,8 @@ export default function BusinessSetup() {
       setSaving(false);
     }
 
-    setBusinessName("");
-    setCategory("");
+    hydrateBusinessName("");
+    hydrateCategory("");
     setErrorMessage("");
     setProfileState({
       userId: targetUserId,
@@ -185,8 +172,8 @@ export default function BusinessSetup() {
         const profile = readBusinessProfile(
           Array.isArray(data) ? data[0] : null,
         );
-        setBusinessName(profile?.businessName ?? "");
-        setCategory(profile?.category ?? "");
+        hydrateBusinessName(profile?.businessName ?? "");
+        hydrateCategory(profile?.category ?? "");
         setProfileState({
           userId: targetUserId,
           loadedUserId: targetUserId,
@@ -225,7 +212,15 @@ export default function BusinessSetup() {
     return () => {
       cancelled = true;
     };
-  }, [authStatus, isAccountReady, isHydrated, reloadVersion, userId]);
+  }, [
+    authStatus,
+    hydrateBusinessName,
+    hydrateCategory,
+    isAccountReady,
+    isHydrated,
+    reloadVersion,
+    userId,
+  ]);
 
   const screenState = resolveBusinessSetupScreenState({
     isHydrated,
@@ -267,28 +262,32 @@ export default function BusinessSetup() {
     }
 
     const targetUserId = userId;
-    const targetBusinessName = businessName.trim();
-    const targetCategory = category.trim();
 
     if (!targetUserId || !isAccountReady) {
       setErrorMessage("Your account is still loading. Please wait a moment.");
       return Promise.resolve();
     }
 
-    if (!targetBusinessName) {
-      setErrorMessage("Enter your business name.");
-      businessNameInputRef.current?.focus();
-      return Promise.resolve();
-    }
-
     const requestId = saveRequestIdRef.current + 1;
     saveRequestIdRef.current = requestId;
-    setSaving(true);
-    setErrorMessage("");
 
     let savePromise: Promise<void> | null = null;
     savePromise = (async () => {
       try {
+        await settleActiveTextInput();
+
+        const targetBusinessName = businessNameField.getValue().trim();
+        const targetCategory = categoryField.getValue().trim();
+
+        if (!targetBusinessName) {
+          setErrorMessage("Enter your business name.");
+          businessNameInputRef.current?.focus();
+          return;
+        }
+
+        setSaving(true);
+        setErrorMessage("");
+
         let businessId = profileState.profile?.id ?? null;
 
         if (!businessId) {
@@ -335,7 +334,7 @@ export default function BusinessSetup() {
           error: null,
         });
 
-        const inputsSettled = await settleBusinessSetupInputs();
+        const inputsSettled = await settleActiveTextInput();
 
         if (!isCurrentSave(targetUserId, requestId)) return;
         if (!inputsSettled) {
@@ -465,7 +464,7 @@ export default function BusinessSetup() {
             >
               {errorMessage || loadError}
             </Text>
-            {loadError ? (
+        {loadError ? (
               <AppButton
                 title="Try Again"
                 variant="ghost"
@@ -479,8 +478,9 @@ export default function BusinessSetup() {
         <AppTextInput
           ref={businessNameInputRef}
           label="Business name"
-          value={businessName}
-          onChangeText={setBusinessName}
+          value={businessNameField.value}
+          onChangeText={businessNameField.onChangeText}
+          onEndEditing={businessNameField.onEndEditing}
           placeholder="Elite Cuts"
           editable={!saving}
         />
@@ -489,8 +489,9 @@ export default function BusinessSetup() {
           ref={categoryInputRef}
           label="Business category"
           helperText="Examples: barber, tattoo artist, nail tech, stylist."
-          value={category}
-          onChangeText={setCategory}
+          value={categoryField.value}
+          onChangeText={categoryField.onChangeText}
+          onEndEditing={categoryField.onEndEditing}
           placeholder="Barber, Tattoo, Nail Tech..."
           editable={!saving}
           containerStyle={{ marginBottom: 22 }}

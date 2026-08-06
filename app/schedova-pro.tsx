@@ -19,7 +19,6 @@ import { isSchedovaInternalDebugMode } from "../lib/debugMode";
 import { useFeatureAccess } from "../lib/featureAccess";
 import { PRIVACY_POLICY_URL, TERMS_OF_USE_URL } from "../lib/legalLinks";
 import { loadProPaywallSnapshot } from "../lib/proPaywallData";
-import { ENABLE_PRO } from "../lib/proFeatureFlag";
 import {
   buildMonthlyPlanCopy,
   getLocalizedRecurringPrice,
@@ -44,6 +43,7 @@ import {
 } from "../lib/revenuecat/revenueCatService";
 import { supabase } from "../lib/supabase";
 import { useAppTheme } from "../lib/useAppTheme";
+import { trackAnalyticsEvent } from "../lib/analytics";
 
 const APPLE_SUBSCRIPTION_URL = "https://apps.apple.com/account/subscriptions";
 const APPLE_REFUND_URL = "https://reportaproblem.apple.com/";
@@ -917,7 +917,7 @@ function RevenueCatDebugPanel({ colors }: { colors: DebugColors }) {
         label="Last auth event"
         value={
           lastAuthEvent
-            ? `${lastAuthEvent.event} | session=${lastAuthEvent.sessionExists} | user=${lastAuthEvent.userId ?? "null"} | source=${lastAuthEvent.source} | ${lastAuthEvent.at}`
+            ? `${lastAuthEvent.event} | session=${lastAuthEvent.sessionExists} | userPresent=${lastAuthEvent.userIdPresent} | source=${lastAuthEvent.source} | ${lastAuthEvent.at}`
             : "No auth event recorded"
         }
         colors={colors}
@@ -1108,7 +1108,7 @@ function RevenueCatDebugPanel({ colors }: { colors: DebugColors }) {
 
 function SchedovaProEnabledScreen() {
   const { colors } = useAppTheme();
-  const { subscription, userId: featureAccessUserId } = useFeatureAccess();
+  const { subscription } = useFeatureAccess();
   const {
     authReady,
     customerInfo,
@@ -1161,48 +1161,16 @@ function SchedovaProEnabledScreen() {
   const subscriptionPrefetchedAtRef = useRef(0);
 
   useEffect(() => {
-    let cancelled = false;
+    if (!REVENUECAT_DIAGNOSTICS_ENABLED) return;
 
-    if (!authReady || !userId) {
-      return () => {
-        cancelled = true;
-      };
-    }
-
-    void supabase.auth
-      .getUser()
-      .then(({ data }) => {
-        if (cancelled) return;
-
-        console.log("[ProScreen] ENABLE_PRO", ENABLE_PRO);
-        console.log(
-          "[ProScreen] current user id",
-          data.user?.id ?? userId ?? featureAccessUserId ?? null,
-        );
-        console.log("[ProScreen] current user email", data.user?.email ?? null);
-        console.log("[ProScreen] subscription row", subscription);
-        console.log("[ProScreen] adminLifetimeAccess", hasLifetimeAccess);
-        console.log("[ProScreen] final isPro", isPro);
-        console.log("[ProScreen] pro UI visible", proUiVisible);
-      })
-      .catch((error) => {
-        if (__DEV__) {
-          console.log("[ProScreen] current user lookup failed", error);
-        }
-      });
-
-    return () => {
-      cancelled = true;
-    };
-  }, [
-    authReady,
-    featureAccessUserId,
-    hasLifetimeAccess,
-    isPro,
-    proUiVisible,
-    subscription,
-    userId,
-  ]);
+    console.log("[ProScreen] access state", {
+      authenticated: Boolean(authReady && userId),
+      hasLifetimeAccess,
+      isPro,
+      proUiVisible,
+      subscriptionPresent: Boolean(subscription),
+    });
+  }, [authReady, hasLifetimeAccess, isPro, proUiVisible, subscription, userId]);
 
   useEffect(() => {
     if (isPro) {
@@ -1408,6 +1376,7 @@ function SchedovaProEnabledScreen() {
 
   useFocusEffect(
     useCallback(() => {
+      trackAnalyticsEvent("pro_screen_viewed");
       void prefetchRevenueCatData();
     }, [prefetchRevenueCatData]),
   );
@@ -1464,6 +1433,7 @@ function SchedovaProEnabledScreen() {
 
     setDirectPurchaseBusyProductId(productIdentifier);
     setPurchaseStatusMessage("");
+    trackAnalyticsEvent("subscription_purchase_started");
 
     try {
       const result = await withProPurchaseTimeout(
@@ -1486,14 +1456,26 @@ function SchedovaProEnabledScreen() {
 
       if (purchaseOutcome === "success") {
         setPurchaseStatusMessage("");
+        const monthlyTrialStarted =
+          productIdentifier === monthlyPackage?.product.identifier &&
+          monthlyPlanCopy.trialEligibility === "eligible";
+        Alert.alert(
+          "Welcome to Schedova Pro",
+          monthlyTrialStarted
+            ? "Your 14-day free trial is active."
+            : "Your Schedova Pro access is active.",
+        );
+        trackAnalyticsEvent("subscription_purchase_completed");
         return true;
       }
 
       if (purchaseOutcome === "pending_refresh") {
         setPurchaseStatusMessage(PRO_PURCHASE_DELAYED_MESSAGE);
+        trackAnalyticsEvent("subscription_purchase_failed");
         return false;
       }
 
+      trackAnalyticsEvent("subscription_purchase_failed");
       return false;
     } catch (error) {
       console.log("[RevenueCat] Direct Pro purchase failed", {
@@ -1501,6 +1483,7 @@ function SchedovaProEnabledScreen() {
         error: getRevenueCatErrorDetails(error),
       });
       logRevenueCatError("Direct Pro purchase failed", error);
+      trackAnalyticsEvent("subscription_purchase_failed");
       Alert.alert(
         "Purchase failed",
         "Schedova Pro could not be purchased right now. Please try again.",
@@ -1828,6 +1811,44 @@ function SchedovaProEnabledScreen() {
           </View>
         ))}
       </View>
+
+      <Pressable
+        accessibilityRole="button"
+        accessibilityLabel="View one-time SMS message packs"
+        onPress={() => router.push("/settings/message-packs" as any)}
+        style={({ pressed }) => ({
+          backgroundColor: colors.card,
+          borderColor: colors.border,
+          borderWidth: 1,
+          borderRadius: 18,
+          padding: 18,
+          opacity: pressed ? 0.78 : 1,
+        })}
+      >
+        <View style={{ flexDirection: "row", alignItems: "center", gap: 12 }}>
+          <View
+            style={{
+              width: 42,
+              height: 42,
+              borderRadius: 21,
+              alignItems: "center",
+              justifyContent: "center",
+              backgroundColor: `${colors.primary}1A`,
+            }}
+          >
+            <Ionicons name="chatbubbles-outline" size={21} color={colors.primary} />
+          </View>
+          <View style={{ flex: 1 }}>
+            <Text style={{ color: colors.text, fontSize: 18, fontWeight: "900" }}>
+              SMS Message Packs
+            </Text>
+            <Text style={{ color: colors.mutedText, fontSize: 13, lineHeight: 19, marginTop: 4 }}>
+              Buy one-time packs of 100, 250, or 500 messages. These are not subscriptions.
+            </Text>
+          </View>
+          <Ionicons name="chevron-forward" size={20} color={colors.mutedText} />
+        </View>
+      </Pressable>
 
       {!isPro ? (
         <View

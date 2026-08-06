@@ -1,7 +1,6 @@
 import { useFocusEffect, useRouter } from "expo-router";
 import { useCallback, useState } from "react";
 import {
-  ActivityIndicator,
   Alert,
   Modal,
   Pressable,
@@ -14,7 +13,9 @@ import {
   AppCard,
   AppScreen,
   AppTextInput,
+  ContextTip,
   EmptyState,
+  LoadingCard,
   ScreenHeader,
 } from "../components/ui";
 import { normalizeClientTag } from "../lib/clientTags";
@@ -604,6 +605,13 @@ export default function ClientsScreen() {
         }
       />
 
+      <ContextTip
+        tipId="clients_first_client"
+        userId={userId}
+        visible={!loadingClients && clients.length > 0}
+        message="Open a client to view details, appointment history, or edit contact information."
+      />
+
       <AppButton
         title="Add Client"
         onPress={() => {
@@ -765,23 +773,13 @@ export default function ClientsScreen() {
       ) : null}
 
       {loadingClients ? (
-        <View
-          style={{
-            alignItems: "center",
-            paddingVertical: 28,
-          }}
-        >
-          <ActivityIndicator color={colors.primary} />
-          <Text style={{ color: colors.mutedText, marginTop: 10 }}>
-            Loading clients...
-          </Text>
-        </View>
+        <LoadingCard label="Loading clients..." style={{ marginBottom: 16 }} />
       ) : filteredClients.length === 0 ? (
         <EmptyState
           title={clients.length === 0 ? "No clients yet" : "No clients found"}
           message={
             clients.length === 0
-              ? "Add your first client to start booking appointments faster."
+              ? "Add your first client to start booking appointments."
               : "Try a different name, phone, or email."
           }
           actionLabel={clients.length === 0 ? "Add Client" : undefined}

@@ -14,8 +14,10 @@ import {
   AppCard,
   AppScreen,
   AppTextInput,
+  ContextTip,
   EmptyState,
   ScreenHeader,
+  SuccessToast,
 } from "../components/ui";
 import { confirmDestructiveAction } from "../lib/confirmDestructiveAction";
 import { canUseFeature, useFeatureAccess } from "../lib/featureAccess";
@@ -26,9 +28,12 @@ import {
   logSaveTiming,
   measureSaveStep,
 } from "../lib/savePerformance";
+import { settleActiveTextInput } from "../lib/settleTextInputs";
 import { supabase } from "../lib/supabase";
+import { useTrackedTextInputValue } from "../lib/textInputDraft";
 import { useAppTheme } from "../lib/useAppTheme";
 import { useAuthSession } from "../lib/authSession";
+import { trackAnalyticsEvent } from "../lib/analytics";
 
 type ServiceRecord = {
   id: string;
@@ -36,6 +41,8 @@ type ServiceRecord = {
   price?: number | string | null;
   duration_minutes?: number | string | null;
   color_hex?: string | null;
+  rebooking_interval_value?: number | string | null;
+  rebooking_interval_unit?: "days" | "weeks" | "months" | null;
 };
 
 const DEFAULT_SERVICE_COLOR = "#0F766E";
@@ -87,10 +94,14 @@ export default function AddServiceScreen() {
   const [successMessage, setSuccessMessage] = useState("");
   const [errorMessage, setErrorMessage] = useState("");
   const [saving, setSaving] = useState(false);
-  const [name, setName] = useState("");
-  const [price, setPrice] = useState("");
-  const [duration, setDuration] = useState("");
+  const nameField = useTrackedTextInputValue("");
+  const priceField = useTrackedTextInputValue("");
+  const durationField = useTrackedTextInputValue("");
   const [colorHex, setColorHex] = useState(DEFAULT_SERVICE_COLOR);
+  const rebookingIntervalValueField = useTrackedTextInputValue("");
+  const [rebookingIntervalUnit, setRebookingIntervalUnit] = useState<
+    "days" | "weeks" | "months"
+  >("weeks");
   const { colors, themeName } = useAppTheme();
   const isDarkTheme = themeName === "dark" || themeName === "black";
   const infoAccent = isDarkTheme ? "#60A5FA" : "#2563EB";
@@ -130,10 +141,13 @@ export default function AddServiceScreen() {
   async function handleSave() {
     if (saving) return;
 
+    const inputsSettled = await settleActiveTextInput();
+
     const flowName = `service save (${editingServiceId ? "edit" : "create"})`;
     const saveStartedAt = getSavePerformanceNow();
     const validationStartedAt = getSavePerformanceNow();
     let postSupabaseStartedAt: number | null = null;
+    const isFirstService = !editingServiceId && services.length === 0;
     setSaving(true);
     setErrorMessage("");
     setSuccessMessage("");
@@ -161,17 +175,23 @@ export default function AddServiceScreen() {
         return;
       }
 
-      const trimmedName = name.trim();
+      const trimmedName = nameField.getValue().trim();
+      const livePrice = priceField.getValue();
+      const liveDuration = durationField.getValue();
+      const liveRebookingIntervalValue = rebookingIntervalValueField.getValue();
 
-      if (!trimmedName || !price || !duration) {
+      if (!trimmedName || !livePrice || !liveDuration) {
         const message = "Please fill out all fields.";
         setErrorMessage(message);
         Alert.alert("Missing Info", message);
         return;
       }
 
-      const priceNumber = Number(price);
-      const durationNumber = Number(duration);
+      const priceNumber = Number(livePrice);
+      const durationNumber = Number(liveDuration);
+      const intervalValue = liveRebookingIntervalValue.trim()
+        ? Number(liveRebookingIntervalValue)
+        : null;
 
       if (!Number.isFinite(priceNumber) || priceNumber < 0) {
         const message = "Price must be zero or higher.";
@@ -184,6 +204,16 @@ export default function AddServiceScreen() {
         const message = "Duration must be greater than zero.";
         setErrorMessage(message);
         Alert.alert("Invalid Duration", message);
+        return;
+      }
+
+      if (
+        intervalValue !== null &&
+        (!Number.isInteger(intervalValue) || intervalValue <= 0)
+      ) {
+        const message = "Rebooking interval must be a whole number greater than zero.";
+        setErrorMessage(message);
+        Alert.alert("Invalid Rebooking Interval", message);
         return;
       }
 
@@ -223,10 +253,13 @@ export default function AddServiceScreen() {
                 price: priceNumber,
                 duration_minutes: durationNumber,
                 color_hex: normalizeServiceColor(colorHex),
+                rebooking_interval_value: intervalValue,
+                rebooking_interval_unit:
+                  intervalValue === null ? null : rebookingIntervalUnit,
               })
               .eq("id", editingServiceId)
               .eq("user_id", currentUserId)
-              .select("id, name, price, duration_minutes, color_hex")
+              .select("id, name, price, duration_minutes, color_hex, rebooking_interval_value, rebooking_interval_unit")
               .single(),
         );
 
@@ -243,8 +276,11 @@ export default function AddServiceScreen() {
               price: priceNumber,
               duration_minutes: durationNumber,
               color_hex: normalizeServiceColor(colorHex),
+              rebooking_interval_value: intervalValue,
+              rebooking_interval_unit:
+                intervalValue === null ? null : rebookingIntervalUnit,
             })
-            .select("id, name, price, duration_minutes, color_hex")
+            .select("id, name, price, duration_minutes, color_hex, rebooking_interval_value, rebooking_interval_unit")
             .single(),
         );
 
@@ -262,10 +298,12 @@ export default function AddServiceScreen() {
       setSuccessMessage("Service saved.");
 
       const localStateRefreshStartedAt = getSavePerformanceNow();
-      setName("");
-      setPrice("");
-      setDuration("");
+      nameField.setValue("");
+      priceField.setValue("");
+      durationField.setValue("");
       setColorHex(DEFAULT_SERVICE_COLOR);
+      rebookingIntervalValueField.setValue("");
+      setRebookingIntervalUnit("weeks");
       setEditingServiceId(null);
       setServices((current) => {
         const nextService =
@@ -277,6 +315,9 @@ export default function AddServiceScreen() {
                 price: priceNumber,
                 duration_minutes: durationNumber,
                 color_hex: normalizeServiceColor(colorHex),
+                rebooking_interval_value: intervalValue,
+                rebooking_interval_unit:
+                  intervalValue === null ? null : rebookingIntervalUnit,
               } satisfies ServiceRecord)
             : null);
 
@@ -292,6 +333,9 @@ export default function AddServiceScreen() {
           normalizeServiceName(left).localeCompare(normalizeServiceName(right)),
         );
       });
+      if (isFirstService) {
+        trackAnalyticsEvent("first_service_created");
+      }
       logSaveTiming(
         flowName,
         "local state refresh",
@@ -422,10 +466,16 @@ export default function AddServiceScreen() {
     }
 
     setEditingServiceId(service.id);
-    setName(String(service.name || ""));
-    setPrice(String(service.price ?? ""));
-    setDuration(String(service.duration_minutes ?? ""));
+    nameField.setValue(String(service.name || ""));
+    priceField.setValue(String(service.price ?? ""));
+    durationField.setValue(String(service.duration_minutes ?? ""));
     setColorHex(normalizeServiceColor(service.color_hex));
+    rebookingIntervalValueField.setValue(
+      service.rebooking_interval_value == null
+        ? ""
+        : String(service.rebooking_interval_value),
+    );
+    setRebookingIntervalUnit(service.rebooking_interval_unit || "weeks");
     setShowForm(true);
     setErrorMessage("");
     setSuccessMessage("");
@@ -450,25 +500,19 @@ export default function AddServiceScreen() {
         subtitle="Manage the services, prices, and timing you offer."
       />
 
+      <ContextTip
+        tipId="services_pricing_duration"
+        userId={userId}
+        visible={services.length > 0}
+        message="Set the price and duration that Schedova uses when booking appointments."
+      />
+
       {successMessage ? (
-        <AppCard
-          style={{
-            borderColor: infoAccentBorder,
-            borderLeftColor: colors.primary,
-            borderLeftWidth: 4,
-            marginBottom: 16,
-          }}
-        >
-          <Text
-            style={{
-              color: colors.text,
-              fontWeight: "900",
-              textAlign: "center",
-            }}
-          >
-            {successMessage}
-          </Text>
-        </AppCard>
+        <SuccessToast
+          message={successMessage}
+          onDismiss={() => setSuccessMessage("")}
+          style={{ marginBottom: 16 }}
+        />
       ) : null}
 
       {!canUseFeature("moreServices") ? (
@@ -578,26 +622,82 @@ export default function AddServiceScreen() {
           <AppTextInput
             ref={nameInputRef}
             label="Service name"
-            value={name}
-            onChangeText={setName}
+            value={nameField.value}
+            onChangeText={nameField.onChangeText}
+            onEndEditing={nameField.onEndEditing}
             placeholder="Haircut"
           />
 
           <AppTextInput
             label="Price"
-            value={price}
-            onChangeText={setPrice}
+            value={priceField.value}
+            onChangeText={priceField.onChangeText}
+            onEndEditing={priceField.onEndEditing}
             keyboardType="numeric"
             placeholder="45"
           />
 
           <AppTextInput
             label="Duration minutes"
-            value={duration}
-            onChangeText={setDuration}
+            value={durationField.value}
+            onChangeText={durationField.onChangeText}
+            onEndEditing={durationField.onEndEditing}
             keyboardType="numeric"
             placeholder="30"
           />
+
+          <View
+            style={{
+              borderColor: colors.border,
+              borderWidth: 1,
+              borderRadius: 14,
+              padding: 14,
+              marginBottom: 18,
+            }}
+          >
+            <Text style={{ color: colors.text, fontWeight: "900" }}>
+              Rebooking reminder (optional)
+            </Text>
+            <Text style={{ color: colors.mutedText, fontSize: 13, lineHeight: 18, marginTop: 4 }}>
+              Schedova can identify clients who may be ready to book this service again. It never sends a text without your review.
+            </Text>
+            <AppTextInput
+              label="Interval"
+              value={rebookingIntervalValueField.value}
+              onChangeText={rebookingIntervalValueField.onChangeText}
+              onEndEditing={rebookingIntervalValueField.onEndEditing}
+              keyboardType="number-pad"
+              placeholder="6"
+              containerStyle={{ marginTop: 12, marginBottom: 10 }}
+            />
+            <View style={{ flexDirection: "row", flexWrap: "wrap", gap: 8 }}>
+              {(["days", "weeks", "months"] as const).map((unit) => {
+                const selected = rebookingIntervalUnit === unit;
+                return (
+                  <Pressable
+                    key={unit}
+                    accessibilityRole="button"
+                    accessibilityState={{ selected }}
+                    accessibilityLabel={`Rebook every ${unit}`}
+                    onPress={() => setRebookingIntervalUnit(unit)}
+                    style={({ pressed }) => ({
+                      minHeight: 44,
+                      borderRadius: 12,
+                      borderWidth: 1,
+                      borderColor: selected ? colors.primary : colors.border,
+                      backgroundColor: selected ? greenAccentSoft : colors.background,
+                      alignItems: "center",
+                      justifyContent: "center",
+                      paddingHorizontal: 14,
+                      opacity: pressed ? 0.72 : 1,
+                    })}
+                  >
+                    <Text style={{ color: selected ? colors.primary : colors.text, fontWeight: "800" }}>{unit}</Text>
+                  </Pressable>
+                );
+              })}
+            </View>
+          </View>
 
           <Text
             style={{
@@ -673,7 +773,7 @@ export default function AddServiceScreen() {
       {services.length === 0 ? (
         <EmptyState
           title="No services yet"
-          message="Add your first service so appointments can include pricing and timing."
+          message="Create your first service."
           actionLabel="Add Service"
           onAction={() => {
             setShowForm(true);

@@ -1,6 +1,7 @@
 import { useFocusEffect } from "expo-router";
 import { useCallback, useState } from "react";
 import { Alert, Pressable, Switch, Text, View } from "react-native";
+import { ContextTip } from "../../components/ui";
 import { AppScreen } from "../../components/layout/AppScreen";
 import { useAuthSession } from "../../lib/authSession";
 import { canUseFeature, useFeatureAccess } from "../../lib/featureAccess";
@@ -384,6 +385,13 @@ export default function SmsSettingsScreen() {
         Schedova can help send appointment texts when SMS is enabled and the
         client has opted in.
       </Text>
+
+      <ContextTip
+        tipId="sms_settings_setup"
+        userId={userId}
+        visible={!loading}
+        message="Complete this setup before sending appointment texts. Clients also need a phone number and consent."
+      />
 
       {!isPaid && ENABLE_PRO ? (
         <View

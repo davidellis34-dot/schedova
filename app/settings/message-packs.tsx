@@ -427,11 +427,12 @@ export default function MessagePacksScreen() {
 
       if (purchaseResult.syncResult) {
         setBalance(purchaseResult.syncResult.balance);
-        setStatusMessage(
+        const message =
           purchaseResult.syncResult.addedCredits > 0
             ? `${formatMessageCreditCount(purchaseResult.syncResult.addedCredits)} added to your account.`
-            : "Purchase is already synced to your account.",
-        );
+            : "Purchase is already synced to your account.";
+        setStatusMessage(message);
+        Alert.alert("Message pack added", message);
       } else {
         const refreshed = await refreshBalance(true);
         setStatusMessage(

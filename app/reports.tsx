@@ -852,10 +852,10 @@ export default function ReportsScreen() {
             <Ionicons name="calendar-outline" color={colors.primary} size={23} />
           </View>
           <Text style={{ color: colors.text, fontSize: 22, fontWeight: "900" }}>
-            No report data yet
+            No data yet
           </Text>
           <Text style={{ color: colors.mutedText, marginTop: 8, lineHeight: 21 }}>
-            Book appointments to start seeing business insights here.
+            Complete appointments to generate reports.
           </Text>
           <View style={{ marginTop: 14 }}>
             <PrimaryButton

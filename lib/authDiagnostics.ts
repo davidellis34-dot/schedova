@@ -4,8 +4,8 @@ export type AuthDiagnosticEvent = {
   event: string;
   source: string;
   sessionExists: boolean;
-  userId: string | null;
-  email: string | null;
+  userIdPresent: boolean;
+  emailPresent: boolean;
   at: string;
 };
 
@@ -20,8 +20,8 @@ export function recordAuthDiagnosticEvent(
     event,
     source,
     sessionExists: Boolean(session),
-    userId: session?.user?.id ?? null,
-    email: session?.user?.email ?? null,
+    userIdPresent: Boolean(session?.user?.id),
+    emailPresent: Boolean(session?.user?.email),
     at: new Date().toISOString(),
   };
 

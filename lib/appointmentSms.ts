@@ -27,6 +27,8 @@ const SMS_SEND_FRIENDLY_ERROR =
 
 export function getFriendlySmsMessage(code?: string | null) {
   switch (code) {
+    case "sms_provider_not_configured":
+      return "SMS messaging is not enabled yet.";
     case "missing_phone":
       return "This client does not have a phone number.";
     case "invalid_phone":
@@ -107,7 +109,7 @@ async function getSmsPreflightSkip(
 
   const { data: appointment, error: appointmentError } = await supabase
     .from("appointments")
-    .select("id, client_id")
+    .select("id, client_id, sms_notifications_enabled")
     .eq("id", appointmentId)
     .eq("user_id", user.id)
     .maybeSingle();
@@ -137,6 +139,10 @@ async function getSmsPreflightSkip(
 
   if (!appointment?.client_id) {
     return { ok: true, skipped: true, code: "missing_client" };
+  }
+
+  if (appointment.sms_notifications_enabled === false) {
+    return { ok: true, skipped: true, code: "sms_disabled" };
   }
 
   const { data: client, error: clientError } = await supabase

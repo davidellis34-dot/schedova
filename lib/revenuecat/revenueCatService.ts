@@ -138,7 +138,7 @@ function shouldSkipRevenueCatAuthNativeOperation(
 
   console.log("[AuthNative] skipped RevenueCat during transition", {
     operation,
-    userId: appUserID ?? null,
+    hasAuthenticatedAccount: Boolean(appUserID),
   });
   return true;
 }
@@ -542,8 +542,8 @@ async function configureRevenueCatInternal(appUserID?: string | null) {
   if (__DEV__) {
     console.log("[RevenueCat] configure called", {
       configured,
-      appUserID: nextAppUserId,
-      configuredAppUserId,
+      hasRequestedAccount: Boolean(nextAppUserId),
+      hasConfiguredAccount: Boolean(configuredAppUserId),
     });
   }
 
@@ -560,10 +560,7 @@ async function configureRevenueCatInternal(appUserID?: string | null) {
           source: "configure",
         });
         if (__DEV__) {
-          console.log(
-            "[RevenueCat] logIn called with appUserID",
-            nextAppUserId,
-          );
+          console.log("[RevenueCat] logIn called for authenticated account");
         }
         await Purchases.logIn(nextAppUserId);
         recordAccountTransitionEvent("revenuecat-identity-after-login", {
@@ -611,7 +608,6 @@ async function configureRevenueCatInternal(appUserID?: string | null) {
     appOwnership: Constants.appOwnership,
     appUserIDPresent: Boolean(nextAppUserId),
     apiKeyPresent: true,
-    sdkKeyPrefix: apiKey.slice(0, 5),
   });
 }
 
@@ -666,7 +662,7 @@ export async function logInRevenueCatUser(appUserID: string) {
       }
 
       if (__DEV__) {
-        console.log("[RevenueCat] logIn called with appUserID", appUserID);
+        console.log("[RevenueCat] logIn called for authenticated account");
       }
 
       await configureRevenueCatInternal(appUserID);
@@ -681,9 +677,9 @@ export async function logInRevenueCatUser(appUserID: string) {
 
       if (__DEV__) {
         console.log("[RevenueCat] current identity before logIn", {
-          appUserID: currentAppUserID,
           isAnonymous: currentIsAnonymous,
-          expectedAppUserID: appUserID,
+          hasCurrentAppUserID: Boolean(currentAppUserID),
+          hasExpectedAppUserID: Boolean(appUserID),
         });
       }
 
@@ -706,15 +702,14 @@ export async function logInRevenueCatUser(appUserID: string) {
 
         if (__DEV__) {
           console.log(
-            "[RevenueCat] RevenueCat logIn result appUserID",
-            resultAppUserID,
+            "[RevenueCat] RevenueCat logIn result received",
+            { hasAppUserID: Boolean(resultAppUserID) },
           );
           console.log(
             "[RevenueCat] RevenueCat anonymous after login",
             isAnonymous,
           );
           console.log("[RevenueCat] customerInfo fetched", {
-            appUserID,
             isAnonymous,
             activeEntitlements: Object.keys(
               getActiveRevenueCatEntitlements(customerInfo),
@@ -739,15 +734,14 @@ export async function logInRevenueCatUser(appUserID: string) {
 
       if (__DEV__) {
         console.log(
-          "[RevenueCat] RevenueCat logIn result appUserID",
-          resultAppUserID,
+          "[RevenueCat] RevenueCat logIn result received",
+          { hasAppUserID: Boolean(resultAppUserID) },
         );
         console.log(
           "[RevenueCat] RevenueCat anonymous after login",
           isAnonymous,
         );
         console.log("[RevenueCat] customerInfo fetched", {
-          appUserID,
           isAnonymous,
           activeEntitlements: Object.keys(
             getActiveRevenueCatEntitlements(result.customerInfo),
@@ -870,7 +864,7 @@ export function getCustomerInfo(
   if (activeRequest) {
     if (__DEV__) {
       console.log("[RevenueCat] reusing in-flight customer info refresh", {
-        appUserID: appUserID ?? null,
+        hasRequestedAccount: Boolean(appUserID),
       });
     }
     return activeRequest;
@@ -903,8 +897,8 @@ export function getCustomerInfo(
 
         if (__DEV__) {
           console.log("[RevenueCat] customerInfo fetched", {
-            appUserID: appUserID ?? null,
-            currentAppUserID,
+            hasRequestedAccount: Boolean(appUserID),
+            hasCurrentAccount: Boolean(currentAppUserID),
             isAnonymous,
             activeEntitlements: Object.keys(
               getActiveRevenueCatEntitlements(customerInfo),
@@ -916,7 +910,7 @@ export function getCustomerInfo(
       });
     } catch (error) {
       console.log("[RevenueCat] customerInfo failure", {
-        appUserID: appUserID ?? null,
+        hasRequestedAccount: Boolean(appUserID),
         error: getRevenueCatErrorDetails(error),
       });
       logRevenueCatError("Customer info refresh failed", error);
@@ -1463,7 +1457,7 @@ export async function restorePurchases(appUserID?: string | null) {
     return await withRevenueCatIdentityLock(async () => {
       if (__DEV__) {
         console.log("[RevenueCat] restore started", {
-          appUserID: appUserID ?? null,
+          hasRequestedAccount: Boolean(appUserID),
         });
       }
 
@@ -1480,7 +1474,7 @@ export async function restorePurchases(appUserID?: string | null) {
 
           if (appUserID && currentAppUserID !== appUserID) {
             if (__DEV__) {
-              console.log("[RevenueCat] restore logIn appUserID", appUserID);
+              console.log("[RevenueCat] restore logging in the authenticated account");
             }
 
             await Purchases.logIn(appUserID);
@@ -1503,7 +1497,7 @@ export async function restorePurchases(appUserID?: string | null) {
 
       if (__DEV__) {
         console.log("[RevenueCat] restore completed", {
-          appUserID: restoreResult.restoredAppUserID,
+          hasRestoredAccount: Boolean(restoreResult.restoredAppUserID),
           isAnonymous: restoreResult.isAnonymous,
           activeEntitlements: getActiveRevenueCatEntitlementIds(
             restoreResult.customerInfo,
@@ -1519,7 +1513,7 @@ export async function restorePurchases(appUserID?: string | null) {
     });
   } catch (error) {
     console.log("[RevenueCat] restore failure", {
-      appUserID: appUserID ?? null,
+      hasRequestedAccount: Boolean(appUserID),
       error: getRevenueCatErrorDetails(error),
     });
     logRevenueCatError("Restore purchases failed", error);
@@ -1542,7 +1536,7 @@ export async function syncRevenueCatPurchases(
       const Purchases = (await getPurchasesModule()).default;
 
       console.log("[RevenueCat] syncPurchases start", {
-        appUserID: appUserID ?? null,
+        hasRequestedAccount: Boolean(appUserID),
       });
 
       const customerInfo = await withRevenueCatOperationTimeout(
@@ -1554,18 +1548,18 @@ export async function syncRevenueCatPurchases(
       );
 
       console.log("[RevenueCat] syncPurchases complete", {
-        appUserID: appUserID ?? null,
+        hasRequestedAccount: Boolean(appUserID),
         nonSubscriptionTransactionCount:
           getRevenueCatNonSubscriptionTransactions(customerInfo).length,
-        allPurchasedProductIdentifiers:
-          customerInfo.allPurchasedProductIdentifiers,
+        purchasedProductCount:
+          customerInfo.allPurchasedProductIdentifiers.length,
       });
 
       return customerInfo;
     });
   } catch (error) {
     console.log("[RevenueCat] syncPurchases failure", {
-      appUserID: appUserID ?? null,
+      hasRequestedAccount: Boolean(appUserID),
       error: getRevenueCatErrorDetails(error),
     });
     logRevenueCatError("syncPurchases failed", error);

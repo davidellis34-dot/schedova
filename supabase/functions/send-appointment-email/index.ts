@@ -3,9 +3,11 @@ import { createClient } from "https://esm.sh/@supabase/supabase-js@2";
 import {
   asNullableUuid,
   asTrimmedString,
+  buildReplyAddress,
   buildSchedovaFromHeader,
   buildEmailContent,
   corsHeaders,
+  createReplyToken,
   EMAIL_PROVIDER,
   getBusinessName,
   getErrorMessage,
@@ -103,7 +105,7 @@ Deno.serve(async (req) => {
   const { data: appointmentData, error: appointmentError } = await serviceClient
     .from("appointments")
     .select(
-      "id, user_id, client_id, client_name, appointment_date, appointment_time, service_ids",
+      "id, user_id, client_id, client_name, appointment_date, appointment_time, service_ids, email_notifications_enabled",
     )
     .eq("id", appointmentId)
     .eq("user_id", user.id)
@@ -116,6 +118,10 @@ Deno.serve(async (req) => {
   const appointment = (appointmentData || null) as JsonObject | null;
   if (!appointment) {
     return jsonError("Appointment not found.", 404, { code: "missing_appointment" });
+  }
+
+  if (appointment.email_notifications_enabled === false) {
+    return jsonResponse({ ok: true, skipped: true, code: "email_disabled" });
   }
 
   const clientId = asTrimmedString(appointment.client_id);
@@ -219,11 +225,19 @@ Deno.serve(async (req) => {
   }
 
   const conversationId = asTrimmedString(conversationResult.data);
-  const ownerReplyTo = asTrimmedString(user.email) || "support@schedova.com";
   const sentResults: JsonObject[] = [];
   const failedResults: JsonObject[] = [];
 
   for (const recipient of emailRecipients) {
+    const replyToken = await createReplyToken({
+      serviceClient,
+      accountId: user.id,
+      clientId,
+      appointmentId,
+      conversationId,
+      messageType,
+    });
+    const replyTo = buildReplyAddress(replyToken);
     const emailContent = buildEmailContent({
       messageType,
       clientName: recipient.name || "there",
@@ -251,8 +265,8 @@ Deno.serve(async (req) => {
       metadata: {
         messageType,
         contactId: recipient.contactId,
-        replyMode: "owner_email_inbox",
-        replyTo: ownerReplyTo,
+        replyMode: "schedova_messages_inbox",
+        replyTo,
       },
     });
 
@@ -263,7 +277,7 @@ Deno.serve(async (req) => {
       subject,
       html: emailContent.html,
       text: emailContent.plainText,
-      replyTo: ownerReplyTo,
+      replyTo,
     });
 
     await serviceClient

@@ -19,7 +19,9 @@ import {
   measureSaveStep,
   scheduleSaveCompletionTiming,
 } from "../../lib/savePerformance";
+import { settleActiveTextInput } from "../../lib/settleTextInputs";
 import { supabase } from "../../lib/supabase";
+import { useTrackedTextInputValue } from "../../lib/textInputDraft";
 import { useAppTheme } from "../../lib/useAppTheme";
 import { useAuthSession } from "../../lib/authSession";
 
@@ -87,12 +89,22 @@ export function EditClientForm({
     ? "rgba(248, 113, 113, 0.36)"
     : "rgba(220, 38, 38, 0.22)";
 
-  const [name, setName] = useState("");
-  const [phone, setPhone] = useState("");
-  const [email, setEmail] = useState("");
-  const [birthday, setBirthday] = useState("");
+  const nameField = useTrackedTextInputValue("");
+  const phoneField = useTrackedTextInputValue("");
+  const emailField = useTrackedTextInputValue("");
+  const birthdayField = useTrackedTextInputValue("");
   const [clientTag, setClientTag] = useState<ClientTag>("New");
-  const [notes, setNotes] = useState("");
+  const notesField = useTrackedTextInputValue("");
+  const name = nameField.value;
+  const phone = phoneField.value;
+  const email = emailField.value;
+  const birthday = birthdayField.value;
+  const notes = notesField.value;
+  const hydrateName = nameField.setValue;
+  const hydratePhone = phoneField.setValue;
+  const hydrateEmail = emailField.setValue;
+  const hydrateBirthday = birthdayField.setValue;
+  const hydrateNotes = notesField.setValue;
   const [smsOptIn, setSmsOptIn] = useState(false);
   const [emailOptIn, setEmailOptIn] = useState(false);
   const [recipients, setRecipients] = useState<CommunicationRecipient[]>([
@@ -176,12 +188,12 @@ export function EditClientForm({
       }
 
       setLoadErrorType(null);
-      setName(String(data.name || ""));
-      setPhone(String(data.phone || ""));
-      setEmail(String(data.email || ""));
-      setBirthday(String(data.birthday || ""));
+      hydrateName(String(data.name || ""));
+      hydratePhone(String(data.phone || ""));
+      hydrateEmail(String(data.email || ""));
+      hydrateBirthday(String(data.birthday || ""));
       setClientTag(normalizeClientTag(data.client_tag));
-      setNotes(String(data.notes || ""));
+      hydrateNotes(String(data.notes || ""));
       setSmsOptIn(Boolean(data.sms_opt_in));
       setEmailOptIn(Boolean(data.email_opt_in));
       const loadedRecipients = await fetchClientCommunicationRecipients({
@@ -211,7 +223,14 @@ export function EditClientForm({
     } finally {
       setLoadingClient(false);
     }
-  }, [normalizedClientId]);
+  }, [
+    hydrateBirthday,
+    hydrateEmail,
+    hydrateName,
+    hydrateNotes,
+    hydratePhone,
+    normalizedClientId,
+  ]);
 
   useEffect(() => {
     void fetchClient();
@@ -252,6 +271,8 @@ export function EditClientForm({
   async function saveClient() {
     if (saving || loadingClient) return;
 
+    await settleActiveTextInput();
+
     const flowName = "client save (edit)";
     const saveStartedAt = getSavePerformanceNow();
     let postSupabaseStartedAt: number | null = null;
@@ -260,13 +281,13 @@ export function EditClientForm({
     setErrorMessage("");
 
     try {
-      const trimmedName = name.trim();
-      const trimmedPhoneInput = phone.trim();
+      const trimmedName = nameField.getValue().trim();
+      const trimmedPhoneInput = phoneField.getValue().trim();
       const trimmedPhone =
         await normalizePhoneForSmsWithUserDefault(trimmedPhoneInput);
-      const trimmedEmail = email.trim();
-      const trimmedBirthday = birthday.trim();
-      const trimmedNotes = notes.trim();
+      const trimmedEmail = emailField.getValue().trim();
+      const trimmedBirthday = birthdayField.getValue().trim();
+      const trimmedNotes = notesField.getValue().trim();
       const displayName = trimmedName || trimmedPhone || trimmedEmail;
       const clientIdMessage = getClientIdValidationMessage(normalizedClientId);
       const now = new Date().toISOString();
@@ -510,22 +531,26 @@ export function EditClientForm({
         <AppTextInput
           label="Name"
           value={name}
-          onChangeText={setName}
+          onChangeText={nameField.onChangeText}
+          onEndEditing={nameField.onEndEditing}
           placeholder="Client name"
         />
 
         <AppTextInput
           label="Phone number"
           value={phone}
-          onChangeText={setPhone}
+          onChangeText={phoneField.onChangeText}
+          onEndEditing={phoneField.onEndEditing}
           onBlur={() => {
-            if (!phone.trim()) {
-              setPhone("");
+            const livePhone = phoneField.getValue().trim();
+
+            if (!livePhone) {
+              phoneField.setValue("");
               return;
             }
 
-            void normalizePhoneForSmsWithUserDefault(phone.trim())
-              .then(setPhone)
+            void normalizePhoneForSmsWithUserDefault(livePhone)
+              .then(phoneField.setValue)
               .catch((error) => {
                 console.log("Phone normalization failed", error);
               });
@@ -537,7 +562,8 @@ export function EditClientForm({
         <AppTextInput
           label="Email"
           value={email}
-          onChangeText={setEmail}
+          onChangeText={emailField.onChangeText}
+          onEndEditing={emailField.onEndEditing}
           keyboardType="email-address"
           autoCapitalize="none"
           autoCorrect={false}
@@ -547,7 +573,8 @@ export function EditClientForm({
         <AppTextInput
           label="Birthday"
           value={birthday}
-          onChangeText={(text) => setBirthday(formatBirthdayInput(text))}
+          onChangeText={(text) => birthdayField.setValue(formatBirthdayInput(text))}
+          onEndEditing={birthdayField.onEndEditing}
           placeholder="MM/DD"
           maxLength={5}
           keyboardType="number-pad"
@@ -562,7 +589,8 @@ export function EditClientForm({
         <AppTextInput
           label="Notes"
           value={notes}
-          onChangeText={setNotes}
+          onChangeText={notesField.onChangeText}
+          onEndEditing={notesField.onEndEditing}
           multiline
           placeholder="Client preferences..."
         />

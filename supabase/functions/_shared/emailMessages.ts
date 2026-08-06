@@ -422,6 +422,15 @@ export function generateReplyToken() {
     .join("");
 }
 
+export function buildReplyAddress(token: string) {
+  const cleanToken = asTrimmedString(token).toLowerCase();
+  if (!/^[a-z0-9]+$/.test(cleanToken)) {
+    throw new Error("A valid email reply token is required.");
+  }
+
+  return `reply+${cleanToken}@${SCHEDOVA_REPLY_DOMAIN}`;
+}
+
 export async function createReplyToken(input: {
   serviceClient: SupabaseServiceClient;
   accountId: string;

@@ -47,6 +47,15 @@ import {
 } from "../lib/communicationRecipients";
 import { normalizePhoneForSmsWithUserDefault } from "../lib/countrySettings";
 import {
+  isSmsConfigurationError,
+  isSmsCreditError,
+  isTemporarySmsError,
+  showAddClientPhonePrompt,
+  showSmsCreditsPrompt,
+  showSmsSetupPrompt,
+  showTemporarySmsFailurePrompt,
+} from "../lib/guidedWorkflows";
+import {
   canUseFeature,
   useFeatureAccess,
 } from "../lib/featureAccess";
@@ -786,6 +795,20 @@ export default function ClientDetailsScreen() {
       });
 
       if (!result.ok || result.skipped) {
+        if (isSmsConfigurationError(result.code)) {
+          showSmsSetupPrompt((route) => router.push(route as never));
+          return;
+        }
+        if (isSmsCreditError(result.code)) {
+          showSmsCreditsPrompt((route) => router.push(route as never));
+          return;
+        }
+        if (isTemporarySmsError(result.code)) {
+          showTemporarySmsFailurePrompt(() => {
+            void sendClientReminder();
+          });
+          return;
+        }
         Alert.alert(
           "Reminder not sent",
           result.message ||
@@ -995,6 +1018,10 @@ export default function ClientDetailsScreen() {
     }
 
     if (textIssue || emailIssue) {
+      if (sendsText && /phone number/i.test(textIssue)) {
+        showAddClientPhonePrompt(openEditClient);
+        return;
+      }
       Alert.alert("Update client contact info", [textIssue, emailIssue].filter(Boolean).join("\n"), [
         { text: "Cancel", style: "cancel" },
         { text: "Edit Client", onPress: openEditClient },
@@ -1024,6 +1051,20 @@ export default function ClientDetailsScreen() {
         if (smsResult.ok) {
           results.push("Text sent");
         } else {
+          if (isSmsConfigurationError(smsResult.code)) {
+            showSmsSetupPrompt((route) => router.push(route as never));
+            return;
+          }
+          if (isSmsCreditError(smsResult.code)) {
+            showSmsCreditsPrompt((route) => router.push(route as never));
+            return;
+          }
+          if (isTemporarySmsError(smsResult.code)) {
+            showTemporarySmsFailurePrompt(() => {
+              void sendClientManualMessage();
+            });
+            return;
+          }
           textFailed = true;
           results.push(`Text failed: ${smsResult.message || "Please try again."}`);
         }

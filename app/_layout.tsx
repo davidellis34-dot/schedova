@@ -26,6 +26,7 @@ import {
   getAuthRouteKey,
   resolveAuthenticatedAppRoute,
 } from "../lib/authRouting";
+import { requiresInitialSetupGate } from "../lib/initialSetupRouting";
 import {
   clearFeatureAccess,
   refreshFeatureAccess,
@@ -139,7 +140,6 @@ function PushNotificationsBootstrap() {
       console.log("[AuthNative] skipped push during transition", {
         source: "PushNotificationsBootstrap",
         authStatus,
-        userId: userId ?? null,
       });
       return;
     }
@@ -170,10 +170,13 @@ function PushNotificationsBootstrap() {
         router.push("/messages" as any);
       },
     });
-    const unregisterAccountCleanup = registerAccountScopedCleanup(() => {
-      active = false;
-      removeListeners();
-    });
+    const unregisterAccountCleanup = registerAccountScopedCleanup(
+      () => {
+        active = false;
+        removeListeners();
+      },
+      "notifications",
+    );
 
     if (!handledInitialNotification.current) {
       handledInitialNotification.current = true;
@@ -339,9 +342,10 @@ function AuthNavigationCoordinator() {
         | "/login"
         | "/dashboard"
         | "/onboarding"
+        | "/walkthrough"
         | {
             pathname: "/country-region";
-            params: { next: "/dashboard" | "/onboarding" };
+            params: { next: "/dashboard" | "/onboarding" | "/walkthrough" };
           },
       transitionMessage: string,
     ) {
@@ -356,6 +360,10 @@ function AuthNavigationCoordinator() {
       transitionRunIdRef.current = transitionRunId;
       pendingTargetRef.current = targetKey;
       setBridgeMessage(transitionMessage);
+      recordAccountTransitionEvent("navigation_reset_started", {
+        from: routeKey || "index",
+        to: targetKey,
+      });
 
       if (__DEV__) {
         console.log("[AuthNavigation] transition scheduled", {
@@ -390,6 +398,10 @@ function AuthNavigationCoordinator() {
         }
 
         router.replace(target as any);
+        recordAccountTransitionEvent("navigation_reset_finished", {
+          from: routeKey || "index",
+          to: targetKey,
+        });
         recordAccountTransitionEvent("navigation-performed", {
           from: routeKey || "index",
           to: targetKey,
@@ -419,12 +431,16 @@ function AuthNavigationCoordinator() {
       };
     }
 
-    if (authStatus === "authenticated" && userId && isAuthEntryRoute) {
+    if (authStatus === "authenticated" && userId) {
       async function redirectAuthenticatedUser() {
         try {
-          const targetRoute = await resolveAuthenticatedAppRoute();
+          const targetRoute = await resolveAuthenticatedAppRoute(userId);
 
           if (cancelled || userId !== latestAuthenticatedUserIdRef.current) {
+            return;
+          }
+
+          if (!isAuthEntryRoute && !requiresInitialSetupGate(targetRoute)) {
             return;
           }
 
@@ -470,16 +486,32 @@ function AuthNavigationCoordinator() {
 
 function SchedovaDeepLinkHandler() {
   const router = useRouter();
+  const { isAccountReady, userId } = useAuthSession();
 
   useEffect(() => {
     let mounted = true;
 
-    function handleUrl(url: string | null) {
+    if (!isAccountReady || !userId) {
+      return () => {
+        mounted = false;
+      };
+    }
+
+    async function handleUrl(url: string | null) {
       if (!url) return;
 
       const routeParams = getSchedovaBookingRouteParamsFromUrl(url);
 
       if (!routeParams) return;
+
+      const destination = await resolveAuthenticatedAppRoute(userId);
+      if (!mounted) return;
+
+      // Setup must finish before a booking link can open the booking form.
+      if (destination !== "/dashboard") {
+        router.replace(destination as never);
+        return;
+      }
 
       router.push({
         pathname: "/book-appointment",
@@ -489,18 +521,18 @@ function SchedovaDeepLinkHandler() {
 
     void Linking.getInitialURL().then((url) => {
       if (!mounted) return;
-      handleUrl(url);
+      void handleUrl(url);
     });
 
     const subscription = Linking.addEventListener("url", ({ url }) => {
-      handleUrl(url);
+      void handleUrl(url);
     });
 
     return () => {
       mounted = false;
       subscription.remove();
     };
-  }, [router]);
+  }, [isAccountReady, router, userId]);
 
   return null;
 }
@@ -530,6 +562,7 @@ export default function RootLayout() {
               <Stack.Screen name="demo-data" options={{ headerShown: false }} />
               <Stack.Screen name="index" options={{ headerShown: false }} />
               <Stack.Screen name="login" options={{ headerShown: false }} />
+              <Stack.Screen name="walkthrough" options={{ headerShown: false }} />
               <Stack.Screen name="preview" options={{ headerShown: false }} />
               <Stack.Screen
                 name="reset-password"
@@ -547,6 +580,10 @@ export default function RootLayout() {
               <Stack.Screen name="clients" options={{ headerShown: false }} />
               <Stack.Screen name="messages" options={{ headerShown: false }} />
               <Stack.Screen
+                name="smart-reminders"
+                options={{ headerShown: false }}
+              />
+              <Stack.Screen
                 name="message-templates"
                 options={{ headerShown: false }}
               />
@@ -556,6 +593,14 @@ export default function RootLayout() {
               />
               <Stack.Screen
                 name="settings/change-password"
+                options={{ headerShown: false }}
+              />
+              <Stack.Screen
+                name="settings/feedback"
+                options={{ headerShown: false }}
+              />
+              <Stack.Screen
+                name="settings/qa-tools"
                 options={{ headerShown: false }}
               />
               <Stack.Screen

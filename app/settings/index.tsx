@@ -1,8 +1,9 @@
 import { Ionicons } from "@expo/vector-icons";
+import Constants from "expo-constants";
 import { router, useFocusEffect } from "expo-router";
 import type { ReactNode } from "react";
 import { useCallback, useEffect, useRef, useState } from "react";
-import { ActivityIndicator, Alert, Text, View } from "react-native";
+import { ActivityIndicator, Alert, Platform, Text, View } from "react-native";
 import {
   AppScreen,
   ListRow,
@@ -10,7 +11,10 @@ import {
   createSchedovaUiTheme,
 } from "../../components/ui";
 import { getUserCountryRegion } from "../../lib/countrySettings";
-import { isSchedovaInternalDebugMode } from "../../lib/debugMode";
+import {
+  isSchedovaInternalDebugMode,
+  isSchedovaQaToolsEnabled,
+} from "../../lib/debugMode";
 import { isDemoScreenshotModeAvailable } from "../../lib/demoData";
 import { useAuthSession } from "../../lib/authSession";
 import { canUseFeature } from "../../lib/featureAccess";
@@ -71,6 +75,13 @@ export default function SettingsScreen() {
     ? "rgba(148, 163, 184, 0.28)"
     : "rgba(15, 23, 42, 0.12)";
   const passwordChangeVisible = canChangePassword(user);
+  const appVersion =
+    Constants.expoConfig?.version || Constants.nativeAppVersion || "Unavailable";
+  const buildNumber =
+    Constants.nativeBuildVersion ||
+    (Platform.OS === "android"
+      ? String(Constants.expoConfig?.android?.versionCode || "Unavailable")
+      : String(Constants.expoConfig?.ios?.buildNumber || "Unavailable"));
   const proCard = resolveSettingsProCardState({
     confirmedIsPro:
       proEntitlementStatus === "checking"
@@ -167,6 +178,7 @@ export default function SettingsScreen() {
 
   const demoScreenshotModeAvailable = isDemoScreenshotModeAvailable();
   const internalDebugMode = isSchedovaInternalDebugMode();
+  const qaToolsEnabled = isSchedovaQaToolsEnabled();
 
   function getToneColor(tone: SettingTone) {
     if (tone === "primary") return colors.primary;
@@ -474,13 +486,13 @@ export default function SettingsScreen() {
           style={rowStyle()}
         />
         <ListRow
-          title="Walkthrough"
-          subtitle="Review the Schedova basics."
+          title="How Schedova Works"
+          subtitle="Review the app basics and setup flow."
           leftIcon={<IconBadge name="map-outline" />}
           right={<Chevron />}
           onPress={() =>
             router.push({
-              pathname: "/onboarding",
+              pathname: "/walkthrough",
               params: { from: "settings" },
             } as any)
           }
@@ -622,6 +634,14 @@ export default function SettingsScreen() {
 
       <Section title="Support & Legal" subtitle="Help, policy, and terms.">
         <ListRow
+          title="Help Make Schedova Better"
+          subtitle="Send product feedback, a feature request, or report a problem."
+          leftIcon={<IconBadge name="chatbox-ellipses-outline" />}
+          right={<Chevron />}
+          onPress={() => router.push("/settings/feedback" as any)}
+          style={rowStyle("info", true)}
+        />
+        <ListRow
           title="Contact Support"
           subtitle={SUPPORT_EMAIL}
           leftIcon={<IconBadge name="mail-outline" />}
@@ -645,6 +665,15 @@ export default function SettingsScreen() {
           leftIcon={<IconBadge name="reader-outline" />}
           right={<Chevron />}
           onPress={openTermsOfUse}
+          style={rowStyle()}
+        />
+      </Section>
+
+      <Section title="About Schedova" subtitle="App information for support and updates.">
+        <ListRow
+          title="App version"
+          subtitle={`Version ${appVersion} · Build ${buildNumber}`}
+          leftIcon={<IconBadge name="information-circle-outline" />}
           style={rowStyle()}
         />
       </Section>
@@ -689,6 +718,17 @@ export default function SettingsScreen() {
             onPress={() => router.push("/schedova-pro" as any)}
             style={rowStyle()}
           />
+
+          {qaToolsEnabled ? (
+            <ListRow
+              title="QA Tools"
+              subtitle="Reset onboarding and test guided workflows."
+              leftIcon={<IconBadge name="construct-outline" tone="neutral" />}
+              right={<Chevron />}
+              onPress={() => router.push("/settings/qa-tools" as any)}
+              style={rowStyle()}
+            />
+          ) : null}
 
           {__DEV__ ? (
             <ListRow

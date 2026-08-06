@@ -2,11 +2,13 @@ import {
   Alert,
   KeyboardAvoidingView,
   Modal,
+  NativeSyntheticEvent,
   Platform,
   Pressable,
   ScrollView,
   Text,
   TextInput,
+  TextInputEndEditingEventData,
   View,
 } from "react-native";
 import { useSafeAreaInsets } from "react-native-safe-area-context";
@@ -21,8 +23,17 @@ type Props = {
   price: string;
   duration: string;
   onChangeName: (value: string) => void;
+  onNameEndEditing?: (
+    event: NativeSyntheticEvent<TextInputEndEditingEventData>,
+  ) => void;
   onChangePrice: (value: string) => void;
+  onPriceEndEditing?: (
+    event: NativeSyntheticEvent<TextInputEndEditingEventData>,
+  ) => void;
   onChangeDuration: (value: string) => void;
+  onDurationEndEditing?: (
+    event: NativeSyntheticEvent<TextInputEndEditingEventData>,
+  ) => void;
   onCancel: () => void;
   onSaved: (service: Service) => void;
 };
@@ -47,8 +58,11 @@ export function QuickServiceModal({
   price,
   duration,
   onChangeName,
+  onNameEndEditing,
   onChangePrice,
+  onPriceEndEditing,
   onChangeDuration,
+  onDurationEndEditing,
   onCancel,
   onSaved,
 }: Props) {
@@ -145,6 +159,7 @@ export function QuickServiceModal({
             <TextInput
               value={name}
               onChangeText={onChangeName}
+              onEndEditing={onNameEndEditing}
               placeholder="Service name"
               placeholderTextColor={colors.mutedText}
               style={inputStyle(colors)}
@@ -153,6 +168,7 @@ export function QuickServiceModal({
             <TextInput
               value={price}
               onChangeText={onChangePrice}
+              onEndEditing={onPriceEndEditing}
               placeholder="Price"
               placeholderTextColor={colors.mutedText}
               keyboardType="numeric"
@@ -162,6 +178,7 @@ export function QuickServiceModal({
             <TextInput
               value={duration}
               onChangeText={onChangeDuration}
+              onEndEditing={onDurationEndEditing}
               placeholder="Duration minutes"
               placeholderTextColor={colors.mutedText}
               keyboardType="numeric"

@@ -40,14 +40,18 @@ export function ProUpgradePromptHost() {
         if (cancelled) return;
 
         setPriceLine(snapshot.monthlyPlanCopy.priceLine);
-        setCtaLabel(snapshot.monthlyPlanCopy.ctaLabel);
+        setCtaLabel(
+          prompt.variant === "feature"
+            ? "View Schedova Pro"
+            : snapshot.monthlyPlanCopy.ctaLabel,
+        );
         setAutoRenewNotice(snapshot.monthlyPlanCopy.autoRenewNotice);
       })
       .catch(() => {
         if (cancelled) return;
 
         setPriceLine("");
-        setCtaLabel("View Pro Plans");
+        setCtaLabel(prompt.variant === "feature" ? "View Schedova Pro" : "View Pro Plans");
         setAutoRenewNotice(
           "The App Store or Google Play will confirm the current renewal terms before checkout.",
         );
@@ -60,7 +64,7 @@ export function ProUpgradePromptHost() {
 
   const title = prompt?.title || "Schedova Pro";
   const message = prompt?.message || "";
-  const dismissLabel = prompt?.variant === "free-limit" ? "Maybe Later" : "Close";
+  const dismissLabel = prompt?.variant === "free-limit" ? "Maybe Later" : "Not Now";
 
   return (
     <Modal

@@ -150,16 +150,19 @@ export function useSmsBalance({
   );
 
   useEffect(() => {
-    return registerAccountScopedCleanup(async () => {
-      // Invalidate a pending subscribe before removing the channel it belongs to.
-      subscriptionSerialRef.current += 1;
-      const channel = channelRef.current;
-      channelRef.current = null;
-      channelUserIdRef.current = null;
-      await enqueueChannelOperation(async () => {
-        await safeRemoveChannel(channel);
-      });
-    });
+    return registerAccountScopedCleanup(
+      async () => {
+        // Invalidate a pending subscribe before removing the channel it belongs to.
+        subscriptionSerialRef.current += 1;
+        const channel = channelRef.current;
+        channelRef.current = null;
+        channelUserIdRef.current = null;
+        await enqueueChannelOperation(async () => {
+          await safeRemoveChannel(channel);
+        });
+      },
+      "realtime",
+    );
   }, [enqueueChannelOperation, safeRemoveChannel]);
 
   useFocusEffect(
@@ -220,7 +223,7 @@ export function useSmsBalance({
       ) {
         if (__DEV__) {
           console.log("[SmsBalance] skip duplicate subscription", {
-            userId: targetUserId,
+            hasAuthenticatedAccount: true,
           });
         }
         return;
@@ -234,7 +237,7 @@ export function useSmsBalance({
 
       if (previousChannel) {
         if (__DEV__) {
-          console.log("[SmsBalance] cleanup userId", previousUserId);
+          console.log("[SmsBalance] cleanup authenticated account", Boolean(previousUserId));
         }
         await safeRemoveChannel(previousChannel);
       }
@@ -255,7 +258,7 @@ export function useSmsBalance({
         await Promise.all(
           duplicateChannels.map(async (channel) => {
             if (__DEV__) {
-              console.log("[SmsBalance] cleanup userId", targetUserId);
+              console.log("[SmsBalance] cleanup authenticated account", Boolean(targetUserId));
             }
             await safeRemoveChannel(channel);
           }),
@@ -272,7 +275,7 @@ export function useSmsBalance({
       ) {
         if (__DEV__) {
           console.log("[SmsBalance] skip duplicate subscription", {
-            userId: targetUserId,
+            hasAuthenticatedAccount: true,
           });
         }
         return;
@@ -297,7 +300,7 @@ export function useSmsBalance({
           if (isStaleChannel(channel)) {
             if (__DEV__) {
               console.log("[SmsBalance] stale event ignored", {
-                userId: targetUserId,
+                hasAuthenticatedAccount: true,
               });
             }
             return;
@@ -311,14 +314,13 @@ export function useSmsBalance({
       channelUserIdRef.current = targetUserId;
 
       if (__DEV__) {
-        console.log("[SmsBalance] subscribe userId", targetUserId);
+        console.log("[SmsBalance] subscribe authenticated account", Boolean(targetUserId));
       }
 
       channel.subscribe((status) => {
         if (isStaleChannel(channel)) {
           if (__DEV__) {
             console.log("[SmsBalance] stale event ignored", {
-              userId: targetUserId,
               status,
             });
           }
@@ -327,8 +329,7 @@ export function useSmsBalance({
 
         if (__DEV__ && status === "CHANNEL_ERROR") {
           console.log("[SmsBalance] realtime channel error", {
-            topic: getChannelTopic(channel),
-            userId: targetUserId,
+            hasAuthenticatedAccount: true,
           });
         }
       });
@@ -361,7 +362,7 @@ export function useSmsBalance({
       }
 
       if (__DEV__) {
-        console.log("[SmsBalance] cleanup userId", cleanupUserId);
+        console.log("[SmsBalance] cleanup authenticated account", Boolean(cleanupUserId));
       }
 
       void enqueueChannelOperation(async () => {

@@ -16,6 +16,7 @@ import {
 } from "react-native";
 import { useSafeAreaInsets } from "react-native-safe-area-context";
 import SwipeDownSheet from "../components/SwipeDownSheet";
+import { ContextTip } from "../components/ui";
 import { AppScreen } from "../components/layout/AppScreen";
 import {
   mergeAppointmentsById,
@@ -37,6 +38,11 @@ import { sendAppointmentSmsNonBlocking } from "../lib/appointmentSms";
 import { shouldRunAppointmentSmsMutation } from "../lib/appointmentSmsMutationGate";
 import { useAuthSession } from "../lib/authSession";
 import { getCalendarPreferences } from "../lib/calendarPreferences";
+import {
+  clearCalendarFinderCache,
+  getCalendarFinderCache,
+  setCalendarFinderCache,
+} from "../lib/calendarFinderCache";
 import { canUseFeature, useFeatureAccess } from "../lib/featureAccess";
 import { isSchedovaInternalDebugMode } from "../lib/debugMode";
 import { cancelAppointmentReminder } from "../lib/localNotifications";
@@ -75,13 +81,6 @@ const DEFAULT_BUSINESS_START_MINUTES = 8 * 60;
 const DEFAULT_BUSINESS_END_MINUTES = 18 * 60;
 const CALENDAR_LAYOUT_STORAGE_KEY = "schedova_calendar_layout";
 const FINDER_CACHE_TTL_MS = 60_000;
-
-type FinderCacheEntry = {
-  appointments: any[];
-  loadedAt: number;
-};
-
-const finderCacheByUserId = new Map<string, FinderCacheEntry>();
 
 type CalendarIntervalMinutes = 15 | 30 | 60;
 type CalendarLayout = "list" | "grid";
@@ -1599,7 +1598,7 @@ export default function CalendarView() {
   const loadFinderAppointments = useCallback(async () => {
     if (!userId) return;
 
-    const cached = finderCacheByUserId.get(userId);
+    const cached = getCalendarFinderCache(userId);
     if (cached && Date.now() - cached.loadedAt < FINDER_CACHE_TTL_MS) {
       finderDataLoadedRef.current = true;
       setFinderAppointments(cached.appointments);
@@ -1629,7 +1628,7 @@ export default function CalendarView() {
     const nextAppointments = sortAppointmentsChronologically(
       (data || []).filter(isValidAppointmentForDisplay),
     );
-    finderCacheByUserId.set(userId, {
+    setCalendarFinderCache(userId, {
       appointments: nextAppointments,
       loadedAt: Date.now(),
     });
@@ -1656,7 +1655,7 @@ export default function CalendarView() {
 
   useEffect(() => {
     return subscribeToAppointmentEvents((event) => {
-      if (userId) finderCacheByUserId.delete(userId);
+      clearCalendarFinderCache(userId);
 
       if (event.type === "upsert") {
         setAppointments((current) =>
@@ -3310,6 +3309,13 @@ export default function CalendarView() {
         >
           Your week at a glance
         </Text>
+
+        <ContextTip
+          tipId="calendar_empty_slot"
+          userId={userId}
+          visible={appointments.length === 0}
+          message="Tap a date or available time to start booking."
+        />
 
         <View
           style={{

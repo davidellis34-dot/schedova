@@ -3,3 +3,6 @@ verify_jwt = false
 
 [functions.send-due-appointment-reminders]
 verify_jwt = false
+
+[functions.inbound-email-reply]
+verify_jwt = false

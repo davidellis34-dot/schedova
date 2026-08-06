@@ -41,3 +41,12 @@ export function updateDashboardCachedAppointments(
     appointments,
   });
 }
+
+export function clearDashboardPrimaryCache(userId?: string | null) {
+  if (userId) {
+    dashboardPrimaryCache.delete(userId);
+    return;
+  }
+
+  dashboardPrimaryCache.clear();
+}

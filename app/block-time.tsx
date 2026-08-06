@@ -25,6 +25,7 @@ import {
   measureSaveStep,
   scheduleSaveCompletionTiming,
 } from "../lib/savePerformance";
+import { settleActiveTextInput } from "../lib/settleTextInputs";
 import { supabase } from "../lib/supabase";
 import { useAppTheme } from "../lib/useAppTheme";
 
@@ -280,6 +281,8 @@ export default function BlockTimeScreen() {
 
   async function saveBlock() {
     if (saving) return;
+
+    await settleActiveTextInput();
 
     const flowName = `blocked time save (${blockType})`;
     const saveStartedAt = getSavePerformanceNow();
