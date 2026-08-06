@@ -45,6 +45,7 @@ import {
   sendAppointmentSmsNonBlocking,
   sendManualClientSms,
 } from "../lib/appointmentSms";
+import { shouldRunAppointmentSmsMutation } from "../lib/appointmentSmsMutationGate";
 import { copyTextToClipboard } from "../lib/clipboard";
 import { confirmDestructiveAction } from "../lib/confirmDestructiveAction";
 import { canUseFeature, useFeatureAccess } from "../lib/featureAccess";
@@ -968,11 +969,19 @@ export default function BookAppointmentScreen() {
           return;
         }
 
-        await sendAppointmentSmsNonBlocking(appointmentId, "cancellation", {
-          sendPathName: "book-appointment.delete.cancellation",
-          userId,
-          appointmentIdFromMutation: appointmentId,
-        });
+        if (
+          shouldRunAppointmentSmsMutation({
+            mutation: "deletion",
+            smsAutomationAvailable: canUseFeature("smsAutomation"),
+            smsNotificationsEnabled: shouldSendText(appointmentDeliveryChoice),
+          })
+        ) {
+          await sendAppointmentSmsNonBlocking(appointmentId, "cancellation", {
+            sendPathName: "book-appointment.delete.cancellation",
+            userId,
+            appointmentIdFromMutation: appointmentId,
+          });
+        }
 
         const { error } = await supabase
           .from("appointments")

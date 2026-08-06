@@ -9,6 +9,7 @@ import {
 import {
   sendAppointmentSmsNonBlocking,
 } from "../../lib/appointmentSms";
+import { shouldRunAppointmentSmsMutation } from "../../lib/appointmentSmsMutationGate";
 import {
   sendAppointmentEmailNonBlocking,
   shouldSendEmail,
@@ -2195,8 +2196,11 @@ export function useBookAppointmentForm({
       });
 
       if (
-        shouldSendText(deliveryChoice) &&
-        canUseProFeature("smsAutomation")
+        shouldRunAppointmentSmsMutation({
+          mutation: "update",
+          smsAutomationAvailable: canUseProFeature("smsAutomation"),
+          smsNotificationsEnabled: shouldSendText(deliveryChoice),
+        })
       ) {
         queueMeasuredBackgroundSaveTask({
           timing,
@@ -2425,8 +2429,11 @@ export function useBookAppointmentForm({
 
     if (deliveryChoice !== "none" && newAppointment?.id) {
       if (
-        shouldSendText(deliveryChoice) &&
-        canUseProFeature("smsAutomation")
+        shouldRunAppointmentSmsMutation({
+          mutation: "create",
+          smsAutomationAvailable: canUseProFeature("smsAutomation"),
+          smsNotificationsEnabled: shouldSendText(deliveryChoice),
+        })
       ) {
         queueMeasuredBackgroundSaveTask({
           timing,

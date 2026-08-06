@@ -21,6 +21,7 @@ import {
 import { getAppointmentServices as getSavedAppointmentServices } from "../lib/appointmentServices";
 import { sortAppointmentsChronologically } from "../lib/appointmentSort";
 import { sendAppointmentSmsNonBlocking } from "../lib/appointmentSms";
+import { shouldRunAppointmentSmsMutation } from "../lib/appointmentSmsMutationGate";
 import { formatClockTime, getCalendarPreferences } from "../lib/calendarPreferences";
 import { confirmDestructiveAction } from "../lib/confirmDestructiveAction";
 import { isSchedovaInternalDebugMode } from "../lib/debugMode";
@@ -46,6 +47,7 @@ type Appointment = {
   is_double_booked?: boolean | null;
   appointment_notes?: string | null;
   tip_amount?: number | null;
+  sms_notifications_enabled?: boolean | null;
 };
 
 function logAppointmentListCardDebug(label: string, details: Record<string, unknown>) {
@@ -475,11 +477,19 @@ export default function AppointmentsList() {
 
     if (data) {
       if (status === "canceled") {
-        void sendAppointmentSmsNonBlocking(id, "cancellation", {
-          sendPathName: "appointments-list.status.cancellation",
-          userId,
-          appointmentIdFromMutation: id,
-        });
+        if (
+          shouldRunAppointmentSmsMutation({
+            mutation: "cancellation",
+            smsAutomationAvailable: canUseProFeature("smsAutomation"),
+            smsNotificationsEnabled: data.sms_notifications_enabled,
+          })
+        ) {
+          void sendAppointmentSmsNonBlocking(id, "cancellation", {
+            sendPathName: "appointments-list.status.cancellation",
+            userId,
+            appointmentIdFromMutation: id,
+          });
+        }
         await cancelAppointmentReminder(id);
       }
 
@@ -511,11 +521,24 @@ export default function AppointmentsList() {
         const userId = await getCurrentUserIdOrAlert();
         if (!userId) return;
 
-        void sendAppointmentSmsNonBlocking(id, "cancellation", {
-          sendPathName: "appointments-list.delete.cancellation",
-          userId,
-          appointmentIdFromMutation: id,
-        });
+        const appointmentToDelete = appointments.find(
+          (appointment) => appointment.id === id,
+        );
+
+        if (
+          shouldRunAppointmentSmsMutation({
+            mutation: "deletion",
+            smsAutomationAvailable: canUseProFeature("smsAutomation"),
+            smsNotificationsEnabled:
+              appointmentToDelete?.sms_notifications_enabled,
+          })
+        ) {
+          void sendAppointmentSmsNonBlocking(id, "cancellation", {
+            sendPathName: "appointments-list.delete.cancellation",
+            userId,
+            appointmentIdFromMutation: id,
+          });
+        }
 
         const { error } = await supabase
           .from("appointments")
@@ -599,12 +622,22 @@ export default function AppointmentsList() {
         const userId = await getCurrentUserIdOrAlert();
         if (!userId) return;
 
+        const appointmentsToNotify = appointments.filter(
+          (appointment) =>
+            selectedIds.includes(appointment.id) &&
+            shouldRunAppointmentSmsMutation({
+              mutation: "deletion",
+              smsAutomationAvailable: canUseProFeature("smsAutomation"),
+              smsNotificationsEnabled: appointment.sms_notifications_enabled,
+            }),
+        );
+
         await Promise.all(
-          selectedIds.map((appointmentId) =>
-            sendAppointmentSmsNonBlocking(appointmentId, "cancellation", {
+          appointmentsToNotify.map((appointment) =>
+            sendAppointmentSmsNonBlocking(appointment.id, "cancellation", {
               sendPathName: "appointments-list.bulk-delete.cancellation",
               userId,
-              appointmentIdFromMutation: appointmentId,
+              appointmentIdFromMutation: appointment.id,
             }),
           ),
         );

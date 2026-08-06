@@ -34,6 +34,7 @@ import {
   type AppointmentReplySummary,
 } from "../lib/appointmentConfirmationStatus";
 import { sendAppointmentSmsNonBlocking } from "../lib/appointmentSms";
+import { shouldRunAppointmentSmsMutation } from "../lib/appointmentSmsMutationGate";
 import { useAuthSession } from "../lib/authSession";
 import { getCalendarPreferences } from "../lib/calendarPreferences";
 import { canUseFeature, useFeatureAccess } from "../lib/featureAccess";
@@ -1922,7 +1923,13 @@ export default function CalendarView() {
       applyAppointmentUpdate(updatedAppointment);
 
       if (status === "canceled") {
-        if (canUseFeature("smsAutomation")) {
+        if (
+          shouldRunAppointmentSmsMutation({
+            mutation: "cancellation",
+            smsAutomationAvailable: canUseFeature("smsAutomation"),
+            smsNotificationsEnabled: updatedAppointment?.sms_notifications_enabled,
+          })
+        ) {
           void sendAppointmentSmsNonBlocking(appointment.id, "cancellation", {
             sendPathName: "calendar-view.status.cancellation",
             userId: user.id,
@@ -2197,7 +2204,13 @@ export default function CalendarView() {
           return;
         }
 
-        if (canUseFeature("smsAutomation")) {
+        if (
+          shouldRunAppointmentSmsMutation({
+            mutation: "deletion",
+            smsAutomationAvailable: canUseFeature("smsAutomation"),
+            smsNotificationsEnabled: appointment?.sms_notifications_enabled,
+          })
+        ) {
           void sendAppointmentSmsNonBlocking(appointment.id, "cancellation", {
             sendPathName: "calendar-view.delete.cancellation",
             userId: user.id,

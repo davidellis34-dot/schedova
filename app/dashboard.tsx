@@ -37,6 +37,7 @@ import {
 } from "../lib/appointmentConfirmationStatus";
 import { useAuthSession } from "../lib/authSession";
 import { sendAppointmentSmsNonBlocking } from "../lib/appointmentSms";
+import { shouldRunAppointmentSmsMutation } from "../lib/appointmentSmsMutationGate";
 import { formatClockTime, getCalendarPreferences } from "../lib/calendarPreferences";
 import { subscribeToClientMessageEvents } from "../lib/clientMessageEvents";
 import { confirmDestructiveAction } from "../lib/confirmDestructiveAction";
@@ -775,11 +776,24 @@ export default function Dashboard() {
           return;
         }
 
-        await sendAppointmentSmsNonBlocking(id, "cancellation", {
-          sendPathName: "dashboard.delete.cancellation",
-          userId,
-          appointmentIdFromMutation: id,
-        });
+        const appointmentToDelete = appointments.find(
+          (appointment) => appointment?.id === id,
+        );
+
+        if (
+          shouldRunAppointmentSmsMutation({
+            mutation: "deletion",
+            smsAutomationAvailable: canUseFeature("smsAutomation"),
+            smsNotificationsEnabled:
+              appointmentToDelete?.sms_notifications_enabled,
+          })
+        ) {
+          await sendAppointmentSmsNonBlocking(id, "cancellation", {
+            sendPathName: "dashboard.delete.cancellation",
+            userId,
+            appointmentIdFromMutation: id,
+          });
+        }
 
         const { error } = await supabase
           .from("appointments")
@@ -822,7 +836,14 @@ export default function Dashboard() {
       return;
     }
 
-    if (status === "canceled") {
+    if (
+      status === "canceled" &&
+      shouldRunAppointmentSmsMutation({
+        mutation: "cancellation",
+        smsAutomationAvailable: canUseFeature("smsAutomation"),
+        smsNotificationsEnabled: targetAppointment?.sms_notifications_enabled,
+      })
+    ) {
       void sendAppointmentSmsNonBlocking(
         targetAppointment.id,
         "cancellation",
