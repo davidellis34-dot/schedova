@@ -1,5 +1,6 @@
 import { createClient } from "https://esm.sh/@supabase/supabase-js@2";
 
+import { isAppointmentSmsEnabled } from "../../../lib/appointmentSmsGate.ts";
 import {
   DEFAULT_COUNTRY_REGION,
   isCountryRegionCode,
@@ -605,7 +606,7 @@ Deno.serve(async (req) => {
     );
   }
 
-  if (appointment.sms_notifications_enabled === false) {
+  if (!isAppointmentSmsEnabled(appointment.sms_notifications_enabled)) {
     return jsonResponse({
       ok: true,
       skipped: true,

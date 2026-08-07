@@ -1,4 +1,5 @@
 import { supabase } from "./supabase";
+import { isAppointmentSmsEnabled } from "./appointmentSmsGate";
 import { normalizePhoneForSmsWithUserDefault } from "./countrySettings";
 import { emitSmsBalanceUpdated } from "./smsBalanceEvents";
 
@@ -141,7 +142,7 @@ async function getSmsPreflightSkip(
     return { ok: true, skipped: true, code: "missing_client" };
   }
 
-  if (appointment.sms_notifications_enabled === false) {
+  if (!isAppointmentSmsEnabled(appointment.sms_notifications_enabled)) {
     return { ok: true, skipped: true, code: "sms_disabled" };
   }
 

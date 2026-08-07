@@ -1,5 +1,6 @@
 import { createClient } from "https://esm.sh/@supabase/supabase-js@2";
 
+import { isAppointmentSmsEnabled } from "../../../lib/appointmentSmsGate.ts";
 import {
   DEFAULT_COUNTRY_REGION,
   isCountryRegionCode,
@@ -47,6 +48,7 @@ type AppointmentRow = {
   appointment_date?: string | null;
   appointment_time?: string | null;
   status?: string | null;
+  sms_notifications_enabled?: boolean | null;
 };
 
 type ClientRow = {
@@ -665,9 +667,10 @@ Deno.serve(async (req: Request) => {
       await serviceClient
         .from("appointments")
         .select(
-          "id, user_id, client_id, client_name, appointment_date, appointment_time, status",
+          "id, user_id, client_id, client_name, appointment_date, appointment_time, status, sms_notifications_enabled",
         )
         .eq("user_id", userId)
+        .eq("sms_notifications_enabled", true)
         .is("sms_reminder_sent_at", null)
         .is("reminder_sent_at", null)
         .gte("appointment_date", queryStartDate)
@@ -698,6 +701,7 @@ Deno.serve(async (req: Request) => {
         appointmentUserId !== userId ||
         !clientId ||
         !appointmentDate ||
+        !isAppointmentSmsEnabled(appointment.sms_notifications_enabled) ||
         SKIPPED_APPOINTMENT_STATUSES.has(status)
       ) {
         skipped += 1;
