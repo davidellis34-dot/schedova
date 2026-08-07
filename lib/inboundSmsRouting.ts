@@ -1,7 +1,7 @@
 import {
   DEFAULT_COUNTRY_REGION,
   normalizePhoneForSms,
-} from "./phoneNumbers";
+} from "./phoneNumbers.ts";
 
 export type InboundSmsContextCandidate = {
   id?: string | null;
