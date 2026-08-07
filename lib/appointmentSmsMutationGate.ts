@@ -3,4 +3,4 @@ export {
   isAppointmentSmsEnabled,
   shouldRunAppointmentSmsMutation,
   type AppointmentSmsMutationType,
-} from "./appointmentSmsGate.ts";
+} from "./appointmentSmsGate";

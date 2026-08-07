@@ -141,7 +141,7 @@ export default function AddServiceScreen() {
   async function handleSave() {
     if (saving) return;
 
-    const inputsSettled = await settleActiveTextInput();
+    await settleActiveTextInput();
 
     const flowName = `service save (${editingServiceId ? "edit" : "create"})`;
     const saveStartedAt = getSavePerformanceNow();
