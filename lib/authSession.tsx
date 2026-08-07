@@ -26,6 +26,7 @@ import {
   logOutRevenueCatUser,
   setRevenueCatIdentityTarget,
 } from "./revenuecat/revenueCatService";
+import { unregisterCurrentDevicePushTokens } from "./pushNotifications";
 import { supabase } from "./supabase";
 
 type AuthStatus =
@@ -454,6 +455,20 @@ export function AuthSessionProvider({ children }: { children: ReactNode }) {
         recordAccountTransitionEvent("old-account-state-cleared", {
           userId: currentUserId ?? null,
         }, transition.runId);
+        if (currentUserId) {
+          try {
+            await unregisterCurrentDevicePushTokens(currentUserId, {
+              source: "sign-out",
+            });
+          } catch (pushCleanupError) {
+            recordAccountTransitionEvent("push_token_cleanup_failed", {
+              error:
+                pushCleanupError instanceof Error
+                  ? pushCleanupError.message
+                  : String(pushCleanupError),
+            }, transition.runId);
+          }
+        }
 
         setRevenueCatIdentityTarget(null);
         recordAccountTransitionEvent("supabase_signout_started", {}, transition.runId);

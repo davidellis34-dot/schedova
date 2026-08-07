@@ -1,0 +1,531 @@
+--------- beginning of system
+08-07 11:51:30.218 11188 11188 E VibratorInfo: Invalid frequency profile received from HAL. resonantFrequencyHz=138.4049, frequenciesHz=null, outputAccelerationsGs=null
+08-07 11:51:30.289 11188 11188 D InsetsController: hide(ime())
+08-07 11:51:30.289 11188 11188 I ImeTracker: com.davidellis34.schedova:f68838df: onCancelled at PHASE_CLIENT_ALREADY_HIDDEN
+08-07 11:51:32.284 11188 11188 D InsetsController: hide(ime())
+08-07 11:51:32.284 11188 11188 I ImeTracker: com.davidellis34.schedova:96398e0a: onCancelled at PHASE_CLIENT_ALREADY_HIDDEN
+08-07 11:51:32.496 11188 32323 W ResourcesManager: Found a null ResourcesImpl, skipped.
+08-07 11:51:32.496 11188 32323 W ResourcesManager: Found a null ResourcesImpl, skipped.
+08-07 11:51:32.503 11188 32323 V ResourcesManager: The following library key has been added: ResourcesKey{ mHash=1abb3c9f mResDir=null mSplitDirs=[] mOverlayDirs=[] mLibDirs=[/data/app/~~GwGXGqkEEmnnoILIBv8moA==/com.google.android.webview-cOih0BhBgWwE5Z0ixqqw2A==/base.apk,/system/framework/android.test.base.jar,/system_ext/framework/androidx.window.extensions.jar] mDisplayId=0 mOverrideConfig=v37 mCompatInfo={420dpi always-compat} mLoaders=[]}
+--------- beginning of main
+08-07 11:51:42.104 11188 11188 D WindowOnBackDispatcher: setTopOnBackInvokedCallback (unwrapped): null
+08-07 11:51:42.156 11188 11188 D InsetsController: hide(ime())
+08-07 11:51:42.156 11188 11188 I ImeTracker: com.davidellis34.schedova:68c85202: onCancelled at PHASE_CLIENT_ALREADY_HIDDEN
+08-07 11:51:50.404 11188 11188 D WindowOnBackDispatcher: setTopOnBackInvokedCallback (unwrapped): android.view.ViewRootImpl$$ExternalSyntheticLambda14@956e88a
+08-07 11:51:50.409 11188 11188 I Surface : Creating surface for consumer unnamed-11188-7 with slotExpansion=1 for 64 slots
+08-07 11:51:50.410 11188 11188 I Surface : Creating surface for consumer VRI[PopupWindow:eef227e]#7(BLAST Consumer)7 with slotExpansion=1 for 64 slots
+08-07 11:51:50.418 11188 11188 D WindowOnBackDispatcher: setTopOnBackInvokedCallback (unwrapped): null
+08-07 11:55:42.303 11188 32322 I ReactNativeJS: [ScreenTiming] {"screen":"login","phase":"navigation-start","durationMs":0,"requestCount":0,"renderCount":0,"rowsReturned":0}
+08-07 11:55:42.303 11188 32322 I ReactNativeJS: [ScreenTiming] {"screen":"login","phase":"first-visible-content","durationMs":0.5,"requestCount":0,"renderCount":1,"rowsReturned":0}
+08-07 11:55:42.390 11188 11188 I llis34.schedova: hiddenapi: Accessing hidden field Landroid/widget/ScrollView;->mScroller:Landroid/widget/OverScroller; (runtime_flags=0, domain=platform, api=unsupported) from Lcom/facebook/react/views/scroll/ReactScrollView; (domain=app, TargetSdkVersion=36) using reflection: allowed
+08-07 11:55:42.391 11188 11188 W [RNScreens]: backTitleVisible prop is not available on Android
+08-07 11:55:42.391 11188 11188 W [RNScreens]: backTitleFontFamily prop is not available on Android
+08-07 11:55:42.391 11188 11188 W [RNScreens]: disableBackButtonMenu prop is not available on Android
+08-07 11:55:42.391 11188 11188 W [RNScreens]: largeTitleFontFamily prop is not available on Android
+08-07 11:55:42.391 11188 11188 W [RNScreens]: largeTitleFontWeight prop is not available on Android
+08-07 11:55:42.391 11188 11188 W [RNScreens]: largeTitleHideShadow prop is not available on Android
+08-07 11:55:46.061 11188 32322 I ReactNativeJS: [ScreenTiming] {"screen":"login","phase":"interaction-response","durationMs":11.4,"requestCount":0,"renderCount":1,"rowsReturned":0,"interaction":"button"}
+08-07 11:55:46.077 11188 32322 I ReactNativeJS: '[AccountSwitch]', { at: '2026-08-07T15:55:46.076Z',
+08-07 11:55:46.077 11188 32322 I ReactNativeJS:   details: undefined,
+08-07 11:55:46.077 11188 32322 I ReactNativeJS:   event: 'sign_in_started',
+08-07 11:55:46.077 11188 32322 I ReactNativeJS:   runId: null }
+08-07 11:55:46.081 11188 32322 I ReactNativeJS: '[GoogleOAuth] redirectTo', 'schedova://login'
+08-07 11:55:46.082 11188 32322 I ReactNativeJS: '[GoogleOAuth] platform', 'android'
+08-07 11:55:46.082 11188 32322 I ReactNativeJS: '[GoogleOAuth] supabaseUrl', 'https://tzbnnmjogxidyltanufu.supabase.co'
+08-07 11:55:46.083 11188 32322 I ReactNativeJS: '[GoogleOAuth] executionEnvironment', 'bare'
+08-07 11:55:46.092 11188 32322 I ReactNativeJS: '[GoogleOAuth] providerUrlRedirectTo', 'schedova://login'
+08-07 11:55:46.142 11188 11188 W unknown:BridgelessReact: ReactHost{0}.onUserLeaveHint(activity)
+08-07 11:55:46.143 11188 11188 W unknown:BridgelessReact: ReactHost{0}.onHostPause(activity)
+08-07 11:55:46.144 11188 11188 W unknown:BridgelessReact: ReactContext.onHostPause()
+08-07 11:55:46.831 11188 11188 D VRI[MainActivity]: visibilityChanged oldVisibility=true newVisibility=false
+08-07 11:55:49.589 11188 11188 D ViewRootImpl: Skipping stats log for color mode
+08-07 11:55:49.590 11188 11188 W WindowOnBackDispatcher: OnBackInvokedCallback is not enabled for the application.
+08-07 11:55:49.590 11188 11188 W WindowOnBackDispatcher: Set 'android:enableOnBackInvokedCallback="true"' in the application manifest.
+08-07 11:55:49.593 11188 11188 W unknown:BridgelessReact: ReactHost{0}.onHostResume(activity)
+08-07 11:55:49.595 11188 11188 W unknown:BridgelessReact: ReactContext.onHostResume()
+08-07 11:55:49.602 11188 11188 I Surface : Creating surface for consumer unnamed-11188-8 with slotExpansion=1 for 64 slots
+08-07 11:55:49.603 11188 11188 I Surface : Creating surface for consumer VRI[MainActivity]#8(BLAST Consumer)8 with slotExpansion=1 for 64 slots
+08-07 11:55:49.642 11188 32322 I ReactNativeJS: '[GoogleOAuth] callback received', true
+08-07 11:55:49.643 11188 32322 I ReactNativeJS: '[GoogleOAuth] callback has code', false
+08-07 11:55:49.660 11188 11188 D InsetsController: hide(ime())
+08-07 11:55:49.660 11188 11188 I ImeTracker: com.davidellis34.schedova:d8aa7493: onCancelled at PHASE_CLIENT_ALREADY_HIDDEN
+08-07 11:55:49.683 11188 32322 I ReactNativeJS: '[GoogleOAuth] callback received', true
+08-07 11:55:49.683 11188 32322 I ReactNativeJS: '[GoogleOAuth] callback has code', false
+08-07 11:55:50.142 11188 32322 I ReactNativeJS: [ScreenTiming] {"screen":"login","phase":"supabase-request","durationMs":454.3,"requestCount":1,"renderCount":5,"rowsReturned":1,"request":"GET /auth/v1/user?","status":200}
+08-07 11:55:50.160 11188 32322 I ReactNativeJS: '[AuthSession] auth state changed', { event: 'SIGNED_IN', hasSession: true }
+08-07 11:55:50.160 11188 32322 I ReactNativeJS: '[Auth] event', { event: 'SIGNED_IN',
+08-07 11:55:50.160 11188 32322 I ReactNativeJS:   source: 'AuthSessionProvider.onAuthStateChange',
+08-07 11:55:50.160 11188 32322 I ReactNativeJS:   sessionExists: true,
+08-07 11:55:50.160 11188 32322 I ReactNativeJS:   userIdPresent: true,
+08-07 11:55:50.160 11188 32322 I ReactNativeJS:   emailPresent: true,
+08-07 11:55:50.160 11188 32322 I ReactNativeJS:   at: '2026-08-07T15:55:50.160Z' }
+08-07 11:55:50.160 11188 32322 I ReactNativeJS: '[AccountSwitch]', { at: '2026-08-07T15:55:50.160Z',
+08-07 11:55:50.160 11188 32322 I ReactNativeJS:   details: { event: 'SIGNED_IN', userIdPresent: true },
+08-07 11:55:50.160 11188 32322 I ReactNativeJS:   event: 'supabase-auth-state-callback-fired',
+08-07 11:55:50.160 11188 32322 I ReactNativeJS:   runId: null }
+08-07 11:55:50.161 11188 32322 I ReactNativeJS: '[AccountSwitch]', { at: '2026-08-07T15:55:50.160Z',
+08-07 11:55:50.161 11188 32322 I ReactNativeJS:   details: { source: 'auth-callback:SIGNED_IN', targetUserIdPresent: true },
+08-07 11:55:50.161 11188 32322 I ReactNativeJS:   event: 'new_supabase_session_ready',
+08-07 11:55:50.161 11188 32322 I ReactNativeJS:   runId: 1 }
+08-07 11:55:50.161 11188 32322 I ReactNativeJS: '[AccountSwitch]', { at: '2026-08-07T15:55:50.161Z',
+08-07 11:55:50.161 11188 32322 I ReactNativeJS:   details: { source: 'auth-callback:SIGNED_IN' },
+08-07 11:55:50.161 11188 32322 I ReactNativeJS:   event: 'supabase_session_received',
+08-07 11:55:50.161 11188 32322 I ReactNativeJS:   runId: 1 }
+08-07 11:55:50.161 11188 32322 I ReactNativeJS: '[AccountSwitch]', { at: '2026-08-07T15:55:50.161Z',
+08-07 11:55:50.161 11188 32322 I ReactNativeJS:   details: { userIdPresent: true },
+08-07 11:55:50.161 11188 32322 I ReactNativeJS:   event: 'revenuecat-identity-target-set',
+08-07 11:55:50.161 11188 32322 I ReactNativeJS:   runId: 1 }
+08-07 11:55:50.161 11188 32322 I ReactNativeJS: '[AccountSwitch]', { at: '2026-08-07T15:55:50.161Z',
+08-07 11:55:50.161 11188 32322 I ReactNativeJS:   details: { source: 'auth-callback:SIGNED_IN' },
+08-07 11:55:50.161 11188 32322 I ReactNativeJS:   event: 'user_bootstrap_started',
+08-07 11:55:50.161 11188 32322 I ReactNativeJS:   runId: 1 }
+08-07 11:55:50.186 11188 32322 I ReactNativeJS: '[GoogleOAuth] exchangeCodeForSession success', false
+08-07 11:55:50.186 11188 32322 I ReactNativeJS: '[GoogleOAuth] session exists after exchange', true
+08-07 11:55:50.186 11188 32322 I ReactNativeJS: '[GoogleOAuth] user email if available', 'davidellis34@gmail.com'
+08-07 11:55:50.903 11188 32322 I ReactNativeJS: [ScreenTiming] {"screen":"login","phase":"supabase-request","durationMs":718.2,"requestCount":2,"renderCount":7,"rowsReturned":1,"request":"GET /rest/v1/businesses?select=id&user_id=eq.997dcbb3-902c-4642-b0fe-f5fe15499609&limit=1","status":200}
+08-07 11:55:50.906 11188 32322 I ReactNativeJS: '[AccountSwitch]', { at: '2026-08-07T15:55:50.906Z',
+08-07 11:55:50.906 11188 32322 I ReactNativeJS:   details: 
+08-07 11:55:50.906 11188 32322 I ReactNativeJS:    { hasBusinessProfile: true,
+08-07 11:55:50.906 11188 32322 I ReactNativeJS:      profileError: null,
+08-07 11:55:50.906 11188 32322 I ReactNativeJS:      userIdPresent: true },
+08-07 11:55:50.906 11188 32322 I ReactNativeJS:   event: 'new-profile-loaded',
+08-07 11:55:50.906 11188 32322 I ReactNativeJS:   runId: 1 }
+08-07 11:55:50.907 11188 32322 I ReactNativeJS: '[AccountSwitch]', { at: '2026-08-07T15:55:50.906Z',
+08-07 11:55:50.907 11188 32322 I ReactNativeJS:   details: 
+08-07 11:55:50.907 11188 32322 I ReactNativeJS:    { hasBusinessProfile: true,
+08-07 11:55:50.907 11188 32322 I ReactNativeJS:      profileError: null,
+08-07 11:55:50.907 11188 32322 I ReactNativeJS:      userIdPresent: true },
+08-07 11:55:50.907 11188 32322 I ReactNativeJS:   event: 'new_user_data_loaded',
+08-07 11:55:50.907 11188 32322 I ReactNativeJS:   runId: 1 }
+08-07 11:55:50.908 11188 32322 I ReactNativeJS: '[AccountSwitch]', { at: '2026-08-07T15:55:50.907Z',
+08-07 11:55:50.908 11188 32322 I ReactNativeJS:   details: {},
+08-07 11:55:50.908 11188 32322 I ReactNativeJS:   event: 'user_bootstrap_finished',
+08-07 11:55:50.908 11188 32322 I ReactNativeJS:   runId: 1 }
+08-07 11:55:50.909 11188 32322 I ReactNativeJS: '[AccountSwitch]', { at: '2026-08-07T15:55:50.908Z',
+08-07 11:55:50.909 11188 32322 I ReactNativeJS:   details: { source: 'auth-callback:SIGNED_IN:profile-ready' },
+08-07 11:55:50.909 11188 32322 I ReactNativeJS:   event: 'account_switch_completed',
+08-07 11:55:50.909 11188 32322 I ReactNativeJS:   runId: 1 }
+08-07 11:55:50.931 11188 32322 I ReactNativeJS: '[Auth] event', { event: 'auth-hydrated',
+08-07 11:55:50.931 11188 32322 I ReactNativeJS:   source: 'FeatureAccessBootstrap',
+08-07 11:55:50.931 11188 32322 I ReactNativeJS:   sessionExists: true,
+08-07 11:55:50.931 11188 32322 I ReactNativeJS:   userIdPresent: true,
+08-07 11:55:50.931 11188 32322 I ReactNativeJS:   emailPresent: true,
+08-07 11:55:50.931 11188 32322 I ReactNativeJS:   at: '2026-08-07T15:55:50.930Z' }
+08-07 11:55:50.934 11188 32322 I ReactNativeJS: 'Schedova Pro gate', { source: 'auth-hydrated',
+08-07 11:55:50.934 11188 32322 I ReactNativeJS:   userId: '997dcbb3-902c-4642-b0fe-f5fe15499609',
+08-07 11:55:50.934 11188 32322 I ReactNativeJS:   isPro: null,
+08-07 11:55:50.934 11188 32322 I ReactNativeJS:   subscription: null,
+08-07 11:55:50.934 11188 32322 I ReactNativeJS:   subscriptionLoaded: false,
+08-07 11:55:50.934 11188 32322 I ReactNativeJS:   revenueCatLoaded: true,
+08-07 11:55:50.934 11188 32322 I ReactNativeJS:   revenueCatIsPro: false,
+08-07 11:55:50.934 11188 32322 I ReactNativeJS:   cachedEntitlementIsPro: false,
+08-07 11:55:50.934 11188 32322 I ReactNativeJS:   resolutionSource: 'entitlement-unresolved',
+08-07 11:55:50.934 11188 32322 I ReactNativeJS:   error: null }
+08-07 11:55:50.981 11188 32322 I ReactNativeJS: [RevenueCat] authenticated account changed
+08-07 11:55:50.982 11188 32322 I ReactNativeJS: [RevenueCat] beginning identity sync
+08-07 11:55:50.982 11188 32322 I ReactNativeJS: '[AccountSwitch]', { at: '2026-08-07T15:55:50.982Z',
+08-07 11:55:50.982 11188 32322 I ReactNativeJS:   details: { source: 'revenuecat:init' },
+08-07 11:55:50.982 11188 32322 I ReactNativeJS:   event: 'revenuecat_login_started',
+08-07 11:55:50.982 11188 32322 I ReactNativeJS:   runId: null }
+08-07 11:55:50.985 11188 32322 I ReactNativeJS: [RevenueCat] logIn called for authenticated account
+08-07 11:55:50.992 11188 32322 I ReactNativeJS: '[FeatureAccess] cached entitlement result', { userId: '997dcbb3-902c-4642-b0fe-f5fe15499609',
+08-07 11:55:50.992 11188 32322 I ReactNativeJS:   cachedEntitlementResult: false,
+08-07 11:55:50.992 11188 32322 I ReactNativeJS:   finalSource: 'entitlement-unresolved',
+08-07 11:55:50.992 11188 32322 I ReactNativeJS:   finalIsPro: null }
+08-07 11:55:50.992 11188 32322 I ReactNativeJS: 'Schedova Pro gate', { source: 'revenuecat-last-known-cache',
+08-07 11:55:50.992 11188 32322 I ReactNativeJS:   userId: '997dcbb3-902c-4642-b0fe-f5fe15499609',
+08-07 11:55:50.992 11188 32322 I ReactNativeJS:   isPro: null,
+08-07 11:55:50.992 11188 32322 I ReactNativeJS:   subscription: null,
+08-07 11:55:50.992 11188 32322 I ReactNativeJS:   subscriptionLoaded: false,
+08-07 11:55:50.992 11188 32322 I ReactNativeJS:   revenueCatLoaded: true,
+08-07 11:55:50.992 11188 32322 I ReactNativeJS:   revenueCatIsPro: false,
+08-07 11:55:50.992 11188 32322 I ReactNativeJS:   cachedEntitlementIsPro: false,
+08-07 11:55:50.992 11188 32322 I ReactNativeJS:   resolutionSource: 'entitlement-unresolved',
+08-07 11:55:50.992 11188 32322 I ReactNativeJS:   error: null }
+08-07 11:55:50.994 11188 32322 I ReactNativeJS: '[PushRegistration]', 'permission status', { canAskAgain: true,
+08-07 11:55:50.994 11188 32322 I ReactNativeJS:   granted: true,
+08-07 11:55:50.994 11188 32322 I ReactNativeJS:   iosStatus: null,
+08-07 11:55:50.994 11188 32322 I ReactNativeJS:   source: 'auth-ready',
+08-07 11:55:50.994 11188 32322 I ReactNativeJS:   status: 'granted',
+08-07 11:55:50.994 11188 32322 I ReactNativeJS:   userId: '997dcbb3-902c-4642-b0fe-f5fe15499609' }
+08-07 11:55:51.000 11188 32322 I ReactNativeJS: '[PushRegistration]', 'registration exception', { errorCode: 'Error',
+08-07 11:55:51.000 11188 32322 I ReactNativeJS:   errorMessage: 'Make sure to complete the guide at https://docs.expo.dev/push-notifications/fcm-credentials/ : Default FirebaseApp is not initialized in this process com.davidellis34.schedova. Make sure to call FirebaseApp.initializeApp(Context) first.',
+08-07 11:55:51.000 11188 32322 I ReactNativeJS:   source: 'auth-ready',
+08-07 11:55:51.000 11188 32322 I ReactNativeJS:   userId: '997dcbb3-902c-4642-b0fe-f5fe15499609' }
+08-07 11:55:51.484 11188 32322 I ReactNativeJS: '[RevenueCat] configure called', { configured: false,
+08-07 11:55:51.484 11188 32322 I ReactNativeJS:   hasRequestedAccount: true,
+08-07 11:55:51.484 11188 32322 I ReactNativeJS:   hasConfiguredAccount: false }
+08-07 11:55:51.486 11188 32322 I ReactNativeJS: [RevenueCat] Configuring RevenueCat
+08-07 11:55:51.486 11188 32322 I ReactNativeJS: '[RevenueCat] Platform:', 'android'
+08-07 11:55:51.486 11188 32322 I ReactNativeJS: '[RevenueCat] App ownership:', null
+08-07 11:55:51.486 11188 32322 I ReactNativeJS: '[RevenueCat] __DEV__:', true
+08-07 11:55:51.486 11188 32322 I ReactNativeJS: '[RevenueCat] API key present:', true
+08-07 11:55:51.486 11188 32322 I ReactNativeJS: '[RevenueCat] API key type:', 'test'
+08-07 11:55:51.486 11188 32322 I ReactNativeJS: '[RevenueCat] Using entitlement:', 'schedova_pro'
+08-07 11:55:51.486 11188 32322 I ReactNativeJS: '[RevenueCat] Expected offering:', 'default'
+08-07 11:55:51.487 11188 32322 I ReactNativeJS: '[RevenueCat] Expected product IDs:', [ 'schedova_pro_monthly', 'schedova_pro_yearly' ]
+08-07 11:55:51.487 11188 32322 I ReactNativeJS: '[RevenueCat] SDK key prefix:', 'test_'
+08-07 11:55:51.488 11188 32322 I ReactNativeJS: '[RevenueCat] RevenueCat configured', { platform: 'android',
+08-07 11:55:51.488 11188 32322 I ReactNativeJS:   appOwnership: null,
+08-07 11:55:51.488 11188 32322 I ReactNativeJS:   appUserIDPresent: true,
+08-07 11:55:51.488 11188 32322 I ReactNativeJS:   apiKeyPresent: true }
+08-07 11:55:51.618 11188 32322 I ReactNativeJS: [ScreenTiming] {"screen":"login","phase":"supabase-request","durationMs":617.6,"requestCount":4,"renderCount":8,"rowsReturned":0,"request":"POST /rest/v1/user_settings?on_conflict=user_id","status":200}
+08-07 11:55:51.623 11188 32322 W ReactNativeJS: [RevenueCat] Using a Test Store API key.
+08-07 11:55:51.623 11188 32322 W ReactNativeJS: The Test Store is for development only. Never use a Test Store API key in production. Our SDK will crash if using it in production. Test Store purchases are simulated, do not use Google Play or Amazon store, and generate no revenue. Apps submitted with a Test Store API key will be rejected during App Review.
+08-07 11:55:51.625 11188 32322 D ReactNativeJS: [RevenueCat] ?? Debug logging enabled
+08-07 11:55:51.625 11188 32322 D ReactNativeJS: [RevenueCat] ?? SDK Version - 10.12.0
+08-07 11:55:51.625 11188 32322 D ReactNativeJS: [RevenueCat] ?? Package name - com.davidellis34.schedova
+08-07 11:55:51.625 11188 32322 D ReactNativeJS: [RevenueCat] ?? Initial App User ID - 997dcbb3-902c-4642-b0fe-f5fe15499609
+08-07 11:55:51.625 11188 32322 D ReactNativeJS: [RevenueCat] ?? Purchases configured with response verification: DISABLED
+08-07 11:55:51.625 11188 32322 D ReactNativeJS: [RevenueCat] ?? Identifying App User ID: 997dcbb3-902c-4642-b0fe-f5fe15499609
+08-07 11:55:51.625 11188 32322 D ReactNativeJS: [RevenueCat] ?? Deleting old synced subscriber attributes that don't belong to 997dcbb3-902c-4642-b0fe-f5fe15499609
+08-07 11:55:51.625 11188 32322 D ReactNativeJS: [RevenueCat] SimulatedStoreBillingAbstract: Starting connection
+08-07 11:55:51.625 11188 32322 D ReactNativeJS: [RevenueCat] ?? Listener set
+08-07 11:55:51.625 11188 32322 D ReactNativeJS: [RevenueCat] ?? Updating pending purchase queue
+08-07 11:55:51.625 11188 32322 D ReactNativeJS: [RevenueCat] SimulatedStoreBillingAbstract: getStorefront - returning US by default
+08-07 11:55:51.625 11188 32322 D ReactNativeJS: [RevenueCat] Billing connected with country code: US
+08-07 11:55:51.625 11188 32322 D ReactNativeJS: [RevenueCat] ?? App foregrounded
+08-07 11:55:51.625 11188 32322 D ReactNativeJS: [RevenueCat] ?? CustomerInfo cache is stale, updating from network in foreground.
+08-07 11:55:51.625 11188 32322 D ReactNativeJS: [RevenueCat] Retrieving customer info with policy: FETCH_CURRENT
+08-07 11:55:51.626 11188 32322 D ReactNativeJS: [RevenueCat] ?? Updating pending purchase queue
+08-07 11:55:51.626 11188 32322 D ReactNativeJS: [RevenueCat] ?? Offerings cache is stale, updating from network in foreground
+08-07 11:55:51.626 11188 32322 D ReactNativeJS: [RevenueCat] ?? Start Offerings update from network.
+08-07 11:55:51.626 11188 32322 D ReactNativeJS: [RevenueCat] Request already scheduled with jitter delay, adding existing callbacks to unjittered request with key: BackgroundAwareCallbackCacheKey(cacheKey=[/v1/subscribers/997dcbb3-902c-4642-b0fe-f5fe15499609/offerings], appInBackground=false)
+08-07 11:55:51.626 11188 32322 D ReactNativeJS: [RevenueCat] ?? Updating pending purchase queue
+08-07 11:55:51.626 11188 32322 D ReactNativeJS: [RevenueCat] ?? No subscriber attributes to synchronize.
+08-07 11:55:51.626 11188 32322 D ReactNativeJS: [RevenueCat] SimulatedStoreBillingAbstract: queryPurchases - returning empty map
+08-07 11:55:51.626 11188 32322 D ReactNativeJS: [RevenueCat] ?? Cleaning previously sent tokens
+08-07 11:55:51.626 11188 32322 D ReactNativeJS: [RevenueCat] ?? Saving tokens []
+08-07 11:55:51.626 11188 32322 D ReactNativeJS: [RevenueCat] ?? Tokens already posted: []
+08-07 11:55:51.626 11188 32322 D ReactNativeJS: [RevenueCat] ?? No pending purchases to sync
+08-07 11:55:51.626 11188 32322 D ReactNativeJS: [RevenueCat] SimulatedStoreBillingAbstract: queryPurchases - returning empty map
+08-07 11:55:51.626 11188 32322 D ReactNativeJS: [RevenueCat] ?? Cleaning previously sent tokens
+08-07 11:55:51.626 11188 32322 D ReactNativeJS: [RevenueCat] ?? Saving tokens []
+08-07 11:55:51.626 11188 32322 D ReactNativeJS: [RevenueCat] ?? Tokens already posted: []
+08-07 11:55:51.626 11188 32322 D ReactNativeJS: [RevenueCat] ?? No pending purchases to sync
+08-07 11:55:51.626 11188 32322 D ReactNativeJS: [RevenueCat] Request already scheduled with jitter delay, adding existing callbacks to unjittered request with key: BackgroundAwareCallbackCacheKey(cacheKey=[/v1/subscribers/997dcbb3-902c-4642-b0fe-f5fe15499609], appInBackground=false)
+08-07 11:55:51.626 11188 32322 D ReactNativeJS: [RevenueCat] Getting storefront from cache was null.
+08-07 11:55:51.627 11188 32322 I ReactNativeJS: [ScreenTiming] {"screen":"login","phase":"supabase-request","durationMs":628.9,"requestCount":4,"renderCount":8,"rowsReturned":1,"request":"GET /rest/v1/user_subscriptions?select=status%2Cplan%2Ccurrent_period_end%2Centitlement%2Centitlement_source%2Centitlement_expires_at&user_id=eq.997dcbb3-902c-4642-b0fe-f5fe15499609","status":200}
+08-07 11:55:51.627 11188 32322 I ReactNativeJS: '[FeatureAccess] Supabase subscription fetched', { userId: '997dcbb3-902c-4642-b0fe-f5fe15499609',
+08-07 11:55:51.627 11188 32322 I ReactNativeJS:   row: 
+08-07 11:55:51.627 11188 32322 I ReactNativeJS:    { status: 'inactive',
+08-07 11:55:51.627 11188 32322 I ReactNativeJS:      plan: 'free',
+08-07 11:55:51.627 11188 32322 I ReactNativeJS:      entitlement: 'schedova_pro',
+08-07 11:55:51.627 11188 32322 I ReactNativeJS:      entitlement_source: 'revenuecat',
+08-07 11:55:51.627 11188 32322 I ReactNativeJS:      entitlement_expires_at: null },
+08-07 11:55:51.627 11188 32322 I ReactNativeJS:   subscriptionLoaded: true,
+08-07 11:55:51.627 11188 32322 I ReactNativeJS:   adminLifetimeAccess: false,
+08-07 11:55:51.627 11188 32322 I ReactNativeJS:   supabaseSubscriptionResult: false }
+08-07 11:55:51.627 11188 32322 I ReactNativeJS: '[FeatureAccess] entitlement resolution', { userId: '997dcbb3-902c-4642-b0fe-f5fe15499609',
+08-07 11:55:51.627 11188 32322 I ReactNativeJS:   authEmail: null,
+08-07 11:55:51.627 11188 32322 I ReactNativeJS:   supabaseSubscriptionRow: 
+08-07 11:55:51.627 11188 32322 I ReactNativeJS:    { status: 'inactive',
+08-07 11:55:51.627 11188 32322 I ReactNativeJS:      plan: 'free',
+08-07 11:55:51.627 11188 32322 I ReactNativeJS:      current_period_end: null,
+08-07 11:55:51.627 11188 32322 I ReactNativeJS:      entitlement: 'schedova_pro',
+08-07 11:55:51.627 11188 32322 I ReactNativeJS:      entitlement_source: 'revenuecat',
+08-07 11:55:51.627 11188 32322 I ReactNativeJS:      entitlement_expires_at: null },
+08-07 11:55:51.627 11188 32322 I ReactNativeJS:   supabaseSubscriptionResult: false,
+08-07 11:55:51.627 11188 32322 I ReactNativeJS:   revenueCatEntitlementResult: false,
+08-07 11:55:51.627 11188 32322 I ReactNativeJS:   cachedEntitlementResult: false,
+08-07 11:55:51.627 11188 32322 I ReactNativeJS:   adminLifetimeAccess: false,
+08-07 11:55:51.627 11188 32322 I ReactNativeJS:   revenueCatStyleAccess: false,
+08-07 11:55:51.627 11188 32322 I ReactNativeJS:   finalSource: 'no-active-entitlement',
+08-07 11:55:51.627 11188 32322 I ReactNativeJS:   finalIsPro: false }
+08-07 11:55:51.628 11188 32322 I ReactNativeJS: 'Schedova Pro gate', { source: 'auth-hydrated',
+08-07 11:55:51.628 11188 32322 I ReactNativeJS:   userId: '997dcbb3-902c-4642-b0fe-f5fe15499609',
+08-07 11:55:51.628 11188 32322 I ReactNativeJS:   isPro: false,
+08-07 11:55:51.628 11188 32322 I ReactNativeJS:   subscription: 
+08-07 11:55:51.628 11188 32322 I ReactNativeJS:    { status: 'inactive',
+08-07 11:55:51.628 11188 32322 I ReactNativeJS:      plan: 'free',
+08-07 11:55:51.628 11188 32322 I ReactNativeJS:      current_period_end: null,
+08-07 11:55:51.628 11188 32322 I ReactNativeJS:      entitlement: 'schedova_pro',
+08-07 11:55:51.628 11188 32322 I ReactNativeJS:      entitlement_source: 'revenuecat',
+08-07 11:55:51.628 11188 32322 I ReactNativeJS:      entitlement_expires_at: null },
+08-07 11:55:51.628 11188 32322 I ReactNativeJS:   subscriptionLoaded: true,
+08-07 11:55:51.628 11188 32322 I ReactNativeJS:   revenueCatLoaded: true,
+08-07 11:55:51.628 11188 32322 I ReactNativeJS:   revenueCatIsPro: false,
+08-07 11:55:51.628 11188 32322 I ReactNativeJS:   cachedEntitlementIsPro: false,
+08-07 11:55:51.628 11188 32322 I ReactNativeJS:   resolutionSource: 'no-active-entitlement',
+08-07 11:55:51.628 11188 32322 I ReactNativeJS:   error: null }
+08-07 11:55:51.631 11188 32322 I ReactNativeJS: [ScreenTiming] {"screen":"login","phase":"duplicate-request","durationMs":9328.3,"requestCount":5,"renderCount":8,"rowsReturned":3,"request":"GET /rest/v1/businesses?select=id&user_id=eq.997dcbb3-902c-4642-b0fe-f5fe15499609&limit=1","repeats":2}
+08-07 11:55:51.634 11188 32322 I ReactNativeJS: '[RevenueCat] current identity before logIn', { isAnonymous: false,
+08-07 11:55:51.634 11188 32322 I ReactNativeJS:   hasCurrentAppUserID: true,
+08-07 11:55:51.634 11188 32322 I ReactNativeJS:   hasExpectedAppUserID: true }
+08-07 11:55:51.635 11188 32322 I ReactNativeJS: '[AccountSwitch]', { at: '2026-08-07T15:55:51.634Z',
+08-07 11:55:51.635 11188 32322 I ReactNativeJS:   details: 
+08-07 11:55:51.635 11188 32322 I ReactNativeJS:    { currentAppUserIdPresent: true,
+08-07 11:55:51.635 11188 32322 I ReactNativeJS:      expectedAppUserIdPresent: true,
+08-07 11:55:51.635 11188 32322 I ReactNativeJS:      isAnonymous: false,
+08-07 11:55:51.635 11188 32322 I ReactNativeJS:      source: 'login' },
+08-07 11:55:51.635 11188 32322 I ReactNativeJS:   event: 'revenuecat-identity-before-login',
+08-07 11:55:51.635 11188 32322 I ReactNativeJS:   runId: null }
+08-07 11:55:51.636 11188 32322 D ReactNativeJS: [RevenueCat] Retrieving customer info with policy: CACHED_OR_FETCHED
+08-07 11:55:51.637 11188 32322 D ReactNativeJS: [RevenueCat] ?? No cached CustomerInfo, fetching from network.
+08-07 11:55:51.637 11188 32322 D ReactNativeJS: [RevenueCat] ?? Updating pending purchase queue
+08-07 11:55:51.749 11188 32322 I ReactNativeJS: [ScreenTiming] {"screen":"login","phase":"supabase-request","durationMs":118.1,"requestCount":5,"renderCount":8,"rowsReturned":1,"request":"GET /rest/v1/businesses?select=id&user_id=eq.997dcbb3-902c-4642-b0fe-f5fe15499609&limit=1","status":200}
+08-07 11:55:51.758 11188 32322 I ReactNativeJS: [ScreenTiming] {"screen":"login","phase":"duplicate-request","durationMs":9454.4,"requestCount":6,"renderCount":8,"rowsReturned":4,"request":"GET /auth/v1/user?","repeats":2}
+08-07 11:55:51.891 11188 32322 D ReactNativeJS: [RevenueCat] API request started: GET /v1/subscribers/997dcbb3-902c-4642-b0fe-f5fe15499609/offerings
+08-07 11:55:51.892 11188 32322 D ReactNativeJS: [RevenueCat] API request completed with status: GET /v1/subscribers/997dcbb3-902c-4642-b0fe-f5fe15499609/offerings 200
+08-07 11:55:51.898 11188 32322 I ReactNativeJS: [ScreenTiming] {"screen":"login","phase":"supabase-request","durationMs":142.8,"requestCount":6,"renderCount":8,"rowsReturned":1,"request":"GET /auth/v1/user?","status":200}
+08-07 11:55:51.905 11188 32322 D ReactNativeJS: [RevenueCat] SimulatedStoreBillingAbstract: queryProductDetailsAsync for products: [monthly, yearly, lifetime]
+08-07 11:55:51.905 11188 32322 D ReactNativeJS: [RevenueCat] SimulatedStoreBillingAbstract: queryPurchases - returning empty map
+08-07 11:55:51.905 11188 32322 D ReactNativeJS: [RevenueCat] ?? Cleaning previously sent tokens
+08-07 11:55:51.906 11188 32322 D ReactNativeJS: [RevenueCat] ?? Saving tokens []
+08-07 11:55:51.906 11188 32322 D ReactNativeJS: [RevenueCat] ?? Tokens already posted: []
+08-07 11:55:51.908 11188 32322 D ReactNativeJS: [RevenueCat] ?? No pending purchases to sync
+08-07 11:55:51.908 11188 32322 D ReactNativeJS: [RevenueCat] Getting storefront from cache was null.
+08-07 11:55:52.006 11188 32322 D ReactNativeJS: [RevenueCat] API request started: GET /v1/subscribers/997dcbb3-902c-4642-b0fe-f5fe15499609
+08-07 11:55:52.006 11188 32322 D ReactNativeJS: [RevenueCat] API request completed with status: GET /v1/subscribers/997dcbb3-902c-4642-b0fe-f5fe15499609 200
+08-07 11:55:52.017 11188 32322 D ReactNativeJS: [RevenueCat] ?? CustomerInfo updated from network.
+08-07 11:55:52.017 11188 32322 D ReactNativeJS: [RevenueCat] ?? Sending latest CustomerInfo to listener.
+08-07 11:55:52.017 11188 32322 D ReactNativeJS: [RevenueCat] SimulatedStoreBillingAbstract: queryPurchases - returning empty map
+08-07 11:55:52.018 11188 32322 D ReactNativeJS: [RevenueCat] ?? Cleaning previously sent tokens
+08-07 11:55:52.018 11188 32322 D ReactNativeJS: [RevenueCat] ?? Saving tokens []
+08-07 11:55:52.020 11188 32322 D ReactNativeJS: [RevenueCat] ?? Tokens already posted: []
+08-07 11:55:52.020 11188 32322 D ReactNativeJS: [RevenueCat] ?? No pending purchases to sync
+08-07 11:55:52.021 11188 32322 D ReactNativeJS: [RevenueCat] Request already scheduled with jitter delay, adding existing callbacks to unjittered request with key: BackgroundAwareCallbackCacheKey(cacheKey=[/v1/subscribers/997dcbb3-902c-4642-b0fe-f5fe15499609], appInBackground=false)
+08-07 11:55:52.022 11188 32322 D ReactNativeJS: [RevenueCat] Getting storefront from cache was null.
+08-07 11:55:52.035 11188 32322 I ReactNativeJS: [ScreenTiming] {"screen":"login","phase":"supabase-request","durationMs":131.2,"requestCount":7,"renderCount":8,"rowsReturned":1,"request":"GET /rest/v1/user_settings?select=:id&user_id=eq.997dcbb3-902c-4642-b0fe-f5fe15499609","status":200}
+08-07 11:55:52.050 11188 32322 I ReactNativeJS: '[AccountSwitch]', { at: '2026-08-07T15:55:52.048Z',
+08-07 11:55:52.050 11188 32322 I ReactNativeJS:   details: { from: 'login', to: 'dashboard' },
+08-07 11:55:52.050 11188 32322 I ReactNativeJS:   event: 'navigation_reset_started',
+08-07 11:55:52.050 11188 32322 I ReactNativeJS:   runId: null }
+08-07 11:55:52.051 11188 32322 I ReactNativeJS: '[AuthNavigation] transition scheduled', { authStatus: 'authenticated',
+08-07 11:55:52.051 11188 32322 I ReactNativeJS:   authTransitionState: 'idle',
+08-07 11:55:52.051 11188 32322 I ReactNativeJS:   bridgeMessage: 'Opening Schedova...',
+08-07 11:55:52.051 11188 32322 I ReactNativeJS:   from: 'login',
+08-07 11:55:52.051 11188 32322 I ReactNativeJS:   to: 'dashboard' }
+08-07 11:55:52.089 11188 32322 D ReactNativeJS: [RevenueCat] API request started: GET /rcbilling/v1/subscribers/997dcbb3-902c-4642-b0fe-f5fe15499609/products?id=monthly&id=yearly&id=lifetime
+08-07 11:55:52.089 11188 32322 D ReactNativeJS: [RevenueCat] API request completed with status: GET /rcbilling/v1/subscribers/997dcbb3-902c-4642-b0fe-f5fe15499609/products?id=monthly&id=yearly&id=lifetime 200
+08-07 11:55:52.109 11188 32322 D ReactNativeJS: [RevenueCat] Getting storefront from cache was null.
+08-07 11:55:52.109 11188 32322 D ReactNativeJS: [RevenueCat] ?? Building offerings response with 3 products
+08-07 11:55:52.117 11188 32322 I ReactNativeJS: '[AccountSwitch]', { at: '2026-08-07T15:55:52.117Z',
+08-07 11:55:52.117 11188 32322 I ReactNativeJS:   details: { from: 'login', to: 'dashboard' },
+08-07 11:55:52.117 11188 32322 I ReactNativeJS:   event: 'navigation_reset_finished',
+08-07 11:55:52.117 11188 32322 I ReactNativeJS:   runId: null }
+08-07 11:55:52.118 11188 32322 I ReactNativeJS: '[AccountSwitch]', { at: '2026-08-07T15:55:52.117Z',
+08-07 11:55:52.118 11188 32322 I ReactNativeJS:   details: { from: 'login', to: 'dashboard' },
+08-07 11:55:52.118 11188 32322 I ReactNativeJS:   event: 'navigation-performed',
+08-07 11:55:52.118 11188 32322 I ReactNativeJS:   runId: null }
+08-07 11:55:52.179 11188 32322 I ReactNativeJS: [ScreenTiming] {"screen":"dashboard","phase":"navigation-start","durationMs":0,"requestCount":0,"renderCount":0,"rowsReturned":0}
+08-07 11:55:52.181 11188 11200 I llis34.schedova: NativeAlloc concurrent mark compact GC freed 47MB AllocSpace bytes, 1628(36MB) LOS objects, 94% free, 14MB/256MB, paused 2.613ms,3.666ms total 114.218ms
+08-07 11:55:52.190 11188 32322 I ReactNativeJS: [ScreenTiming] {"screen":"dashboard","phase":"first-visible-content","durationMs":11.8,"requestCount":0,"renderCount":1,"rowsReturned":0}
+08-07 11:55:52.307 11188 32322 I ReactNativeJS: '[AccountSwitch]', { at: '2026-08-07T15:55:52.306Z',
+08-07 11:55:52.307 11188 32322 I ReactNativeJS:   details: undefined,
+08-07 11:55:52.307 11188 32322 I ReactNativeJS:   event: 'dashboard_mounted',
+08-07 11:55:52.307 11188 32322 I ReactNativeJS:   runId: null }
+08-07 11:55:52.348 11188 11188 W [RNScreens]: backTitleVisible prop is not available on Android
+08-07 11:55:52.348 11188 11188 W [RNScreens]: backTitleFontFamily prop is not available on Android
+08-07 11:55:52.348 11188 11188 W [RNScreens]: disableBackButtonMenu prop is not available on Android
+08-07 11:55:52.348 11188 11188 W [RNScreens]: largeTitleFontFamily prop is not available on Android
+08-07 11:55:52.348 11188 11188 W [RNScreens]: largeTitleFontWeight prop is not available on Android
+08-07 11:55:52.348 11188 11188 W [RNScreens]: largeTitleHideShadow prop is not available on Android
+08-07 11:55:52.376 11188 32322 I ReactNativeJS: 'Dashboard reply badge count', 0
+08-07 11:55:52.392 11188 32322 D ReactNativeJS: [RevenueCat] OfferingImagePreDownloader: starting image download
+08-07 11:55:52.392 11188 32322 I ReactNativeJS: [ScreenTiming] {"screen":"login","phase":"fully-loaded-interactive","durationMs":10089.5,"requestCount":7,"renderCount":8,"rowsReturned":6}
+08-07 11:55:52.392 11188 32322 D ReactNativeJS: [RevenueCat] API request started: GET /v1/subscribers/997dcbb3-902c-4642-b0fe-f5fe15499609
+08-07 11:55:52.392 11188 32322 D ReactNativeJS: [RevenueCat] API request completed with status: GET /v1/subscribers/997dcbb3-902c-4642-b0fe-f5fe15499609 304
+08-07 11:55:52.392 11188 32322 D ReactNativeJS: [RevenueCat] ?? CustomerInfo updated from network.
+08-07 11:55:52.393 11188 32322 D ReactNativeJS: [RevenueCat] Pre-downloading Paywall V2 image: https://icons.pawwalls.com/check.webp
+08-07 11:55:52.393 11188 32322 D ReactNativeJS: [RevenueCat] Pre-downloading Paywall V2 image: https://icons.pawwalls.com/x.webp
+08-07 11:55:52.437 11188 32322 I ReactNativeJS: '[RevenueCat] RevenueCat logIn result received', { hasAppUserID: true }
+08-07 11:55:52.437 11188 32322 I ReactNativeJS: '[RevenueCat] RevenueCat anonymous after login', false
+08-07 11:55:52.437 11188 32322 I ReactNativeJS: '[RevenueCat] customerInfo fetched', { isAnonymous: false, activeEntitlements: [] }
+08-07 11:55:52.438 11188 32322 I ReactNativeJS: '[AccountSwitch]', { at: '2026-08-07T15:55:52.438Z',
+08-07 11:55:52.438 11188 32322 I ReactNativeJS:   details: 
+08-07 11:55:52.438 11188 32322 I ReactNativeJS:    { appUserIdPresent: true,
+08-07 11:55:52.438 11188 32322 I ReactNativeJS:      isAnonymous: false,
+08-07 11:55:52.438 11188 32322 I ReactNativeJS:      source: 'login-already-current' },
+08-07 11:55:52.438 11188 32322 I ReactNativeJS:   event: 'revenuecat-identity-after-login',
+08-07 11:55:52.438 11188 32322 I ReactNativeJS:   runId: null }
+08-07 11:55:52.438 11188 32322 I ReactNativeJS: '[AccountSwitch]', { at: '2026-08-07T15:55:52.438Z',
+08-07 11:55:52.438 11188 32322 I ReactNativeJS:   details: { source: 'revenuecat:init' },
+08-07 11:55:52.438 11188 32322 I ReactNativeJS:   event: 'revenuecat_login_finished',
+08-07 11:55:52.438 11188 32322 I ReactNativeJS:   runId: null }
+08-07 11:55:52.442 11188 32322 I ReactNativeJS: '[AccountSwitch]', { at: '2026-08-07T15:55:52.441Z',
+08-07 11:55:52.442 11188 32322 I ReactNativeJS:   details: { source: 'revenuecat:init', userIdPresent: true },
+08-07 11:55:52.442 11188 32322 I ReactNativeJS:   event: 'revenuecat_logged_in',
+08-07 11:55:52.442 11188 32322 I ReactNativeJS:   runId: null }
+08-07 11:55:52.444 11188 32322 I ReactNativeJS: '[RevenueCat] customerInfo fetched', { source: 'revenuecat:init',
+08-07 11:55:52.444 11188 32322 I ReactNativeJS:   hasAuthenticatedAccount: true,
+08-07 11:55:52.444 11188 32322 I ReactNativeJS:   hasOriginalAppUserId: true }
+08-07 11:55:52.444 11188 32322 I ReactNativeJS: 'revenuecat result', false
+08-07 11:55:52.444 11188 32322 I ReactNativeJS: 'final isPro value', null
+08-07 11:55:52.444 11188 32322 I ReactNativeJS: '[RevenueCat] active entitlements', []
+08-07 11:55:52.445 11188 32322 I ReactNativeJS: '[RevenueCat] setting isPro', false, { entitlement: 'schedova_pro' }
+08-07 11:55:52.445 11188 32322 I ReactNativeJS: '[FeatureAccess] entitlement resolution', { supabaseSubscriptionResult: 
+08-07 11:55:52.445 11188 32322 I ReactNativeJS:    { status: 'inactive',
+08-07 11:55:52.445 11188 32322 I ReactNativeJS:      plan: 'free',
+08-07 11:55:52.445 11188 32322 I ReactNativeJS:      current_period_end: null,
+08-07 11:55:52.445 11188 32322 I ReactNativeJS:      entitlement: 'schedova_pro',
+08-07 11:55:52.445 11188 32322 I ReactNativeJS:      entitlement_source: 'revenuecat',
+08-07 11:55:52.445 11188 32322 I ReactNativeJS:      entitlement_expires_at: null },
+08-07 11:55:52.445 11188 32322 I ReactNativeJS:   revenueCatEntitlementResult: false,
+08-07 11:55:52.445 11188 32322 I ReactNativeJS:   cachedEntitlementResult: false,
+08-07 11:55:52.445 11188 32322 I ReactNativeJS:   adminLifetimeAccess: false,
+08-07 11:55:52.445 11188 32322 I ReactNativeJS:   revenueCatStyleAccess: false,
+08-07 11:55:52.445 11188 32322 I ReactNativeJS:   finalSource: 'no-active-entitlement',
+08-07 11:55:52.445 11188 32322 I ReactNativeJS:   finalIsPro: false }
+08-07 11:55:52.446 11188 32322 I ReactNativeJS: 'Schedova Pro gate', { source: 'revenuecat:init',
+08-07 11:55:52.446 11188 32322 I ReactNativeJS:   userId: '997dcbb3-902c-4642-b0fe-f5fe15499609',
+08-07 11:55:52.446 11188 32322 I ReactNativeJS:   isPro: false,
+08-07 11:55:52.446 11188 32322 I ReactNativeJS:   subscription: 
+08-07 11:55:52.446 11188 32322 I ReactNativeJS:    { status: 'inactive',
+08-07 11:55:52.446 11188 32322 I ReactNativeJS:      plan: 'free',
+08-07 11:55:52.446 11188 32322 I ReactNativeJS:      current_period_end: null,
+08-07 11:55:52.446 11188 32322 I ReactNativeJS:      entitlement: 'schedova_pro',
+08-07 11:55:52.446 11188 32322 I ReactNativeJS:      entitlement_source: 'revenuecat',
+08-07 11:55:52.446 11188 32322 I ReactNativeJS:      entitlement_expires_at: null },
+08-07 11:55:52.446 11188 32322 I ReactNativeJS:   subscriptionLoaded: true,
+08-07 11:55:52.446 11188 32322 I ReactNativeJS:   revenueCatLoaded: true,
+08-07 11:55:52.446 11188 32322 I ReactNativeJS:   revenueCatIsPro: false,
+08-07 11:55:52.446 11188 32322 I ReactNativeJS:   cachedEntitlementIsPro: false,
+08-07 11:55:52.446 11188 32322 I ReactNativeJS:   resolutionSource: 'no-active-entitlement',
+08-07 11:55:52.446 11188 32322 I ReactNativeJS:   error: null }
+08-07 11:55:52.565 11188 32322 I ReactNativeJS: [ScreenTiming] {"screen":"dashboard","phase":"supabase-request","durationMs":129.9,"requestCount":5,"renderCount":3,"rowsReturned":1,"request":"GET /rest/v1/appointments?select=*&user_id=eq.997dcbb3-902c-4642-b0fe-f5fe15499609&order=:id.asc%2Cappointment_time.asc","status":200}
+08-07 11:55:52.569 11188 32322 I ReactNativeJS: [ScreenTiming] {"screen":"dashboard","phase":"supabase-request","durationMs":118.4,"requestCount":5,"renderCount":3,"rowsReturned":1,"request":"GET /rest/v1/businesses?select=id&user_id=eq.997dcbb3-902c-4642-b0fe-f5fe15499609&limit=1","status":200}
+08-07 11:55:52.600 11188 32322 I ReactNativeJS: [ScreenTiming] {"screen":"dashboard","phase":"supabase-request","durationMs":147.7,"requestCount":6,"renderCount":3,"rowsReturned":1,"request":"GET /rest/v1/clients?select=*&user_id=eq.997dcbb3-902c-4642-b0fe-f5fe15499609","status":200}
+08-07 11:55:52.616 11188 32322 I ReactNativeJS: [ScreenTiming] {"screen":"dashboard","phase":"supabase-request","durationMs":140,"requestCount":6,"renderCount":3,"rowsReturned":1,"request":"GET /rest/v1/user_subscriptions?select=status%2Cplan%2Ccurrent_period_end%2Centitlement%2Centitlement_source%2Centitlement_expires_at%2Cupdated_at&user_id=eq.997dcbb3-902c-4642-b0fe-f5fe15499609","status":200}
+08-07 11:55:52.617 11188 32322 I ReactNativeJS: 'subscription row before RevenueCat sync', { status: 'inactive',
+08-07 11:55:52.617 11188 32322 I ReactNativeJS:   plan: 'free',
+08-07 11:55:52.617 11188 32322 I ReactNativeJS:   current_period_end: null,
+08-07 11:55:52.617 11188 32322 I ReactNativeJS:   entitlement: 'schedova_pro',
+08-07 11:55:52.617 11188 32322 I ReactNativeJS:   entitlement_source: 'revenuecat',
+08-07 11:55:52.617 11188 32322 I ReactNativeJS:   entitlement_expires_at: null,
+08-07 11:55:52.617 11188 32322 I ReactNativeJS:   updated_at: '2026-08-04T00:47:00.892+00:00' }
+08-07 11:55:52.617 11188 32322 I ReactNativeJS: 'RevenueCat customer info entitlement result', { entitlement: 'schedova_pro',
+08-07 11:55:52.617 11188 32322 I ReactNativeJS:   active: false,
+08-07 11:55:52.617 11188 32322 I ReactNativeJS:   explicitInactiveRevenueCatEntitlement: false,
+08-07 11:55:52.617 11188 32322 I ReactNativeJS:   productIdentifier: null,
+08-07 11:55:52.617 11188 32322 I ReactNativeJS:   expirationDate: null,
+08-07 11:55:52.617 11188 32322 I ReactNativeJS:   willRenew: null,
+08-07 11:55:52.617 11188 32322 I ReactNativeJS:   unsubscribeDetectedAt: null,
+08-07 11:55:52.617 11188 32322 I ReactNativeJS:   billingIssueDetectedAt: null }
+08-07 11:55:52.617 11188 32322 I ReactNativeJS: 'admin lifetime protection skipped downgrade', false
+08-07 11:55:52.618 11188 32322 I ReactNativeJS: 'subscription write requested', { userId: '997dcbb3-902c-4642-b0fe-f5fe15499609' }
+08-07 11:55:52.618 11188 32322 I ReactNativeJS: 'payload before guard', { user_id: '997dcbb3-902c-4642-b0fe-f5fe15499609',
+08-07 11:55:52.618 11188 32322 I ReactNativeJS:   status: 'inactive',
+08-07 11:55:52.618 11188 32322 I ReactNativeJS:   plan: 'free',
+08-07 11:55:52.618 11188 32322 I ReactNativeJS:   current_period_end: null,
+08-07 11:55:52.618 11188 32322 I ReactNativeJS:   entitlement: 'schedova_pro',
+08-07 11:55:52.618 11188 32322 I ReactNativeJS:   entitlement_source: 'revenuecat',
+08-07 11:55:52.618 11188 32322 I ReactNativeJS:   entitlement_expires_at: null,
+08-07 11:55:52.618 11188 32322 I ReactNativeJS:   updated_at: '2026-08-07T15:55:52.617Z' }
+08-07 11:55:52.618 11188 32322 I ReactNativeJS: 'final payload written', { user_id: '997dcbb3-902c-4642-b0fe-f5fe15499609',
+08-07 11:55:52.618 11188 32322 I ReactNativeJS:   status: 'inactive',
+08-07 11:55:52.618 11188 32322 I ReactNativeJS:   plan: 'free',
+08-07 11:55:52.618 11188 32322 I ReactNativeJS:   current_period_end: null,
+08-07 11:55:52.618 11188 32322 I ReactNativeJS:   entitlement: 'schedova_pro',
+08-07 11:55:52.618 11188 32322 I ReactNativeJS:   entitlement_source: 'revenuecat',
+08-07 11:55:52.618 11188 32322 I ReactNativeJS:   entitlement_expires_at: null,
+08-07 11:55:52.618 11188 32322 I ReactNativeJS:   updated_at: '2026-08-07T15:55:52.617Z' }
+08-07 11:55:52.670 11188 32322 I ReactNativeJS: [ScreenTiming] {"screen":"dashboard","phase":"supabase-request","durationMs":192.6,"requestCount":6,"renderCount":3,"rowsReturned":1,"request":"GET /rest/v1/services?select=*&user_id=eq.997dcbb3-902c-4642-b0fe-f5fe15499609","status":200}
+08-07 11:55:52.749 11188 32322 I ReactNativeJS: [ScreenTiming] {"screen":"dashboard","phase":"primary-interactive","durationMs":570.4,"requestCount":6,"renderCount":4,"rowsReturned":5}
+08-07 11:55:52.791 11188 32322 I ReactNativeJS: [ScreenTiming] {"screen":"dashboard","phase":"supabase-request","durationMs":217.3,"requestCount":6,"renderCount":4,"rowsReturned":1,"request":"GET /auth/v1/user?","status":200}
+08-07 11:55:52.912 11188 32322 I ReactNativeJS: [ScreenTiming] {"screen":"dashboard","phase":"supabase-request","durationMs":115,"requestCount":8,"renderCount":4,"rowsReturned":0,"request":"POST /rest/v1/user_subscriptions?on_conflict=user_id","status":200}
+08-07 11:55:52.935 11188 32322 I ReactNativeJS: [ScreenTiming] {"screen":"dashboard","phase":"duplicate-request","durationMs":756.4,"requestCount":9,"renderCount":4,"rowsReturned":6,"request":"GET /rest/v1/user_subscriptions?select=status%2Cplan%2Ccurrent_period_end%2Centitlement%2Centitlement_source%2Centitlement_expires_at%2Cupdated_at&user_id=eq.997dcbb3-902c-4642-b0fe-f5fe15499609","repeats":2}
+08-07 11:55:52.936 11188 32322 I ReactNativeJS: [ScreenTiming] {"screen":"dashboard","phase":"supabase-request","durationMs":129.5,"requestCount":9,"renderCount":4,"rowsReturned":1,"request":"GET /rest/v1/user_settings?select=:id&user_id=eq.997dcbb3-902c-4642-b0fe-f5fe15499609","status":200}
+08-07 11:55:53.048 11188 32322 I ReactNativeJS: [ScreenTiming] {"screen":"dashboard","phase":"supabase-request","durationMs":114.8,"requestCount":9,"renderCount":4,"rowsReturned":1,"request":"GET /rest/v1/user_subscriptions?select=status%2Cplan%2Ccurrent_period_end%2Centitlement%2Centitlement_source%2Centitlement_expires_at%2Cupdated_at&user_id=eq.997dcbb3-902c-4642-b0fe-f5fe15499609","status":200}
+08-07 11:55:53.049 11188 32322 I ReactNativeJS: 'row after write', { status: 'inactive',
+08-07 11:55:53.049 11188 32322 I ReactNativeJS:   plan: 'free',
+08-07 11:55:53.049 11188 32322 I ReactNativeJS:   current_period_end: null,
+08-07 11:55:53.049 11188 32322 I ReactNativeJS:   entitlement: 'schedova_pro',
+08-07 11:55:53.049 11188 32322 I ReactNativeJS:   entitlement_source: 'revenuecat',
+08-07 11:55:53.049 11188 32322 I ReactNativeJS:   entitlement_expires_at: null,
+08-07 11:55:53.049 11188 32322 I ReactNativeJS:   updated_at: '2026-08-07T15:55:52.617+00:00' }
+08-07 11:55:53.050 11188 32322 I ReactNativeJS: 'subscription row after sync', { status: 'inactive',
+08-07 11:55:53.050 11188 32322 I ReactNativeJS:   plan: 'free',
+08-07 11:55:53.050 11188 32322 I ReactNativeJS:   current_period_end: null,
+08-07 11:55:53.050 11188 32322 I ReactNativeJS:   entitlement: 'schedova_pro',
+08-07 11:55:53.050 11188 32322 I ReactNativeJS:   entitlement_source: 'revenuecat',
+08-07 11:55:53.050 11188 32322 I ReactNativeJS:   entitlement_expires_at: null,
+08-07 11:55:53.050 11188 32322 I ReactNativeJS:   updated_at: '2026-08-07T15:55:52.617+00:00' }
+08-07 11:55:53.050 11188 32322 I ReactNativeJS: 'computed isPro', false
+08-07 11:55:53.052 11188 32322 I ReactNativeJS: 'Schedova Pro gate', { source: 'revenuecat:init:supabase-sync',
+08-07 11:55:53.052 11188 32322 I ReactNativeJS:   userId: '997dcbb3-902c-4642-b0fe-f5fe15499609',
+08-07 11:55:53.052 11188 32322 I ReactNativeJS:   isPro: null,
+08-07 11:55:53.052 11188 32322 I ReactNativeJS:   subscription: 
+08-07 11:55:53.052 11188 32322 I ReactNativeJS:    { status: 'inactive',
+08-07 11:55:53.052 11188 32322 I ReactNativeJS:      plan: 'free',
+08-07 11:55:53.052 11188 32322 I ReactNativeJS:      current_period_end: null,
+08-07 11:55:53.052 11188 32322 I ReactNativeJS:      entitlement: 'schedova_pro',
+08-07 11:55:53.052 11188 32322 I ReactNativeJS:      entitlement_source: 'revenuecat',
+08-07 11:55:53.052 11188 32322 I ReactNativeJS:      entitlement_expires_at: null },
+08-07 11:55:53.052 11188 32322 I ReactNativeJS:   subscriptionLoaded: false,
+08-07 11:55:53.052 11188 32322 I ReactNativeJS:   revenueCatLoaded: true,
+08-07 11:55:53.052 11188 32322 I ReactNativeJS:   revenueCatIsPro: false,
+08-07 11:55:53.052 11188 32322 I ReactNativeJS:   cachedEntitlementIsPro: false,
+08-07 11:55:53.052 11188 32322 I ReactNativeJS:   resolutionSource: 'entitlement-unresolved',
+08-07 11:55:53.052 11188 32322 I ReactNativeJS:   error: null }
+08-07 11:55:53.182 11188 32322 I ReactNativeJS: [ScreenTiming] {"screen":"dashboard","phase":"supabase-request","durationMs":113.5,"requestCount":10,"renderCount":4,"rowsReturned":1,"request":"GET /rest/v1/user_subscriptions?select=status%2Cplan%2Ccurrent_period_end%2Centitlement%2Centitlement_source%2Centitlement_expires_at&user_id=eq.997dcbb3-902c-4642-b0fe-f5fe15499609","status":200}
+08-07 11:55:53.183 11188 32322 I ReactNativeJS: '[FeatureAccess] Supabase subscription fetched', { userId: '997dcbb3-902c-4642-b0fe-f5fe15499609',
+08-07 11:55:53.183 11188 32322 I ReactNativeJS:   row: 
+08-07 11:55:53.183 11188 32322 I ReactNativeJS:    { status: 'inactive',
+08-07 11:55:53.183 11188 32322 I ReactNativeJS:      plan: 'free',
+08-07 11:55:53.183 11188 32322 I ReactNativeJS:      entitlement: 'schedova_pro',
+08-07 11:55:53.183 11188 32322 I ReactNativeJS:      entitlement_source: 'revenuecat',
+08-07 11:55:53.183 11188 32322 I ReactNativeJS:      entitlement_expires_at: null },
+08-07 11:55:53.183 11188 32322 I ReactNativeJS:   subscriptionLoaded: true,
+08-07 11:55:53.183 11188 32322 I ReactNativeJS:   adminLifetimeAccess: false,
+08-07 11:55:53.183 11188 32322 I ReactNativeJS:   supabaseSubscriptionResult: false }
+08-07 11:55:53.186 11188 32322 I ReactNativeJS: '[FeatureAccess] entitlement resolution', { userId: '997dcbb3-902c-4642-b0fe-f5fe15499609',
+08-07 11:55:53.186 11188 32322 I ReactNativeJS:   authEmail: null,
+08-07 11:55:53.186 11188 32322 I ReactNativeJS:   supabaseSubscriptionRow: 
+08-07 11:55:53.186 11188 32322 I ReactNativeJS:    { status: 'inactive',
+08-07 11:55:53.186 11188 32322 I ReactNativeJS:      plan: 'free',
+08-07 11:55:53.186 11188 32322 I ReactNativeJS:      current_period_end: null,
+08-07 11:55:53.186 11188 32322 I ReactNativeJS:      entitlement: 'schedova_pro',
+08-07 11:55:53.186 11188 32322 I ReactNativeJS:      entitlement_source: 'revenuecat',
+08-07 11:55:53.186 11188 32322 I ReactNativeJS:      entitlement_expires_at: null },
+08-07 11:55:53.186 11188 32322 I ReactNativeJS:   supabaseSubscriptionResult: false,
+08-07 11:55:53.186 11188 32322 I ReactNativeJS:   revenueCatEntitlementResult: false,
+08-07 11:55:53.186 11188 32322 I ReactNativeJS:   cachedEntitlementResult: false,
+08-07 11:55:53.186 11188 32322 I ReactNativeJS:   adminLifetimeAccess: false,
+08-07 11:55:53.186 11188 32322 I ReactNativeJS:   revenueCatStyleAccess: false,
+08-07 11:55:53.186 11188 32322 I ReactNativeJS:   finalSource: 'no-active-entitlement',
+08-07 11:55:53.186 11188 32322 I ReactNativeJS:   finalIsPro: false }
+08-07 11:55:53.186 11188 32322 I ReactNativeJS: 'Schedova Pro gate', { source: 'revenuecat:init:supabase-sync',
+08-07 11:55:53.186 11188 32322 I ReactNativeJS:   userId: '997dcbb3-902c-4642-b0fe-f5fe15499609',
+08-07 11:55:53.186 11188 32322 I ReactNativeJS:   isPro: false,
+08-07 11:55:53.186 11188 32322 I ReactNativeJS:   subscription: 
+08-07 11:55:53.186 11188 32322 I ReactNativeJS:    { status: 'inactive',
+08-07 11:55:53.186 11188 32322 I ReactNativeJS:      plan: 'free',
+08-07 11:55:53.186 11188 32322 I ReactNativeJS:      current_period_end: null,
+08-07 11:55:53.186 11188 32322 I ReactNativeJS:      entitlement: 'schedova_pro',
+08-07 11:55:53.186 11188 32322 I ReactNativeJS:      entitlement_source: 'revenuecat',
+08-07 11:55:53.186 11188 32322 I ReactNativeJS:      entitlement_expires_at: null },
+08-07 11:55:53.186 11188 32322 I ReactNativeJS:   subscriptionLoaded: true,
+08-07 11:55:53.186 11188 32322 I ReactNativeJS:   revenueCatLoaded: true,
+08-07 11:55:53.186 11188 32322 I ReactNativeJS:   revenueCatIsPro: false,
+08-07 11:55:53.186 11188 32322 I ReactNativeJS:   cachedEntitlementIsPro: false,
+08-07 11:55:53.186 11188 32322 I ReactNativeJS:   resolutionSource: 'no-active-entitlement',
+08-07 11:55:53.186 11188 32322 I ReactNativeJS:   error: null }
+08-07 11:55:53.200 11188 32322 I ReactNativeJS: '[RevenueCat] configure called', { configured: true,
+08-07 11:55:53.200 11188 32322 I ReactNativeJS:   hasRequestedAccount: false,
+08-07 11:55:53.200 11188 32322 I ReactNativeJS:   hasConfiguredAccount: true }
+08-07 11:55:53.204 11188 32322 I ReactNativeJS: '[RevenueCat] configure called', { configured: true,
+08-07 11:55:53.204 11188 32322 I ReactNativeJS:   hasRequestedAccount: false,
+08-07 11:55:53.204 11188 32322 I ReactNativeJS:   hasConfiguredAccount: true }
+08-07 11:55:53.216 11188 32322 D ReactNativeJS: [RevenueCat] ?? Vending Offerings from cache
+08-07 11:55:53.218 11188 32322 D ReactNativeJS: [RevenueCat] ?? Checking if cache is stale AppInBackground false
+08-07 11:55:53.270 11188 32322 I ReactNativeJS: '[RevenueCat] Debug status:', { appUserID: '997dcbb3-902c-4642-b0fe-f5fe15499609',
+08-07 11:55:53.270 11188 32322 I ReactNativeJS:   originalAppUserID: '$RCAnonymousID:faecdad9e75448ae9bfa335688f7be00',
+08-07 11:55:53.270 11188 32322 I ReactNativeJS:   isAnonymous: false,
+08-07 11:55:53.270 11188 32322 I ReactNativeJS:   schedovaProActive: false,
+08-07 11:55:53.270 11188 32322 I ReactNativeJS:   activeEntitlementIdentifiers: [],
+08-07 11:55:53.270 11188 32322 I ReactNativeJS:   entitlementDetails: [],
+08-07 11:55:53.270 11188 32322 I ReactNativeJS:   currentOfferingIdentifier: 'default',
+08-07 11:55:53.270 11188 32322 I ReactNativeJS:   sdkKeyPrefix: 'test_',
+08-07 11:55:53.270 11188 32322 I ReactNativeJS:   packages: 
+08-07 11:55:53.270 11188 32322 I ReactNativeJS:    [ { identifier: '$rc_monthly', productId: 'monthly' },
+08-07 11:55:53.270 11188 32322 I ReactNativeJS:      { identifier: '$rc_annual', productId: 'yearly' },
+08-07 11:55:53.270 11188 32322 I ReactNativeJS:      { identifier: '$rc_lifetime', productId: 'lifetime' } ],
+08-07 11:55:53.270 11188 32322 I ReactNativeJS:   fetchedAt: '2026-08-07T15:55:53.268Z',
+08-07 11:55:53.270 11188 32322 I ReactNativeJS:   lastError: null }
+08-07 11:55:53.517 11188 32322 I ReactNativeJS: [ScreenTiming] {"screen":"dashboard","phase":"supabase-request","durationMs":138.5,"requestCount":15,"renderCount":4,"rowsReturned":1,"request":"GET /rest/v1/businesses?select=*&user_id=eq.997dcbb3-902c-4642-b0fe-f5fe15499609&limit=1","status":200}
+08-07 11:55:53.535 11188 32322 I ReactNativeJS: [ScreenTiming] {"screen":"dashboard","phase":"supabase-request","durationMs":152.3,"requestCount":15,"renderCount":4,"rowsReturned":1,"request":"GET /rest/v1/sms_settings?select=id&user_id=eq.997dcbb3-902c-4642-b0fe-f5fe15499609&limit=1","status":200}
+08-07 11:55:53.548 11188 32322 I ReactNativeJS: [ScreenTiming] {"screen":"dashboard","phase":"supabase-request","durationMs":145.5,"requestCount":15,"renderCount":4,"rowsReturned":0,"request":"GET /rest/v1/availability_rules?select=id&user_id=eq.997dcbb3-902c-4642-b0fe-f5fe15499609&limit=1","status":200}
+08-07 11:55:53.549 11188 32322 I ReactNativeJS: [ScreenTiming] {"screen":"dashboard","phase":"supabase-request","durationMs":132.1,"requestCount":15,"renderCount":4,"rowsReturned":0,"request":"GET /rest/v1/message_credit_balances?select=balance%2Ctotal_purchased%2Ctotal_used%2Cupdated_at%2Clast_purchase_at%2Clast_used_at&user_id=eq.997dcbb3-902c-4642-b0fe-f5fe15499609","status":200}
+08-07 11:55:53.633 11188 32322 I ReactNativeJS: [ScreenTiming] {"screen":"dashboard","phase":"supabase-request","durationMs":226.7,"requestCount":15,"renderCount":4,"rowsReturned":0,"request":"GET /rest/v1/sms_message_logs?select=id%2Cappointment_id%2Cbody%2Cmessage_body%2Cstatus%2Cneeds_attention%2Ccreated_at&user_id=eq.997dcbb3-902c-4642-b0fe-f5fe15499609&direction=eq.inbound&appointment_id=in.%2817c702da-0dd1-4a95-b9a1-e3dfbfeafef0%29&order=created_at.desc","status":200}
+08-07 11:55:53.636 11188 32322 I ReactNativeJS: [ScreenTiming] {"screen":"dashboard","phase":"background-refresh-complete","durationMs":1457.3,"requestCount":15,"renderCount":4,"rowsReturned":11}

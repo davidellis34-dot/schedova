@@ -10,8 +10,12 @@ import {
   View,
 } from "react-native";
 import { GestureHandlerRootView } from "react-native-gesture-handler";
-import { SafeAreaProvider } from "react-native-safe-area-context";
+import {
+  SafeAreaProvider,
+  useSafeAreaInsets,
+} from "react-native-safe-area-context";
 import { ProUpgradePromptHost } from "../components/ProUpgradePromptHost";
+import { WarningToast } from "../components/ui";
 import {
   recordAccountTransitionEvent,
   registerAccountScopedCleanup,
@@ -40,11 +44,18 @@ import { getSchedovaBookingRouteParamsFromUrl } from "../lib/schedovaLinks";
 import { useAppTheme } from "../lib/useAppTheme";
 import { ScreenPerformanceBootstrap } from "../lib/screenPerformance";
 import {
+  addPushTokenRefreshListener,
   addClientMessageNotificationListeners,
+  clearPushRegistrationState,
   getLastClientMessageNotificationRoute,
   registerForPushNotifications,
   syncUserTimezone,
 } from "../lib/pushNotifications";
+import {
+  getPushRegistrationState,
+  getPushRegistrationWarning,
+  subscribeToPushRegistrationState,
+} from "../lib/pushRegistrationState";
 
 const IOS_AUTH_STACK_SWITCH_DELAY_MS = 520;
 
@@ -144,18 +155,49 @@ function PushNotificationsBootstrap() {
       return;
     }
 
-    if (!isHydrated || !isAccountReady || !userId) return;
+    if (!isHydrated || !isAccountReady || !userId) {
+      clearPushRegistrationState();
+      return;
+    }
 
-    void syncUserTimezone(userId).catch((error) => {
-      if (__DEV__) {
-        console.log("User timezone sync bootstrap failed", error);
-      }
+    let active = true;
+    const syncPushRegistration = (
+      source: string,
+      devicePushToken?: { data: string; type: string } | null,
+    ) => {
+      void syncUserTimezone(userId).catch((error) => {
+        if (__DEV__) {
+          console.log("User timezone sync bootstrap failed", error);
+        }
+      });
+      void registerForPushNotifications(userId, {
+        devicePushToken,
+        source,
+      }).catch((error) => {
+        if (__DEV__) {
+          console.log("Push registration bootstrap failed", error);
+        }
+      });
+    };
+
+    syncPushRegistration(authStatus === "authenticated" ? "auth-ready" : "startup");
+
+    const appStateListener = AppState.addEventListener("change", (state) => {
+      if (!active || state !== "active") return;
+      syncPushRegistration("app-active");
     });
-    void registerForPushNotifications(userId).catch((error) => {
-      if (__DEV__) {
-        console.log("Push registration bootstrap failed", error);
-      }
-    });
+    const removePushTokenRefreshListener = addPushTokenRefreshListener(
+      (devicePushToken) => {
+        if (!active) return;
+        syncPushRegistration("token-refresh", devicePushToken);
+      },
+    );
+
+    return () => {
+      active = false;
+      appStateListener.remove();
+      removePushTokenRefreshListener();
+    };
   }, [authStatus, isAccountReady, isHydrated, userId]);
 
   useEffect(() => {
@@ -165,9 +207,9 @@ function PushNotificationsBootstrap() {
 
     let active = true;
     const removeListeners = addClientMessageNotificationListeners({
-      onClientMessageTap: () => {
+      onClientMessageTap: (route) => {
         if (!active) return;
-        router.push("/messages" as any);
+        router.push((route || "/messages") as any);
       },
     });
     const unregisterAccountCleanup = registerAccountScopedCleanup(
@@ -262,6 +304,86 @@ function AuthNativeServicesBootstrap() {
   ]);
 
   return null;
+}
+
+function PushRegistrationWarningHost() {
+  const insets = useSafeAreaInsets();
+  const { isAccountReady, isHydrated, userId } = useAuthSession();
+  const [registrationState, setRegistrationState] = useState(
+    getPushRegistrationState(),
+  );
+  const [dismissedAt, setDismissedAt] = useState<string | null>(null);
+
+  useEffect(() => {
+    return subscribeToPushRegistrationState((state) => {
+      setRegistrationState(state);
+    });
+  }, []);
+
+  useEffect(() => {
+    if (!userId) {
+      setDismissedAt(null);
+    }
+  }, [userId]);
+
+  const warning =
+    isHydrated &&
+    isAccountReady &&
+    userId &&
+    registrationState.userId === userId
+      ? getPushRegistrationWarning(registrationState)
+      : null;
+
+  if (!warning || dismissedAt === registrationState.updatedAt) {
+    return null;
+  }
+
+  const actionLabel =
+    warning.action === "open-settings"
+      ? "Open Settings"
+      : warning.action === "retry"
+        ? "Try Again"
+        : null;
+
+  return (
+    <View
+      pointerEvents="box-none"
+      style={[
+        StyleSheet.absoluteFillObject,
+        {
+          zIndex: 950,
+        },
+      ]}
+    >
+      <View
+        pointerEvents="box-none"
+        style={{
+          paddingHorizontal: 16,
+          paddingTop: Math.max(insets.top, 12) + 6,
+        }}
+      >
+        <WarningToast
+          actionLabel={actionLabel}
+          message={warning.message}
+          onAction={
+            warning.action === "open-settings"
+              ? () => {
+                  void Linking.openSettings();
+                }
+              : warning.action === "retry" && userId
+                ? () => {
+                    void registerForPushNotifications(userId, {
+                      source: "warning-retry",
+                    });
+                  }
+                : null
+          }
+          onDismiss={() => setDismissedAt(registrationState.updatedAt)}
+          title={warning.title}
+        />
+      </View>
+    </View>
+  );
 }
 
 async function waitForAuthNavigationWindow() {
@@ -548,6 +670,7 @@ export default function RootLayout() {
             <FeatureAccessBootstrap />
             <ScreenPerformanceBootstrap />
             <PushNotificationsBootstrap />
+            <PushRegistrationWarningHost />
             <AuthNavigationCoordinator />
             <SchedovaDeepLinkHandler />
             <ProUpgradePromptHost />

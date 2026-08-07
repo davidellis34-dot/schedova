@@ -2,6 +2,7 @@ import {
   getMessageSenderDisplayName,
   type MessageSenderUserLike,
 } from "../../../lib/messageSender.ts";
+import { CLIENT_MESSAGE_NOTIFICATION_CHANNEL_ID } from "../../../lib/clientMessageNotifications.ts";
 
 export type JsonObject = Record<string, unknown>;
 
@@ -607,7 +608,15 @@ export async function sendClientReplyPushNotifications(
     .map((row) => asTrimmedString(row.expo_push_token))
     .filter(Boolean);
 
-  if (tokens.length === 0) return;
+  if (tokens.length === 0) {
+    console.log("no push tokens for inbound email reply", {
+      appointmentId: input.appointmentId,
+      clientId: input.clientId,
+      messageId: input.messageId,
+      userId: input.userId,
+    });
+    return;
+  }
 
   const preview = input.messageBody.replace(/\s+/g, " ").trim().slice(0, 110);
   const body = input.clientName ? `${input.clientName}: ${preview}` : preview;
@@ -624,7 +633,7 @@ export async function sendClientReplyPushNotifications(
         title: "New client email",
         body,
         sound: "default",
-        channelId: "client-messages",
+        channelId: CLIENT_MESSAGE_NOTIFICATION_CHANNEL_ID,
         data: {
           type: "client_message",
           messageId: input.messageId,
@@ -634,10 +643,27 @@ export async function sendClientReplyPushNotifications(
         },
       })),
     ),
-  }).catch((pushError) => {
-    console.error("email reply push failed", {
-      userId: input.userId,
-      error: pushError,
+  })
+    .then(async (response) => {
+      const responseText = await response.text();
+      console.log("Expo push response for inbound email reply", {
+        appointmentId: input.appointmentId,
+        clientId: input.clientId,
+        messageId: input.messageId,
+        ok: response.ok,
+        responseBody: responseText,
+        status: response.status,
+        tokenCount: tokens.length,
+        userId: input.userId,
+      });
+    })
+    .catch((pushError) => {
+      console.error("email reply push failed", {
+        appointmentId: input.appointmentId,
+        clientId: input.clientId,
+        messageId: input.messageId,
+        userId: input.userId,
+        error: pushError,
+      });
     });
-  });
 }

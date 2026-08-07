@@ -403,6 +403,7 @@ export default function MessagesScreen() {
     openClientId?: string | string[];
     openClientPhone?: string | string[];
     openClientName?: string | string[];
+    openMessageId?: string | string[];
     openRequestAt?: string | string[];
   }>();
   const { colors, themeName } = useAppTheme();
@@ -461,6 +462,7 @@ export default function MessagesScreen() {
   const openClientId = readRouteParam(routeParams.openClientId).trim();
   const openClientPhone = readRouteParam(routeParams.openClientPhone).trim();
   const openClientName = readRouteParam(routeParams.openClientName).trim();
+  const openMessageId = readRouteParam(routeParams.openMessageId).trim();
   const openRequestAt = readRouteParam(routeParams.openRequestAt).trim();
 
   const isDarkTheme = themeName === "dark" || themeName === "black";
@@ -1268,8 +1270,13 @@ export default function MessagesScreen() {
   );
 
   useEffect(() => {
-    const requestKey = [openRequestAt, openClientId, openClientPhone].join(":");
-    if (!requestKey || !openRequestAt || !openClientId) return;
+    const requestKey = [
+      openRequestAt,
+      openMessageId,
+      openClientId,
+      openClientPhone,
+    ].join(":");
+    if (!requestKey || (!openMessageId && !openClientId)) return;
     if (handledOpenRequestRef.current === requestKey) return;
     if (!clientRepliesAvailable || !isHydrated || !userId || loading) return;
 
@@ -1278,6 +1285,24 @@ export default function MessagesScreen() {
     let cancelled = false;
 
     const openRequestedThread = async () => {
+      const requestedMessage = openMessageId
+        ? messages.find((row) => String(row.id || "").trim() === openMessageId) || null
+        : null;
+      if (requestedMessage) {
+        await openMessage(requestedMessage, {
+          channelFilter:
+            requestedMessage.channel === "email"
+              ? "email"
+              : requestedMessage.channel === "sms"
+                ? "sms"
+                : undefined,
+          sourceMessages: messages,
+        });
+        return;
+      }
+
+      if (!openClientId) return;
+
       const loadedClient = await ensureClientLoaded(openClientId);
       if (cancelled) return;
 
@@ -1319,6 +1344,7 @@ export default function MessagesScreen() {
     openClientId,
     openClientName,
     openClientPhone,
+    openMessageId,
     openMessage,
     openRequestAt,
     userId,

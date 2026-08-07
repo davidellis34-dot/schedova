@@ -1,5 +1,18 @@
-const CLIENT_MESSAGE_TYPE = "client_message";
-const CLIENT_MESSAGE_TITLE = "New client message";
+import {
+  CLIENT_MESSAGE_NOTIFICATION_TITLE,
+  CLIENT_MESSAGE_NOTIFICATION_TYPE,
+} from "./clientMessageNotifications";
+
+export type ClientMessageRoute =
+  | "/messages"
+  | {
+      pathname: "/messages";
+      params: {
+        openClientId?: string;
+        openMessageId?: string;
+        openRequestAt?: string;
+      };
+    };
 
 type NotificationLike = {
   request?: {
@@ -17,8 +30,12 @@ function asRecord(value: unknown): Record<string, unknown> {
     : {};
 }
 
+function asTrimmedString(value: unknown) {
+  return typeof value === "string" ? value.trim() : "";
+}
+
 export function isClientMessageData(data: unknown) {
-  return asRecord(data).type === CLIENT_MESSAGE_TYPE;
+  return asRecord(data).type === CLIENT_MESSAGE_NOTIFICATION_TYPE;
 }
 
 export function isClientMessageNotification(notification: unknown) {
@@ -32,18 +49,47 @@ export function isClientMessageNotification(notification: unknown) {
     isClientMessageData(content?.data) ||
     isClientMessageData(remoteMessage.data) ||
     isClientMessageData(triggerData) ||
-    (content?.title || "").trim() === CLIENT_MESSAGE_TITLE
+    (content?.title || "").trim() === CLIENT_MESSAGE_NOTIFICATION_TITLE
   );
 }
 
 export function getClientMessageRouteFromData(data: unknown) {
   if (!isClientMessageData(data)) return null;
 
-  return "/messages" as const;
+  const source = asRecord(data);
+  const openClientId = asTrimmedString(source.clientId);
+  const openMessageId =
+    asTrimmedString(source.messageId) || asTrimmedString(source.replyId);
+  const openRequestAt =
+    asTrimmedString(source.openRequestAt) || new Date().toISOString();
+
+  if (!openClientId && !openMessageId) {
+    return "/messages" as const;
+  }
+
+  return {
+    pathname: "/messages" as const,
+    params: {
+      ...(openClientId ? { openClientId } : {}),
+      ...(openMessageId ? { openMessageId } : {}),
+      openRequestAt,
+    },
+  } satisfies ClientMessageRoute;
 }
 
 export function getClientMessageRouteFromNotification(notification: unknown) {
   if (!isClientMessageNotification(notification)) return null;
 
-  return "/messages" as const;
+  const item = asRecord(notification) as NotificationLike;
+  const content = item.request?.content;
+  const trigger = asRecord(item.request?.trigger);
+  const remoteMessage = asRecord(trigger.remoteMessage);
+  const triggerData = asRecord(trigger.data);
+
+  return (
+    getClientMessageRouteFromData(content?.data) ||
+    getClientMessageRouteFromData(remoteMessage.data) ||
+    getClientMessageRouteFromData(triggerData) ||
+    ("/messages" as const)
+  );
 }

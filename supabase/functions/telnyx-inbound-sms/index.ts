@@ -3,6 +3,7 @@ import {
   DEFAULT_COUNTRY_REGION,
   normalizePhoneForSms,
 } from "../../../lib/phoneNumbers.ts";
+import { CLIENT_MESSAGE_NOTIFICATION_CHANNEL_ID } from "../../../lib/clientMessageNotifications.ts";
 import {
   INBOUND_SMS_CONTEXT_MESSAGE_TYPES,
   resolveInboundSmsTenantContext,
@@ -371,7 +372,7 @@ async function sendClientReplyPushNotifications(
       title,
       body,
       sound: "default",
-      channelId: "client-messages",
+      channelId: CLIENT_MESSAGE_NOTIFICATION_CHANNEL_ID,
       data: {
         type: CLIENT_MESSAGE_NOTIFICATION_TYPE,
         messageId,

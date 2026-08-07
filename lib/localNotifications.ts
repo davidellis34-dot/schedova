@@ -45,10 +45,10 @@ async function configureNotificationHandler() {
       if (isClientMessageNotification(notification)) {
         emitClientMessageReceived();
         return {
-          shouldShowAlert: false,
-          shouldShowBanner: false,
-          shouldShowList: false,
-          shouldPlaySound: false,
+          shouldShowAlert: true,
+          shouldShowBanner: true,
+          shouldShowList: true,
+          shouldPlaySound: true,
           shouldSetBadge: true,
         };
       }

@@ -11,6 +11,7 @@ export { ProGateCard } from "./ProGateCard";
 export { ScreenHeader } from "./ScreenHeader";
 export { StatusBadge } from "./StatusBadge";
 export { SuccessToast } from "./SuccessToast";
+export { WarningToast } from "./WarningToast";
 export {
   createSchedovaUiTheme,
   getStatusTone,
