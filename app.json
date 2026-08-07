@@ -13,7 +13,7 @@
       "supportsTablet": true,
       "usesAppleSignIn": true,
       "newArchEnabled": true,
-      "buildNumber": "35",
+      "buildNumber": "36",
       "bundleIdentifier": "com.davidellis34.schedova",
       "infoPlist": {
         "ITSAppUsesNonExemptEncryption": false
@@ -28,7 +28,7 @@
         "monochromeImage": "./assets/images/adaptive-icon-monochrome.png"
       },
       "package": "com.davidellis34.schedova",
-      "versionCode": 35
+      "versionCode": 36
     },
     "web": {
       "favicon": "./assets/images/favicon.png"
