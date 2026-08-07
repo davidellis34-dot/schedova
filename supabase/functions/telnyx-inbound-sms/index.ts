@@ -3,26 +3,19 @@ import {
   DEFAULT_COUNTRY_REGION,
   normalizePhoneForSms,
 } from "../../../lib/phoneNumbers.ts";
+import {
+  INBOUND_SMS_CONTEXT_MESSAGE_TYPES,
+  resolveInboundSmsTenantContext,
+  resolveScopedInboundSmsClient,
+  type InboundSmsClientCandidate,
+  type InboundSmsContextCandidate,
+} from "../../../lib/inboundSmsRouting.ts";
 
 type JsonObject = Record<string, unknown>;
 
-type SmsConversationContext = {
-  user_id?: string | null;
-  client_id?: string | null;
-  appointment_id?: string | null;
-  message_type?: string | null;
-  created_at?: string | null;
-};
+type SmsConversationContext = InboundSmsContextCandidate;
 
-type ClientRow = {
-  id?: string | null;
-  user_id?: string | null;
-  name?: string | null;
-  phone?: string | null;
-  updated_at?: string | null;
-  created_at?: string | null;
-  archived_at?: string | null;
-};
+type ClientRow = InboundSmsClientCandidate;
 
 type AppointmentRow = {
   id?: string | null;
@@ -125,30 +118,6 @@ function normalizePhone(value: unknown) {
   return normalizePhoneForSms(raw, DEFAULT_COUNTRY_REGION) || raw;
 }
 
-function digitsOnly(value: unknown) {
-  return asTrimmedString(value).replace(/\D/g, "");
-}
-
-function phoneNumbersMatch(left: unknown, right: unknown) {
-  const normalizedLeft = normalizePhone(left);
-  const normalizedRight = normalizePhone(right);
-
-  if (!normalizedLeft || !normalizedRight) return false;
-  if (normalizedLeft === normalizedRight) return true;
-
-  const leftDigits = digitsOnly(normalizedLeft);
-  const rightDigits = digitsOnly(normalizedRight);
-
-  if (!leftDigits || !rightDigits) return false;
-  if (leftDigits === rightDigits) return true;
-
-  return (
-    leftDigits.length >= 10 &&
-    rightDigits.length >= 10 &&
-    leftDigits.slice(-10) === rightDigits.slice(-10)
-  );
-}
-
 function normalizeTextForMatching(value: string) {
   return value.toLowerCase().replace(/’/g, "'");
 }
@@ -238,17 +207,6 @@ function getConfirmationStatusForReplyIntent(replyIntent: ClientReplyIntent) {
     default:
       return null;
   }
-}
-
-function sortByMostRecentlyUpdated(left: ClientRow, right: ClientRow) {
-  const leftTimestamp = Date.parse(
-    asTrimmedString(left.updated_at || left.created_at) || "1970-01-01T00:00:00.000Z",
-  );
-  const rightTimestamp = Date.parse(
-    asTrimmedString(right.updated_at || right.created_at) || "1970-01-01T00:00:00.000Z",
-  );
-
-  return rightTimestamp - leftTimestamp;
 }
 
 function toIsoTimestamp(value: unknown) {
@@ -394,7 +352,12 @@ async function sendClientReplyPushNotifications(
   );
 
   if (rows.length === 0) {
-    console.log("no push tokens for inbound client reply", { userId });
+    console.log("no push tokens for inbound client reply", {
+      appointmentId,
+      clientId,
+      messageId,
+      userId,
+    });
     return;
   }
 
@@ -433,6 +396,9 @@ async function sendClientReplyPushNotifications(
       };
 
       console.log("Expo push response for inbound reply", {
+        appointmentId,
+        clientId,
+        messageId,
         userId,
         status: response.status,
         ok: response.ok,
@@ -459,6 +425,9 @@ async function sendClientReplyPushNotifications(
       });
     } catch (error) {
       console.error("Expo push send failed for inbound reply", {
+        appointmentId,
+        clientId,
+        messageId,
         userId,
         error,
       });
@@ -466,6 +435,60 @@ async function sendClientReplyPushNotifications(
   }
 
   await removeInvalidPushTokens(serviceClient, userId, invalidTokens);
+}
+
+async function recordUnresolvedInboundSms(
+  serviceClient: any,
+  input: {
+    inbound: ParsedInboundMessage;
+    normalizedFromNumber: string;
+    normalizedToNumber: string;
+    normalizedReplyText: string;
+    routingReason: string;
+    resolvedUserId?: string | null;
+    candidateUserIds?: string[];
+    recentCandidates?: SmsConversationContext[];
+  },
+) {
+  try {
+    const { error } = await serviceClient
+      .schema("private")
+      .from("inbound_sms_manual_reviews")
+      .insert({
+        provider: SMS_PROVIDER,
+        provider_message_id: input.inbound.providerMessageId,
+        event_type: input.inbound.eventType || null,
+        from_number: input.normalizedFromNumber || input.inbound.fromNumberRaw || null,
+        to_number: input.normalizedToNumber || input.inbound.toNumberRaw || null,
+        message_body: input.inbound.messageBody || null,
+        normalized_reply_text: input.normalizedReplyText || null,
+        routing_status: "pending",
+        routing_reason: input.routingReason,
+        resolved_user_id: asTrimmedString(input.resolvedUserId) || null,
+        candidate_user_ids:
+          Array.isArray(input.candidateUserIds) && input.candidateUserIds.length > 0
+            ? input.candidateUserIds
+            : null,
+        candidate_context: Array.isArray(input.recentCandidates)
+          ? input.recentCandidates
+          : [],
+        provider_payload: input.inbound.payload,
+      });
+
+    if (error && error.code !== "23505") {
+      console.error("unresolved inbound sms review insert failed", {
+        error,
+        providerMessageId: input.inbound.providerMessageId,
+        routingReason: input.routingReason,
+      });
+    }
+  } catch (error) {
+    console.error("unresolved inbound sms review insert crashed", {
+      error,
+      providerMessageId: input.inbound.providerMessageId,
+      routingReason: input.routingReason,
+    });
+  }
 }
 
 function parseInboundMessage(body: JsonObject): ParsedInboundMessage {
@@ -572,19 +595,21 @@ Deno.serve(async (req: Request) => {
 
   // TODO: Verify Telnyx webhook signatures before public launch.
   let conversationContext: SmsConversationContext | null = null;
+  let recentContextCandidates: SmsConversationContext[] = [];
+  let contextLookupFailureReason: string | null = null;
+  let clientLookupUserId: string | null = null;
 
   if (normalizedFromNumber && normalizedToNumber) {
-    const { data: contextData, error: contextError } = await serviceClient
+    const { data: contextRows, error: contextError } = await serviceClient
       .from("sms_message_logs")
-      .select("user_id, client_id, appointment_id, message_type, created_at")
+      .select("id, user_id, client_id, appointment_id, message_type, created_at")
       .eq("provider", SMS_PROVIDER)
       .eq("direction", "outbound")
       .eq("from_number", normalizedToNumber)
       .eq("to_number", normalizedFromNumber)
-      .in("message_type", ["confirmation", "reminder", "update"])
+      .in("message_type", [...INBOUND_SMS_CONTEXT_MESSAGE_TYPES])
       .order("created_at", { ascending: false })
-      .limit(1)
-      .maybeSingle();
+      .limit(5);
 
     if (contextError) {
       console.error("conversation context lookup failed", {
@@ -592,28 +617,60 @@ Deno.serve(async (req: Request) => {
         fromNumber: normalizedFromNumber,
         toNumber: normalizedToNumber,
       });
+      contextLookupFailureReason = "context_lookup_failed";
     } else {
-      conversationContext = (contextData || null) as SmsConversationContext | null;
+      recentContextCandidates = ((contextRows || []) as SmsConversationContext[]).filter(
+        Boolean,
+      );
+      const contextResolution = resolveInboundSmsTenantContext(
+        recentContextCandidates,
+      );
+
+      if (contextResolution.status === "resolved") {
+        conversationContext = contextResolution.context;
+        clientLookupUserId = contextResolution.userId;
+      } else {
+        contextLookupFailureReason = contextResolution.reason;
+      }
     }
   }
 
   let matchedClient: ClientRow | null = null;
   let matchedAppointment: AppointmentRow | null = null;
+  let clientMatchReason: string | null = null;
   let appointmentMatchReason: string | null = null;
-  let clientLookupUserId = asTrimmedString(conversationContext?.user_id) || null;
+
+  if (!clientLookupUserId) {
+    await recordUnresolvedInboundSms(serviceClient, {
+      inbound,
+      normalizedFromNumber,
+      normalizedToNumber,
+      normalizedReplyText,
+      routingReason: contextLookupFailureReason || "no_recent_outbound_context",
+      candidateUserIds: Array.from(
+        new Set(
+          recentContextCandidates
+            .map((candidate) => asTrimmedString(candidate?.user_id))
+            .filter(Boolean),
+        ),
+      ),
+      recentCandidates: recentContextCandidates,
+    });
+    console.error("unable to determine user for inbound sms", {
+      fromNumber: normalizedFromNumber || inbound.fromNumberRaw,
+      toNumber: normalizedToNumber || inbound.toNumberRaw,
+      providerMessageId: inbound.providerMessageId,
+      routingReason: contextLookupFailureReason || "no_recent_outbound_context",
+    });
+    return jsonResponse({ ok: true, unresolved: true });
+  }
 
   {
-    let clientQuery = serviceClient
+    const { data: clientRows, error: clientError } = await serviceClient
       .from("clients")
       .select("*")
-      .is("archived_at", null)
-      .not("phone", "is", null);
-
-    if (clientLookupUserId) {
-      clientQuery = clientQuery.eq("user_id", clientLookupUserId);
-    }
-
-    const { data: clientRows, error: clientError } = await clientQuery;
+      .eq("user_id", clientLookupUserId)
+      .is("archived_at", null);
 
     if (clientError) {
       console.error("client lookup failed", {
@@ -622,25 +679,29 @@ Deno.serve(async (req: Request) => {
         scopedUserId: clientLookupUserId,
       });
     } else {
-      const matchingClients = ((clientRows || []) as ClientRow[])
-        .filter((row) => phoneNumbersMatch(row.phone, normalizedFromNumber))
-        .sort(sortByMostRecentlyUpdated);
+      const clientResolution = resolveScopedInboundSmsClient({
+        tenantUserId: clientLookupUserId,
+        contextClientId: asTrimmedString(conversationContext?.client_id) || null,
+        normalizedFromNumber,
+        clientRows: (clientRows || []) as ClientRow[],
+      });
 
-      matchedClient = matchingClients[0] || null;
-      clientLookupUserId =
-        asTrimmedString(matchedClient?.user_id) || clientLookupUserId;
+      matchedClient = (clientResolution.client || null) as ClientRow | null;
+      clientMatchReason = clientResolution.reason;
     }
   }
 
   console.log("matched client", {
     matched: Boolean(matchedClient?.id),
     clientId: matchedClient?.id || null,
-    userId: matchedClient?.user_id || clientLookupUserId,
+    userId: clientLookupUserId,
     phone: matchedClient?.phone || null,
+    matchReason: clientMatchReason,
   });
 
   const conversationAppointmentId =
     asTrimmedString(conversationContext?.appointment_id) || null;
+  const hasConversationAppointmentId = Boolean(conversationAppointmentId);
 
   if (conversationAppointmentId && clientLookupUserId) {
     const { data: contextAppointment, error: contextAppointmentError } =
@@ -659,14 +720,17 @@ Deno.serve(async (req: Request) => {
         appointmentId: conversationAppointmentId,
         userId: clientLookupUserId,
       });
+      appointmentMatchReason = "context_appointment_lookup_failed";
     } else if (contextAppointment) {
       matchedAppointment = contextAppointment as AppointmentRow;
       appointmentMatchReason = "matched_recent_outbound_sms_thread";
+    } else {
+      appointmentMatchReason = "context_appointment_not_found";
     }
   }
 
   if (matchedClient?.id && clientLookupUserId) {
-    if (!matchedAppointment) {
+    if (!matchedAppointment && !hasConversationAppointmentId) {
       const { data: appointmentRows, error: appointmentError } = await serviceClient
         .from("appointments")
         .select(
@@ -694,8 +758,10 @@ Deno.serve(async (req: Request) => {
     }
   } else if (!matchedAppointment) {
     appointmentMatchReason = matchedClient?.id
-      ? "missing_user_for_client"
-      : "no_matching_client";
+      ? appointmentMatchReason || "missing_user_for_client"
+      : clientMatchReason === "no_scoped_phone_match"
+        ? "no_matching_client_in_tenant"
+        : appointmentMatchReason || "no_matching_client";
   }
 
   console.log("matched appointment", {
