@@ -34,6 +34,7 @@ import {
   getAuthRouteKey,
   resolveAuthenticatedAppRoute,
 } from "../lib/authRouting";
+import { AnalyticsProvider } from "../lib/analytics";
 import {
   canStayOnAuthenticatedRoute,
   requiresInitialSetupGate,
@@ -678,86 +679,88 @@ function SchedovaDeepLinkHandler() {
 export default function RootLayout() {
   return (
     <AuthSessionProvider>
-      <GestureHandlerRootView style={{ flex: 1 }}>
-        <SafeAreaProvider>
-          <RevenueCatBootstrap>
-            <AuthNativeTransitionBootstrap />
-            <AuthNativeServicesBootstrap />
-            <FeatureAccessBootstrap />
-            <ScreenPerformanceBootstrap />
-            <PushNotificationsBootstrap />
-            <PushRegistrationWarningHost />
-            <AuthNavigationCoordinator />
-            <SchedovaDeepLinkHandler />
-            <ProUpgradePromptHost />
-            <Stack
-              screenOptions={{
-                animation: Platform.OS === "ios" ? "none" : undefined,
-                freezeOnBlur: false,
-                headerShown: false,
-              }}
-            >
-              <Stack.Screen name="dashboard" options={{ headerShown: false }} />
-              <Stack.Screen name="demo-data" options={{ headerShown: false }} />
-              <Stack.Screen name="index" options={{ headerShown: false }} />
-              <Stack.Screen name="login" options={{ headerShown: false }} />
-              <Stack.Screen name="walkthrough" options={{ headerShown: false }} />
-              <Stack.Screen name="preview" options={{ headerShown: false }} />
-              <Stack.Screen
-                name="reset-password"
-                options={{ headerShown: false }}
-              />
-              <Stack.Screen
-                name="book-appointment"
-                options={{ headerShown: false }}
-              />
-              <Stack.Screen name="book" options={{ headerShown: false }} />
-              <Stack.Screen
-                name="calendar-view"
-                options={{ headerShown: false }}
-              />
-              <Stack.Screen name="clients" options={{ headerShown: false }} />
-              <Stack.Screen name="messages" options={{ headerShown: false }} />
-              <Stack.Screen
-                name="smart-reminders"
-                options={{ headerShown: false }}
-              />
-              <Stack.Screen
-                name="message-templates"
-                options={{ headerShown: false }}
-              />
-              <Stack.Screen
-                name="settings/index"
-                options={{ headerShown: false }}
-              />
-              <Stack.Screen
-                name="settings/change-password"
-                options={{ headerShown: false }}
-              />
-              <Stack.Screen
-                name="settings/feedback"
-                options={{ headerShown: false }}
-              />
-              <Stack.Screen
-                name="settings/qa-tools"
-                options={{ headerShown: false }}
-              />
-              <Stack.Screen
-                name="settings/message-templates"
-                options={{ headerShown: false }}
-              />
-              <Stack.Screen
-                name="settings/message-packs"
-                options={{ headerShown: false }}
-              />
-              <Stack.Screen
-                name="settings/sms"
-                options={{ headerShown: false }}
-              />
-            </Stack>
-          </RevenueCatBootstrap>
-        </SafeAreaProvider>
-      </GestureHandlerRootView>
+      <AnalyticsProvider>
+        <GestureHandlerRootView style={{ flex: 1 }}>
+          <SafeAreaProvider>
+            <RevenueCatBootstrap>
+              <AuthNativeTransitionBootstrap />
+              <AuthNativeServicesBootstrap />
+              <FeatureAccessBootstrap />
+              <ScreenPerformanceBootstrap />
+              <PushNotificationsBootstrap />
+              <PushRegistrationWarningHost />
+              <AuthNavigationCoordinator />
+              <SchedovaDeepLinkHandler />
+              <ProUpgradePromptHost />
+              <Stack
+                screenOptions={{
+                  animation: Platform.OS === "ios" ? "none" : undefined,
+                  freezeOnBlur: false,
+                  headerShown: false,
+                }}
+              >
+                <Stack.Screen name="dashboard" options={{ headerShown: false }} />
+                <Stack.Screen name="demo-data" options={{ headerShown: false }} />
+                <Stack.Screen name="index" options={{ headerShown: false }} />
+                <Stack.Screen name="login" options={{ headerShown: false }} />
+                <Stack.Screen name="walkthrough" options={{ headerShown: false }} />
+                <Stack.Screen name="preview" options={{ headerShown: false }} />
+                <Stack.Screen
+                  name="reset-password"
+                  options={{ headerShown: false }}
+                />
+                <Stack.Screen
+                  name="book-appointment"
+                  options={{ headerShown: false }}
+                />
+                <Stack.Screen name="book" options={{ headerShown: false }} />
+                <Stack.Screen
+                  name="calendar-view"
+                  options={{ headerShown: false }}
+                />
+                <Stack.Screen name="clients" options={{ headerShown: false }} />
+                <Stack.Screen name="messages" options={{ headerShown: false }} />
+                <Stack.Screen
+                  name="smart-reminders"
+                  options={{ headerShown: false }}
+                />
+                <Stack.Screen
+                  name="message-templates"
+                  options={{ headerShown: false }}
+                />
+                <Stack.Screen
+                  name="settings/index"
+                  options={{ headerShown: false }}
+                />
+                <Stack.Screen
+                  name="settings/change-password"
+                  options={{ headerShown: false }}
+                />
+                <Stack.Screen
+                  name="settings/feedback"
+                  options={{ headerShown: false }}
+                />
+                <Stack.Screen
+                  name="settings/qa-tools"
+                  options={{ headerShown: false }}
+                />
+                <Stack.Screen
+                  name="settings/message-templates"
+                  options={{ headerShown: false }}
+                />
+                <Stack.Screen
+                  name="settings/message-packs"
+                  options={{ headerShown: false }}
+                />
+                <Stack.Screen
+                  name="settings/sms"
+                  options={{ headerShown: false }}
+                />
+              </Stack>
+            </RevenueCatBootstrap>
+          </SafeAreaProvider>
+        </GestureHandlerRootView>
+      </AnalyticsProvider>
     </AuthSessionProvider>
   );
 }

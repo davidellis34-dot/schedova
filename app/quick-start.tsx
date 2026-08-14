@@ -53,6 +53,7 @@ export default function QuickStartScreen() {
   const { colors } = useAppTheme();
   const { isAccountReady, userId } = useAuthSession();
   const flowViewedRef = useRef(false);
+  const promptViewedRef = useRef(false);
   const successViewedRef = useRef(false);
   const [loading, setLoading] = useState(true);
   const [saving, setSaving] = useState(false);
@@ -154,6 +155,10 @@ export default function QuickStartScreen() {
           flowViewedRef.current = true;
           trackAnalyticsEvent("first_booking_flow_opened");
         }
+        if (!promptViewedRef.current) {
+          promptViewedRef.current = true;
+          trackAnalyticsEvent("first_booking_prompt_viewed");
+        }
       } catch (error) {
         console.log("[QuickStart] initial load failed", error);
       } finally {
@@ -252,6 +257,9 @@ export default function QuickStartScreen() {
   }
 
   function openDashboard() {
+    if (!isSuccessStage) {
+      trackAnalyticsEvent("first_booking_prompt_skipped");
+    }
     router.replace("/dashboard" as any);
   }
 

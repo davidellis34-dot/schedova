@@ -54,6 +54,7 @@ import {
   recordScreenBackgroundRefreshComplete,
   useManualScreenInteractiveTiming,
 } from "../lib/screenPerformance";
+import { useTrackAnalyticsScreen } from "../lib/analytics";
 import { supabase } from "../lib/supabase";
 import { getUSHolidaysForYears, type USHoliday } from "../lib/usHolidays";
 import { useAppTheme } from "../lib/useAppTheme";
@@ -890,6 +891,7 @@ function hourToTimeText(hour: number) {
 export default function CalendarView() {
   const router = useRouter();
   useManualScreenInteractiveTiming("calendar-view");
+  useTrackAnalyticsScreen("calendar_viewed");
   const { colors, themeName } = useAppTheme();
   const { userId } = useAuthSession();
   useFeatureAccess();

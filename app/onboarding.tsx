@@ -101,7 +101,6 @@ export default function OnboardingScreen() {
   useEffect(() => {
     void loadDraft();
   }, [loadDraft]);
-
   async function updateDraft(update: Partial<OnboardingDraft>) {
     if (!userId) return null;
 

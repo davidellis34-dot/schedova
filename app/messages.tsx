@@ -35,6 +35,7 @@ import { sendManualClientEmail } from "../lib/appointmentEmail";
 import { sendManualClientSms } from "../lib/appointmentSms";
 import { registerAccountScopedCleanup } from "../lib/accountTransition";
 import { useAuthSession } from "../lib/authSession";
+import { useTrackAnalyticsScreen } from "../lib/analytics";
 import {
   getConversationHeaderActionOutcome,
   getAndroidKeyboardFallbackInset,
@@ -408,6 +409,7 @@ export default function MessagesScreen() {
   }>();
   const { colors, themeName } = useAppTheme();
   const { authStatus, isHydrated, userId } = useAuthSession();
+  useTrackAnalyticsScreen("messages_viewed");
   const featureAccess = useFeatureAccess();
   const smsBalance = useSmsBalance({
     userId,

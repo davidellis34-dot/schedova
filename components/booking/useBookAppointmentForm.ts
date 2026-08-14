@@ -64,7 +64,10 @@ import { settleActiveTextInput } from "../../lib/settleTextInputs";
 import { supabase } from "../../lib/supabase";
 import { useTrackedTextInputValue } from "../../lib/textInputDraft";
 import { useAuthSession } from "../../lib/authSession";
-import { trackAnalyticsEvent } from "../../lib/analytics";
+import {
+  trackAnalyticsEvent,
+  trackAppointmentCreated,
+} from "../../lib/analytics";
 import {
   blockTitleFor,
   calculateEndTime,
@@ -1528,7 +1531,6 @@ export function useBookAppointmentForm({
 
       logAppointmentSaveCheckpoint("appointment save success");
       if (entryType === "appointment" && isFirstBookingActivation && !isEditMode) {
-        trackAnalyticsEvent("first_appointment_created");
         trackAnalyticsEvent("first_booking_save_completed");
       }
       emitSaveNotice(
@@ -1714,6 +1716,30 @@ export function useBookAppointmentForm({
     }
 
     return true;
+  }
+
+  async function getExistingAppointmentCountForAnalytics(
+    currentUserId: string,
+  ) {
+    try {
+      const { count, error } = await supabase
+        .from("appointments")
+        .select("id", { count: "exact", head: true })
+        .eq("user_id", currentUserId);
+
+      if (error) {
+        logSupabaseSaveError("appointments.analyticsCount", error);
+        return null;
+      }
+
+      return typeof count === "number" ? count : 0;
+    } catch (error) {
+      logSaveContext("ANALYTICS COUNT ERROR", {
+        errorMessage: getUnknownErrorMessage(error),
+        errorCode: getUnknownErrorCode(error),
+      });
+      return null;
+    }
   }
 
   async function getAvailabilityRulesForSave(
@@ -2583,6 +2609,11 @@ export function useBookAppointmentForm({
         },
       );
 
+    const existingAppointmentCount =
+      !isEditMode && uniqueAppointments.length > 0
+        ? await getExistingAppointmentCountForAnalytics(currentUserId)
+        : null;
+
     const attemptedInsertWithDeliveryFlags =
       appointmentDeliveryFlagsSupportedRef.current !== false;
     let { data: insertedAppointments, error } = await runAppointmentInsert(
@@ -2629,6 +2660,12 @@ export function useBookAppointmentForm({
 
     const createdAppointments = (insertedAppointments ||
       []) as SavedAppointmentForSideEffects[];
+    if (existingAppointmentCount !== null && createdAppointments.length > 0) {
+      trackAppointmentCreated(
+        existingAppointmentCount,
+        createdAppointments.length,
+      );
+    }
     const createdAppointmentIdsByKey = new Map(
       createdAppointments.map((appointment) => [
         `${appointment.appointment_date}|${appointment.appointment_time}`,
