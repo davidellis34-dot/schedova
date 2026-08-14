@@ -22,12 +22,14 @@ import { supabase } from "../lib/supabase";
 import { useTrackedTextInputValue } from "../lib/textInputDraft";
 import { useAppTheme } from "../lib/useAppTheme";
 import { trackAnalyticsEvent } from "../lib/analytics";
+import { ONBOARDING_BOOK_APPOINTMENT_SETUP_FLOW } from "../lib/initialSetupRouting";
 import {
   buildSkippedOnboardingBusinessPayload,
   getOnboardingBusinessValidationError,
   resolveOnboardingResumeStep,
   shouldCreateOnboardingRecord,
 } from "../lib/onboardingFlow";
+import { allowSetupFlowRouteAccess } from "../lib/setupFlowRouteAccess";
 
 const STEPS = [
   "Business",
@@ -466,6 +468,12 @@ export default function OnboardingScreen() {
     }
 
     void updateDraft({ step: 3 });
+    allowSetupFlowRouteAccess({
+      userId,
+      pathname: "/book-appointment",
+      returnTo: "/onboarding",
+      setupFlow: ONBOARDING_BOOK_APPOINTMENT_SETUP_FLOW,
+    });
     router.push({
       pathname: "/book-appointment",
       params: {
@@ -473,6 +481,7 @@ export default function OnboardingScreen() {
         serviceId: savedService.id,
         appointmentDate: todayDate(),
         returnTo: "/onboarding",
+        setupFlow: ONBOARDING_BOOK_APPOINTMENT_SETUP_FLOW,
       },
     } as any);
   }

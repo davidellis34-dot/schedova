@@ -1,4 +1,9 @@
-import { Stack, useRouter, useSegments } from "expo-router";
+import {
+  Stack,
+  useGlobalSearchParams,
+  useRouter,
+  useSegments,
+} from "expo-router";
 import { useEffect, useRef, useState, type ReactNode } from "react";
 import {
   ActivityIndicator,
@@ -30,7 +35,15 @@ import {
   getAuthRouteKey,
   resolveAuthenticatedAppRoute,
 } from "../lib/authRouting";
-import { requiresInitialSetupGate } from "../lib/initialSetupRouting";
+import {
+  canStayOnInitialSetupChildRoute,
+  ONBOARDING_BOOK_APPOINTMENT_SETUP_FLOW,
+  requiresInitialSetupGate,
+} from "../lib/initialSetupRouting";
+import {
+  hasSetupFlowRouteAccess,
+  revokeSetupFlowRouteAccess,
+} from "../lib/setupFlowRouteAccess";
 import {
   clearFeatureAccess,
   refreshFeatureAccess,
@@ -58,6 +71,14 @@ import {
 } from "../lib/pushRegistrationState";
 
 const IOS_AUTH_STACK_SWITCH_DELAY_MS = 520;
+
+function routeParam(value: string | string[] | undefined) {
+  if (Array.isArray(value)) {
+    return value[0] || "";
+  }
+
+  return typeof value === "string" ? value : "";
+}
 
 function AuthTransitionScreen({ message }: { message: string }) {
   const { colors } = useAppTheme();
@@ -402,7 +423,14 @@ async function waitForAuthNavigationWindow() {
 function AuthNavigationCoordinator() {
   const router = useRouter();
   const segments = useSegments();
+  const params = useGlobalSearchParams<{
+    returnTo?: string | string[];
+    setupFlow?: string | string[];
+  }>();
   const routeKey = segments.join("/");
+  const currentPathname = segments[0] ? `/${segments[0]}` : "/";
+  const currentReturnTo = routeParam(params.returnTo) || null;
+  const currentSetupFlow = routeParam(params.setupFlow) || null;
   const {
     authStatus,
     authTransitionState,
@@ -434,7 +462,12 @@ function AuthNavigationCoordinator() {
   useEffect(() => {
     pendingTargetRef.current = null;
     setBridgeMessage(null);
-  }, [routeKey]);
+
+    const activeUserId = latestAuthenticatedUserIdRef.current ?? userId ?? null;
+    if (segments[0] !== "book-appointment" && activeUserId) {
+      revokeSetupFlowRouteAccess(activeUserId);
+    }
+  }, [routeKey, segments, userId]);
 
   useEffect(() => {
     const firstSegment = segments[0];
@@ -562,6 +595,23 @@ function AuthNavigationCoordinator() {
             return;
           }
 
+          const canStayOnChildRoute = canStayOnInitialSetupChildRoute({
+            currentPathname,
+            hasExplicitAccess: hasSetupFlowRouteAccess({
+              userId,
+              pathname: "/book-appointment",
+              returnTo: "/onboarding",
+              setupFlow: ONBOARDING_BOOK_APPOINTMENT_SETUP_FLOW,
+            }),
+            returnTo: currentReturnTo,
+            setupFlow: currentSetupFlow,
+            unresolvedSetupRoute: targetRoute,
+          });
+
+          if (canStayOnChildRoute) {
+            return;
+          }
+
           if (!isAuthEntryRoute && !requiresInitialSetupGate(targetRoute)) {
             return;
           }
@@ -587,6 +637,9 @@ function AuthNavigationCoordinator() {
     authTransitionState,
     isAccountReady,
     isHydrated,
+    currentPathname,
+    currentReturnTo,
+    currentSetupFlow,
     routeKey,
     router,
     segments,
