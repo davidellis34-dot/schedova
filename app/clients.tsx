@@ -212,6 +212,10 @@ export default function ClientsScreen() {
     router.push("/add-client" as any);
   }
 
+  function openManageClients() {
+    router.push("/manage-clients" as any);
+  }
+
   function toggleSelectionMode() {
     setSelectionMode((current) => {
       if (current) setSelectedClientIds([]);
@@ -617,6 +621,12 @@ export default function ClientsScreen() {
         onPress={() => {
           void openAddClient();
         }}
+        style={{ marginBottom: 14 }}
+      />
+      <AppButton
+        title="Manage Clients"
+        variant="secondary"
+        onPress={openManageClients}
         style={{ marginBottom: 14 }}
       />
 
