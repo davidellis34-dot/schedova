@@ -1,5 +1,5 @@
 import { Ionicons } from "@expo/vector-icons";
-import { useRouter } from "expo-router";
+import { useLocalSearchParams, useRouter } from "expo-router";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import {
   ActivityIndicator,
@@ -12,88 +12,48 @@ import {
 } from "react-native";
 
 import { DatePickerField } from "../components/booking/DatePickerField";
-import { TimeDropdown } from "../components/booking/TimeDropdown";
+import { DurationStepper } from "../components/booking/DurationStepper";
 import { todayIso } from "../components/booking/bookingUtils";
+import { TimeDropdown } from "../components/booking/TimeDropdown";
 import type { ThemeColors } from "../components/booking/types";
 import { AppButton, AppCard, AppScreen, AppTextInput } from "../components/ui";
 import { trackAnalyticsEvent } from "../lib/analytics";
-import { emitAppointmentUpserted } from "../lib/appointmentEvents";
 import { useAuthSession } from "../lib/authSession";
 import type { CalendarIntervalMinutes } from "../lib/calendarPreferences";
 import {
-  markFirstBookingActivationCompleted,
-  markFirstBookingActivationDismissed,
-} from "../lib/firstBookingActivation";
-import {
-  getOnboardingState,
-  markOnboardingComplete,
-  markOnboardingSkipped,
-  saveOnboardingState,
-} from "../lib/onboarding";
-import {
-  QuickStartBookingError,
-  ensureQuickStartBusinessProfile,
   loadQuickStartBooking,
   normalizeQuickStartId,
+  prepareQuickStartBooking,
   quickStartNumber,
-  saveQuickStartBooking,
+  QuickStartBookingError,
   type QuickStartClient,
   type QuickStartService,
 } from "../lib/quickStartBooking";
-import { emitSaveNotice } from "../lib/saveNoticeEvents";
 import { settleActiveTextInput } from "../lib/settleTextInputs";
 import { useAppTheme } from "../lib/useAppTheme";
 
-const DURATION_OPTIONS = [30, 45, 60, 90] as const;
 const isTablet = Dimensions.get("window").width >= 768;
 
-type SavedBooking = {
-  clientId: string;
-  clientName: string;
-  serviceId: string;
-  serviceName: string;
-  appointmentDate: string;
-  appointmentTime: string;
+type QuickStartParams = {
+  stage?: string | string[];
+  clientId?: string | string[];
+  serviceId?: string | string[];
+  appointmentDate?: string | string[];
+  appointmentTime?: string | string[];
 };
 
-function displayDate(value: string) {
-  const date = new Date(`${value}T12:00:00`);
-  if (Number.isNaN(date.getTime())) return value;
-
-  return date.toLocaleDateString(undefined, {
-    weekday: "short",
-    month: "short",
-    day: "numeric",
-  });
-}
-
-function displayTime(value: string) {
-  const [hoursText, minutesText = "00"] = value.slice(0, 5).split(":");
-  const hours = Number(hoursText);
-  const minutes = Number(minutesText);
-  if (!Number.isFinite(hours) || !Number.isFinite(minutes)) return value;
-
-  const date = new Date();
-  date.setHours(hours, minutes, 0, 0);
-  return date.toLocaleTimeString(undefined, {
-    hour: "numeric",
-    minute: "2-digit",
-  });
-}
-
-function clientLabel(client: QuickStartClient) {
-  return String(client.name || client.phone || client.email || "Client");
-}
-
-function serviceLabel(service: QuickStartService) {
-  return String(service.name || "Service");
+function routeParam(value: string | string[] | undefined) {
+  if (Array.isArray(value)) return value[0] || "";
+  return typeof value === "string" ? value : "";
 }
 
 export default function QuickStartScreen() {
   const router = useRouter();
+  const params = useLocalSearchParams<QuickStartParams>();
   const { colors } = useAppTheme();
   const { isAccountReady, userId } = useAuthSession();
-  const viewedRef = useRef(false);
+  const flowViewedRef = useRef(false);
+  const successViewedRef = useRef(false);
   const [loading, setLoading] = useState(true);
   const [saving, setSaving] = useState(false);
   const [clients, setClients] = useState<QuickStartClient[]>([]);
@@ -110,7 +70,13 @@ export default function QuickStartScreen() {
   const [calendarInterval, setCalendarInterval] =
     useState<CalendarIntervalMinutes>(30);
   const [use24Hour, setUse24Hour] = useState(false);
-  const [savedBooking, setSavedBooking] = useState<SavedBooking | null>(null);
+
+  const stage = routeParam(params.stage);
+  const isSuccessStage = stage === "success";
+  const successClientId = normalizeQuickStartId(routeParam(params.clientId));
+  const successServiceId = normalizeQuickStartId(routeParam(params.serviceId));
+  const successAppointmentDate = routeParam(params.appointmentDate);
+  const successAppointmentTime = routeParam(params.appointmentTime);
 
   const bookingColors = useMemo<ThemeColors>(
     () => ({
@@ -123,16 +89,27 @@ export default function QuickStartScreen() {
     }),
     [colors],
   );
+  const selectedServiceDefaultMinutes = useMemo(() => {
+    const selectedService = services.find(
+      (service) =>
+        normalizeQuickStartId(service.id) ===
+        normalizeQuickStartId(selectedServiceId),
+    );
+
+    return selectedService
+      ? Math.max(5, quickStartNumber(selectedService.duration_minutes, 30))
+      : 30;
+  }, [selectedServiceId, services]);
 
   const applyClient = useCallback((client: QuickStartClient) => {
     setSelectedClientId(normalizeQuickStartId(client.id));
-    setClientName(clientLabel(client));
+    setClientName(String(client.name || ""));
     setClientPhone(String(client.phone || ""));
   }, []);
 
   const applyService = useCallback((service: QuickStartService) => {
     setSelectedServiceId(normalizeQuickStartId(service.id));
-    setServiceName(serviceLabel(service));
+    setServiceName(String(service.name || ""));
     setServicePrice(
       service.price === null || service.price === undefined
         ? ""
@@ -149,24 +126,17 @@ export default function QuickStartScreen() {
     let active = true;
 
     void (async () => {
+      if (isSuccessStage) {
+        if (active) setLoading(false);
+        return;
+      }
+
       try {
-        const [loaded, onboardingState] = await Promise.all([
-          loadQuickStartBooking(userId),
-          getOnboardingState(userId),
-        ]);
+        const loaded = await loadQuickStartBooking(userId);
         if (!active) return;
 
         if (loaded.hasAppointment) {
-          try {
-            if (!onboardingState.completed) {
-              await markOnboardingComplete(userId);
-              trackAnalyticsEvent("onboarding_completed");
-            }
-            await markFirstBookingActivationCompleted(userId);
-          } catch (error) {
-            console.log("[QuickStart] existing appointment repair failed", error);
-          }
-          if (active) router.replace("/dashboard" as any);
+          router.replace("/dashboard" as any);
           return;
         }
 
@@ -180,13 +150,9 @@ export default function QuickStartScreen() {
         if (loaded.clients.length === 1) applyClient(loaded.clients[0]);
         if (loaded.services.length === 1) applyService(loaded.services[0]);
 
-        if (!onboardingState.started) {
-          await saveOnboardingState(userId, { started: true });
-          trackAnalyticsEvent("onboarding_started");
-        }
-        if (!viewedRef.current) {
-          viewedRef.current = true;
-          trackAnalyticsEvent("first_booking_prompt_viewed");
+        if (!flowViewedRef.current) {
+          flowViewedRef.current = true;
+          trackAnalyticsEvent("first_booking_flow_opened");
         }
       } catch (error) {
         console.log("[QuickStart] initial load failed", error);
@@ -198,17 +164,25 @@ export default function QuickStartScreen() {
     return () => {
       active = false;
     };
-  }, [applyClient, applyService, isAccountReady, router, userId]);
+  }, [applyClient, applyService, isAccountReady, isSuccessStage, router, userId]);
 
-  async function save() {
+  useEffect(() => {
+    if (!isSuccessStage || !isAccountReady) return;
+    if (successViewedRef.current) return;
+
+    successViewedRef.current = true;
+    trackAnalyticsEvent("first_booking_success_viewed");
+  }, [isAccountReady, isSuccessStage]);
+
+  async function continueToBooking() {
     if (saving) return;
 
     await settleActiveTextInput();
     setSaving(true);
-    trackAnalyticsEvent("first_booking_save_started");
+    trackAnalyticsEvent("first_booking_handoff_started");
 
     try {
-      const result = await saveQuickStartBooking({
+      const result = await prepareQuickStartBooking({
         userId: userId || "",
         clientName,
         clientPhone,
@@ -224,54 +198,52 @@ export default function QuickStartScreen() {
       });
       if (!result) return;
 
-      const onboardingState = await getOnboardingState(userId || "");
-      try {
-        await saveOnboardingState(userId || "", {
-          started: true,
-          draft: {
-            ...(result.businessId ? { businessId: result.businessId } : {}),
-            serviceId: result.serviceId,
-            clientId: result.clientId,
-            appointmentId: result.appointmentId,
-            step: 4,
-          },
-        });
-        await markOnboardingComplete(userId || "");
-        await markFirstBookingActivationCompleted(userId || "");
-      } catch (error) {
-        console.log("[QuickStart] local completion state failed", error);
-      }
-
-      if (result.clientCreated) trackAnalyticsEvent("first_client_created");
-      if (result.serviceCreated) trackAnalyticsEvent("first_service_created");
-      trackAnalyticsEvent("first_appointment_created");
-      trackAnalyticsEvent("first_booking_save_completed");
-      if (!onboardingState.completed) {
-        trackAnalyticsEvent("onboarding_completed");
-      }
+      applyClient(result.client);
+      applyService(result.service);
 
       if (result.clientCreated) {
-        setClients((current) => [...current, result.client]);
+        trackAnalyticsEvent("first_client_created");
+        setClients((current) =>
+          current.some(
+            (client) =>
+              normalizeQuickStartId(client.id) ===
+              normalizeQuickStartId(result.client.id),
+          )
+            ? current
+            : [...current, result.client],
+        );
       }
       if (result.serviceCreated) {
-        setServices((current) => [...current, result.service]);
+        trackAnalyticsEvent("first_service_created");
+        setServices((current) =>
+          current.some(
+            (service) =>
+              normalizeQuickStartId(service.id) ===
+              normalizeQuickStartId(result.service.id),
+          )
+            ? current
+            : [...current, result.service],
+        );
       }
-      emitAppointmentUpserted([result.appointment]);
-      emitSaveNotice("Your first appointment is on the schedule.");
-      setSavedBooking({
-        clientId: result.clientId,
-        clientName: result.clientName,
-        serviceId: result.serviceId,
-        serviceName: result.serviceName,
-        appointmentDate: result.appointmentDate,
-        appointmentTime: result.appointmentTime,
-      });
+
+      trackAnalyticsEvent("first_booking_handoff_completed");
+      router.push({
+        pathname: "/book-appointment",
+        params: {
+          clientId: result.clientId,
+          serviceId: result.serviceId,
+          appointmentDate: result.appointmentDate,
+          appointmentTime: result.appointmentTime,
+          activationFlow: "first-booking",
+          returnTo: "/dashboard",
+        },
+      } as any);
     } catch (error) {
-      console.log("[QuickStart] first booking save failed", error);
+      console.log("[QuickStart] prepare booking failed", error);
       Alert.alert(
         error instanceof QuickStartBookingError
           ? error.title
-          : "Could not add the appointment",
+          : "Could not continue",
         error instanceof Error ? error.message : "Please try again.",
       );
     } finally {
@@ -279,40 +251,28 @@ export default function QuickStartScreen() {
     }
   }
 
-  async function skipForNow() {
-    if (!userId || saving) return;
-
-    setSaving(true);
-    try {
-      const businessId = await ensureQuickStartBusinessProfile(userId);
-      const onboardingState = await getOnboardingState(userId);
-      if (!onboardingState.completed) {
-        await markOnboardingSkipped(
-          userId,
-          businessId ? { businessId } : {},
-        );
-        trackAnalyticsEvent("onboarding_completed");
-      }
-      await markFirstBookingActivationDismissed(userId);
-      trackAnalyticsEvent("first_booking_prompt_skipped");
-      router.replace("/dashboard" as any);
-    } catch (error) {
-      console.log("[QuickStart] skip failed", error);
-      Alert.alert("Could not continue", "Please try again.");
-    } finally {
-      setSaving(false);
-    }
+  function openDashboard() {
+    router.replace("/dashboard" as any);
   }
 
-  function confirmSkip() {
-    Alert.alert(
-      "Go to the dashboard?",
-      "You can add your first appointment later, but Schedova is most useful once your real schedule is in the app.",
-      [
-        { text: "Keep booking", style: "cancel" },
-        { text: "Go to dashboard", onPress: () => void skipForNow() },
-      ],
-    );
+  function addAnotherAppointment() {
+    const paramsForNextBooking: Record<string, string> = {
+      returnTo: "/dashboard",
+    };
+
+    if (successClientId) paramsForNextBooking.clientId = successClientId;
+    if (successServiceId) paramsForNextBooking.serviceId = successServiceId;
+    if (successAppointmentDate) {
+      paramsForNextBooking.appointmentDate = successAppointmentDate;
+    }
+    if (successAppointmentTime) {
+      paramsForNextBooking.appointmentTime = successAppointmentTime;
+    }
+
+    router.push({
+      pathname: "/book-appointment",
+      params: paramsForNextBooking,
+    } as any);
   }
 
   if (!isAccountReady || loading) {
@@ -324,13 +284,13 @@ export default function QuickStartScreen() {
       >
         <ActivityIndicator color={colors.primary} />
         <Text style={[styles.loadingText, { color: colors.mutedText }]}>
-          Preparing your first booking...
+          Preparing your next appointment...
         </Text>
       </AppScreen>
     );
   }
 
-  if (savedBooking) {
+  if (isSuccessStage) {
     return (
       <AppScreen
         scroll
@@ -339,22 +299,23 @@ export default function QuickStartScreen() {
         topPadding={36}
         contentContainerStyle={styles.successContainer}
       >
-        <View style={[styles.successIcon, { backgroundColor: `${colors.primary}1F` }]}>
+        <View
+          style={[styles.successIcon, { backgroundColor: `${colors.primary}1F` }]}
+        >
           <Ionicons name="checkmark" size={42} color={colors.primary} />
         </View>
         <Text style={[styles.successTitle, { color: colors.text }]}>
-          Your first booking is organized
+          Your first appointment is booked
         </Text>
         <Text style={[styles.successText, { color: colors.mutedText }]}>
-          {savedBooking.clientName} is scheduled for {savedBooking.serviceName}{" "}
-          on {displayDate(savedBooking.appointmentDate)} at{" "}
-          {displayTime(savedBooking.appointmentTime)}.
+          You used the full booking flow to save it, so availability, blocked
+          time, double-booking, and plan checks all stayed in place.
         </Text>
 
         <AppCard style={styles.successCard}>
           {[
-            "Client saved",
-            "Service saved",
+            "Client saved or reused",
+            "Service saved or reused",
             "Appointment added to your schedule",
           ].map((label, index) => (
             <View
@@ -370,24 +331,14 @@ export default function QuickStartScreen() {
         </AppCard>
 
         <AppButton
-          title="See my schedule"
-          onPress={() => router.replace("/dashboard" as any)}
+          title="View my schedule"
+          onPress={openDashboard}
           style={styles.primaryAction}
         />
         <AppButton
           title="Add another appointment"
           variant="secondary"
-          onPress={() =>
-            router.replace({
-              pathname: "/book-appointment",
-              params: {
-                clientId: savedBooking.clientId,
-                serviceId: savedBooking.serviceId,
-                appointmentDate: savedBooking.appointmentDate,
-                returnTo: "/dashboard",
-              },
-            } as any)
-          }
+          onPress={addAnotherAppointment}
         />
       </AppScreen>
     );
@@ -408,8 +359,9 @@ export default function QuickStartScreen() {
         Add your next appointment
       </Text>
       <Text style={[styles.subtitle, { color: colors.mutedText }]}>
-        Enter what you already know. Schedova will save the client, service, and
-        appointment for you.
+        Enter the basics here. We will save the client and service when needed,
+        then open the full booking screen so you can finish with the usual
+        schedule checks.
       </Text>
 
       <AppCard style={styles.valueCard}>
@@ -417,7 +369,7 @@ export default function QuickStartScreen() {
           {[
             { icon: "person-outline" as const, label: "Client" },
             { icon: "cut-outline" as const, label: "Service" },
-            { icon: "calendar-outline" as const, label: "Schedule" },
+            { icon: "calendar-outline" as const, label: "Time" },
           ].map((item) => (
             <View key={item.label} style={styles.valueItem}>
               <Ionicons name={item.icon} size={21} color={colors.primary} />
@@ -434,7 +386,7 @@ export default function QuickStartScreen() {
           title="Use an existing client"
           items={clients.slice(0, 8).map((client) => ({
             id: normalizeQuickStartId(client.id),
-            label: clientLabel(client),
+            label: String(client.name || client.phone || client.email || "Client"),
             onPress: () => applyClient(client),
           }))}
           selectedId={selectedClientId}
@@ -445,13 +397,13 @@ export default function QuickStartScreen() {
       <AppCard style={styles.sectionCard}>
         <SectionTitle color={colors.text}>Who is the appointment for?</SectionTitle>
         <AppTextInput
-          label="Client name (or use phone below)"
+          label="Client name"
           value={clientName}
           onChangeText={(value) => {
             setClientName(value);
             setSelectedClientId("");
           }}
-          placeholder="Example: Jamie"
+          placeholder="Example: Jamie Smith"
           autoCapitalize="words"
           returnKeyType="next"
         />
@@ -473,7 +425,7 @@ export default function QuickStartScreen() {
           title="Use an existing service"
           items={services.slice(0, 8).map((service) => ({
             id: normalizeQuickStartId(service.id),
-            label: serviceLabel(service),
+            label: String(service.name || "Service"),
             onPress: () => applyService(service),
           }))}
           selectedId={selectedServiceId}
@@ -504,40 +456,15 @@ export default function QuickStartScreen() {
           placeholder="0.00"
           keyboardType="decimal-pad"
         />
-        <Text style={[styles.fieldLabel, { color: colors.text }]}>Duration</Text>
-        <View style={styles.chipRow}>
-          {DURATION_OPTIONS.map((minutes) => (
-            <Pressable
-              key={minutes}
-              onPress={() => {
-                setDurationMinutes(minutes);
-                setSelectedServiceId("");
-              }}
-              style={[
-                styles.durationChip,
-                {
-                  backgroundColor:
-                    durationMinutes === minutes
-                      ? colors.primary
-                      : colors.background,
-                  borderColor:
-                    durationMinutes === minutes
-                      ? colors.primary
-                      : colors.border,
-                },
-              ]}
-            >
-              <Text
-                style={[
-                  styles.chipText,
-                  { color: durationMinutes === minutes ? "#FFFFFF" : colors.text },
-                ]}
-              >
-                {minutes} min
-              </Text>
-            </Pressable>
-          ))}
-        </View>
+        <DurationStepper
+          durationMinutes={durationMinutes}
+          defaultMinutes={selectedServiceDefaultMinutes}
+          onChange={(value) => {
+            setDurationMinutes(value);
+            setSelectedServiceId("");
+          }}
+          colors={bookingColors}
+        />
       </AppCard>
 
       <AppCard style={styles.scheduleCard}>
@@ -559,15 +486,19 @@ export default function QuickStartScreen() {
         />
       </AppCard>
 
-      <AppButton title="Add to my schedule" loading={saving} onPress={() => void save()} />
+      <AppButton
+        title="Continue to booking"
+        loading={saving}
+        onPress={() => void continueToBooking()}
+      />
       <Text style={[styles.helperText, { color: colors.mutedText }]}>
-        We will create the client and service automatically when needed.
+        We will reuse matching clients and services when possible.
       </Text>
       <AppButton
-        title="I'll do this later"
+        title="Back to dashboard"
         variant="ghost"
         disabled={saving}
-        onPress={confirmSkip}
+        onPress={openDashboard}
         style={styles.skipButton}
       />
     </AppScreen>
@@ -640,7 +571,12 @@ const styles = StyleSheet.create({
   valueCard: { marginBottom: 18 },
   valueRow: { flexDirection: "row", gap: 10 },
   valueItem: { alignItems: "center", flex: 1 },
-  valueLabel: { fontSize: 12, fontWeight: "800", marginTop: 6, textAlign: "center" },
+  valueLabel: {
+    fontSize: 12,
+    fontWeight: "800",
+    marginTop: 6,
+    textAlign: "center",
+  },
   choiceSection: { marginBottom: 18 },
   choiceTitle: { fontSize: 16, fontWeight: "900", marginBottom: 10 },
   chipRow: { flexDirection: "row", flexWrap: "wrap", gap: 8 },
@@ -655,15 +591,12 @@ const styles = StyleSheet.create({
   scheduleCard: { marginBottom: 22 },
   sectionTitle: { fontSize: 19, fontWeight: "900", marginBottom: 16 },
   lastInput: { marginBottom: 0 },
-  fieldLabel: { fontWeight: "800", marginBottom: 9 },
-  durationChip: {
-    borderRadius: 12,
-    borderWidth: 1,
-    minWidth: 72,
-    paddingHorizontal: 12,
-    paddingVertical: 11,
+  helperText: {
+    fontSize: 13,
+    lineHeight: 19,
+    marginTop: 10,
+    textAlign: "center",
   },
-  helperText: { fontSize: 13, lineHeight: 19, marginTop: 10, textAlign: "center" },
   skipButton: { marginTop: 8 },
   successContainer: { flexGrow: 1, justifyContent: "center" },
   successIcon: {

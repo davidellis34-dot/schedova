@@ -88,6 +88,7 @@ import {
 import { subscribeToSmsBalanceEvents } from "../lib/smsBalanceEvents";
 import { supabase } from "../lib/supabase";
 import { useAppTheme } from "../lib/useAppTheme";
+import { trackAnalyticsEvent } from "../lib/analytics";
 
 function normalizeDashboardAppointmentRows(rows: unknown) {
   return Array.isArray(rows)
@@ -177,6 +178,7 @@ export default function Dashboard() {
   const [secondaryData, setSecondaryData] =
     useState<DashboardSecondaryData>(EMPTY_DASHBOARD_SECONDARY_DATA);
   const longPressHandledAppointmentId = useRef<string | null>(null);
+  const firstBookingCardTrackedUserIdRef = useRef<string | null>(null);
   const dashboardLoadIdRef = useRef(0);
   const badgeRefreshIdRef = useRef(0);
   const userEmail = user?.email || "";
@@ -200,6 +202,10 @@ export default function Dashboard() {
   }
 
   const quickActionCardWidth = width >= 720 ? "31.5%" : "100%";
+  const firstBookingNeedsActivation = appointments.length === 0;
+  const firstBookingEntryRoute = firstBookingNeedsActivation
+    ? "/quick-start"
+    : "/book-appointment";
   const dashboardSummaryAccent =
     themeName === "dark" || themeName === "black" ? "#60A5FA" : "#2563EB";
   const dashboardStatusAccent = "#2563EB";
@@ -250,6 +256,14 @@ export default function Dashboard() {
     badgeRefreshIdRef.current += 1;
     setSecondaryData((current) => ({ ...current, clientRepliesCount: 0 }));
   }, [userId]);
+
+  useEffect(() => {
+    if (!isAccountReady || !userId || !firstBookingNeedsActivation) return;
+    if (firstBookingCardTrackedUserIdRef.current === userId) return;
+
+    firstBookingCardTrackedUserIdRef.current = userId;
+    trackAnalyticsEvent("first_booking_card_viewed");
+  }, [firstBookingNeedsActivation, isAccountReady, userId]);
 
   function getClientDisplayName(appointment: any) {
     if (!appointment) {
@@ -1219,15 +1233,26 @@ export default function Dashboard() {
     subtitle,
     icon,
     route,
+    onPress,
   }: {
     title: string;
     subtitle: string;
     icon: keyof typeof Ionicons.glyphMap;
-    route: string;
+    route?: string;
+    onPress?: () => void;
   }) {
     return (
       <AppCard
-        onPress={() => router.push(route as any)}
+        onPress={() => {
+          if (onPress) {
+            onPress();
+            return;
+          }
+
+          if (route) {
+            router.push(route as any);
+          }
+        }}
         style={{
           width: quickActionCardWidth,
           minHeight: 100,
@@ -1672,7 +1697,7 @@ export default function Dashboard() {
     {
       complete: appointments.some((appointment) => appointment?.status !== "canceled"),
       label: "First appointment booked",
-      route: "/book-appointment",
+      route: firstBookingEntryRoute,
     },
     {
       complete: hasSmsSettings === true,
@@ -1697,6 +1722,19 @@ export default function Dashboard() {
     }
 
     router.push("/smart-reminders" as any);
+  }
+
+  function openBookingEntryPoint(source: "card" | "quick_action" | "empty_state") {
+    if (firstBookingNeedsActivation) {
+      if (source === "card") {
+        trackAnalyticsEvent("first_booking_card_opened");
+      }
+
+      router.push("/quick-start" as any);
+      return;
+    }
+
+    router.push("/book-appointment" as any);
   }
 
   return (
@@ -1970,6 +2008,59 @@ export default function Dashboard() {
         />
       </View>
 
+      {firstBookingNeedsActivation ? (
+        <AppCard
+          style={{
+            marginBottom: 26,
+            borderColor: dashboardAccentBorder,
+            backgroundColor: dashboardAccentSoft,
+            ...dashboardCardShadow,
+          }}
+        >
+          <View
+            style={{
+              width: 48,
+              height: 48,
+              borderRadius: 24,
+              alignItems: "center",
+              justifyContent: "center",
+              backgroundColor: colors.background,
+              borderWidth: 1,
+              borderColor: dashboardAccentBorder,
+              marginBottom: 16,
+            }}
+          >
+            <Ionicons name="calendar-outline" size={24} color={colors.primary} />
+          </View>
+          <Text
+            style={{
+              color: colors.text,
+              fontSize: getFontSize(24),
+              fontWeight: "900",
+              marginBottom: 8,
+            }}
+          >
+            Add your next appointment
+          </Text>
+          <Text
+            style={{
+              color: colors.mutedText,
+              fontSize: getFontSize(15),
+              lineHeight: 22,
+              marginBottom: 18,
+            }}
+          >
+            Start with the client, service, date, and time. Schedova will reuse
+            matching records or create what is missing, then open the regular
+            booking screen to finish with your usual checks.
+          </Text>
+          <AppButton
+            title="Add your next appointment"
+            onPress={() => openBookingEntryPoint("card")}
+          />
+        </AppCard>
+      ) : null}
+
       <SectionTitle>Quick actions</SectionTitle>
       <View
         style={{
@@ -1983,7 +2074,7 @@ export default function Dashboard() {
           title="Book Appointment"
           subtitle="Add to schedule"
           icon="calendar-outline"
-          route="/book-appointment"
+          onPress={() => openBookingEntryPoint("quick_action")}
         />
         <QuickAction
           title="Add Client"
@@ -2138,7 +2229,7 @@ export default function Dashboard() {
           title="No appointments today"
           message="Book an appointment or check your calendar for what is next."
           actionLabel="Book Appointment"
-          onAction={() => router.push("/book-appointment" as any)}
+          onAction={() => openBookingEntryPoint("empty_state")}
           style={{ marginBottom: 26 }}
         />
       ) : (
@@ -2155,7 +2246,7 @@ export default function Dashboard() {
           title="No appointments yet"
           message="Book your first appointment to start building your schedule."
           actionLabel="Book Appointment"
-          onAction={() => router.push("/book-appointment" as any)}
+          onAction={() => openBookingEntryPoint("empty_state")}
           style={{ marginBottom: 18 }}
         />
       ) : (

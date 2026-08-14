@@ -1,9 +1,7 @@
 import { hasSelectedUserCountryRegion } from "./countrySettings";
-import { hasHandledFirstBookingActivation } from "./firstBookingActivation";
-import {
-  resolveFirstBookingActivationRoute,
-  shouldRequireCountryRegionBeforeRoute,
-} from "./firstBookingRouting";
+import { resolveAuthenticatedAppBaseRoute } from "./authRouteDecision";
+import { getOnboardingState } from "./onboarding";
+import { getWalkthroughState } from "./walkthrough";
 
 export type AuthenticatedAppRoute =
   | "/dashboard"
@@ -15,33 +13,32 @@ export type AuthenticatedAppRoute =
     };
 
 type AuthRouteDependencies = {
+  getOnboardingState: typeof getOnboardingState;
+  getWalkthroughState: typeof getWalkthroughState;
   hasSelectedUserCountryRegion: typeof hasSelectedUserCountryRegion;
-  hasExistingAppointment: (userId?: string | null) => Promise<boolean>;
-  hasHandledFirstBookingActivation: typeof hasHandledFirstBookingActivation;
+  hasExistingBusinessProfile: (userId?: string | null) => Promise<boolean>;
 };
 
-async function hasExistingAppointment(userId?: string | null) {
+async function hasExistingBusinessProfile(userId?: string | null) {
   if (!userId) return false;
 
   try {
     const { supabase } = await import("./supabase");
     const { data, error } = await supabase
-      .from("appointments")
+      .from("businesses")
       .select("id")
       .eq("user_id", userId)
       .limit(1);
 
     if (error) {
-      // Fail open. A temporary lookup problem must never trap a returning user
-      // in first-booking setup.
-      console.log("[AuthRouting] appointment lookup failed", error);
-      return true;
+      console.log("[AuthRouting] business profile lookup failed", error);
+      return false;
     }
 
     return Array.isArray(data) && data.length > 0;
   } catch (error) {
-    console.log("[AuthRouting] appointment lookup crashed", error);
-    return true;
+    console.log("[AuthRouting] business profile lookup crashed", error);
+    return false;
   }
 }
 
@@ -50,29 +47,23 @@ export async function resolveAuthenticatedAppRoute(
   dependencies: Partial<AuthRouteDependencies> = {},
 ): Promise<AuthenticatedAppRoute> {
   const {
+    getOnboardingState: getOnboardingStateImpl = getOnboardingState,
+    getWalkthroughState: getWalkthroughStateImpl = getWalkthroughState,
     hasSelectedUserCountryRegion: hasSelectedUserCountryRegionImpl =
       hasSelectedUserCountryRegion,
-    hasExistingAppointment: hasExistingAppointmentImpl = hasExistingAppointment,
-    hasHandledFirstBookingActivation:
-      hasHandledFirstBookingActivationImpl =
-        hasHandledFirstBookingActivation,
+    hasExistingBusinessProfile: hasExistingBusinessProfileImpl =
+      hasExistingBusinessProfile,
   } = dependencies;
 
-  const [existingAppointment, activationHandled] = await Promise.all([
-    hasExistingAppointmentImpl(userId),
-    hasHandledFirstBookingActivationImpl(userId),
-  ]);
-
-  const nextRoute = resolveFirstBookingActivationRoute({
-    hasExistingAppointment: existingAppointment,
-    activationHandled,
+  const onboardingState = await getOnboardingStateImpl(userId);
+  const walkthroughState = await getWalkthroughStateImpl(userId);
+  const nextRoute = resolveAuthenticatedAppBaseRoute({
+    onboardingCompleted: onboardingState.completed,
+    onboardingStarted: onboardingState.started,
+    walkthroughCompleted: walkthroughState.completed,
+    walkthroughStarted: walkthroughState.started,
+    hasExistingBusinessProfile: await hasExistingBusinessProfileImpl(userId),
   });
-
-  // Do not make a new user finish account setup before seeing value. Phone is
-  // optional in quick start, and local formatting can be completed later.
-  if (!shouldRequireCountryRegionBeforeRoute(nextRoute)) {
-    return nextRoute;
-  }
 
   if (!(await hasSelectedUserCountryRegionImpl())) {
     return {

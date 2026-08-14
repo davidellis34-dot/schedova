@@ -554,6 +554,22 @@ function sanitizePostSaveDestination(value: string) {
   if (value === "/messages" || value === "/onboarding") return value;
   return "/dashboard";
 }
+
+type PostSaveDestination =
+  | "/dashboard"
+  | "/messages"
+  | "/onboarding"
+  | {
+      pathname: "/quick-start";
+      params: {
+        stage: "success";
+        clientId?: string;
+        serviceId?: string;
+        appointmentDate?: string;
+        appointmentTime?: string;
+      };
+    };
+
 type UseBookAppointmentFormOptions = {
   requestProAccess?: (message?: string) => Promise<boolean>;
 };
@@ -590,9 +606,11 @@ export function useBookAppointmentForm({
   const replyIdParam = normalizeId(routeParam(params.replyId));
   const replyClientIdParam = normalizeId(routeParam(params.replyClientId));
   const replyAppointmentIdParam = normalizeId(routeParam(params.replyAppointmentId));
+  const activationFlowParam = routeParam(params.activationFlow);
   const postSaveDestination = sanitizePostSaveDestination(
     routeParam(params.returnTo),
   );
+  const isFirstBookingActivation = activationFlowParam === "first-booking";
 
   const isRescheduleMode = routeMode === "reschedule";
   const isEditMode =
@@ -1263,10 +1281,48 @@ export function useBookAppointmentForm({
     }
   }
 
-  function navigateAfterSave() {
+  function getPostSaveDestination(input: {
+    appointmentDate: string;
+    appointmentTime: string;
+  }): PostSaveDestination {
+    if (!isFirstBookingActivation || entryType !== "appointment" || isEditMode) {
+      return postSaveDestination;
+    }
+
+    const params: {
+      stage: "success";
+      clientId?: string;
+      serviceId?: string;
+      appointmentDate?: string;
+      appointmentTime?: string;
+    } = {
+      stage: "success",
+      appointmentDate: input.appointmentDate,
+      appointmentTime: input.appointmentTime.slice(0, 5),
+    };
+    const selectedClientId = normalizeId(selectedClient);
+    const primaryServiceId = normalizeId(selectedServices[0]?.id);
+
+    if (selectedClientId) {
+      params.clientId = selectedClientId;
+    }
+    if (primaryServiceId) {
+      params.serviceId = primaryServiceId;
+    }
+
+    return {
+      pathname: "/quick-start",
+      params,
+    };
+  }
+
+  function navigateAfterSave(destination: PostSaveDestination) {
     console.log(
       "navigation/refresh after save:",
-      getSaveDebugContext({ destination: postSaveDestination }),
+      getSaveDebugContext({
+        destination:
+          typeof destination === "string" ? destination : destination.pathname,
+      }),
     );
 
     try {
@@ -1274,17 +1330,20 @@ export function useBookAppointmentForm({
         dismissTo?: (href: string) => void;
       };
 
-      if (typeof navigation.dismissTo === "function") {
-        navigation.dismissTo(postSaveDestination);
+      if (
+        typeof destination === "string" &&
+        typeof navigation.dismissTo === "function"
+      ) {
+        navigation.dismissTo(destination);
         return;
       }
 
-      router.replace(postSaveDestination as any);
+      router.replace(destination as any);
     } catch (error) {
       console.log("BOOKING NAVIGATION FALLBACK:", error);
 
       try {
-        router.replace(postSaveDestination as any);
+        router.replace(destination as any);
       } catch (fallbackError) {
         console.log("BOOKING NAVIGATION FALLBACK FAILED:", fallbackError);
         Alert.alert(
@@ -1439,6 +1498,10 @@ export function useBookAppointmentForm({
     };
 
     try {
+      if (entryType === "appointment" && isFirstBookingActivation && !isEditMode) {
+        trackAnalyticsEvent("first_booking_save_started");
+      }
+
       await settleActiveTextInput();
 
       const currentUserId = await resolveCurrentUserIdForSave(flowName);
@@ -1456,6 +1519,10 @@ export function useBookAppointmentForm({
       }
 
       const safeDate = cleanDateOnly(appointmentDate);
+      const postSaveRoute = getPostSaveDestination({
+        appointmentDate: safeDate,
+        appointmentTime: startTime,
+      });
 
       const saved =
         entryType === "appointment"
@@ -1474,6 +1541,10 @@ export function useBookAppointmentForm({
       }
 
       logAppointmentSaveCheckpoint("appointment save success");
+      if (entryType === "appointment" && isFirstBookingActivation && !isEditMode) {
+        trackAnalyticsEvent("first_appointment_created");
+        trackAnalyticsEvent("first_booking_save_completed");
+      }
       emitSaveNotice(
         entryType === "appointment"
           ? isEditMode
@@ -1488,7 +1559,7 @@ export function useBookAppointmentForm({
           mode: isEditMode ? "edit" : "create",
         },
       });
-      navigateAfterSave();
+      navigateAfterSave(postSaveRoute);
       timing.deferredTasks.forEach((task) => task());
       return true;
     } catch (error) {
