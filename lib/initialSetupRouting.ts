@@ -12,8 +12,6 @@ export const ONBOARDING_BOOK_APPOINTMENT_SETUP_FLOW =
 export function canStayOnInitialSetupChildRoute(input: {
   currentPathname: string;
   hasExplicitAccess: boolean;
-  returnTo: string | null;
-  setupFlow: string | null;
   unresolvedSetupRoute: AuthenticatedAppRoute;
 }) {
   if (input.unresolvedSetupRoute !== "/onboarding") {
@@ -21,9 +19,6 @@ export function canStayOnInitialSetupChildRoute(input: {
   }
 
   return (
-    input.currentPathname === "/book-appointment" &&
-    input.returnTo === "/onboarding" &&
-    input.setupFlow === ONBOARDING_BOOK_APPOINTMENT_SETUP_FLOW &&
-    input.hasExplicitAccess
+    input.currentPathname === "/book-appointment" && input.hasExplicitAccess
   );
 }

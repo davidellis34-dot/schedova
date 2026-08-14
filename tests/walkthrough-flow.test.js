@@ -85,8 +85,29 @@ test("incomplete onboarding can keep the onboarding booking flow open", () => {
         returnTo: "/onboarding",
         setupFlow: ONBOARDING_BOOK_APPOINTMENT_SETUP_FLOW,
       }),
-      returnTo: "/onboarding",
-      setupFlow: ONBOARDING_BOOK_APPOINTMENT_SETUP_FLOW,
+      unresolvedSetupRoute: "/onboarding",
+    }),
+    true,
+  );
+});
+
+test("onboarding booking access survives until search params hydrate", () => {
+  allowSetupFlowRouteAccess({
+    userId: "user-123",
+    pathname: "/book-appointment",
+    returnTo: "/onboarding",
+    setupFlow: ONBOARDING_BOOK_APPOINTMENT_SETUP_FLOW,
+  });
+
+  assert.equal(
+    canStayOnInitialSetupChildRoute({
+      currentPathname: "/book-appointment",
+      hasExplicitAccess: hasSetupFlowRouteAccess({
+        userId: "user-123",
+        pathname: "/book-appointment",
+        returnTo: "/onboarding",
+        setupFlow: ONBOARDING_BOOK_APPOINTMENT_SETUP_FLOW,
+      }),
       unresolvedSetupRoute: "/onboarding",
     }),
     true,
@@ -98,8 +119,6 @@ test("an unrelated booking deep link still cannot bypass required setup", () => 
     canStayOnInitialSetupChildRoute({
       currentPathname: "/book-appointment",
       hasExplicitAccess: false,
-      returnTo: "/onboarding",
-      setupFlow: ONBOARDING_BOOK_APPOINTMENT_SETUP_FLOW,
       unresolvedSetupRoute: "/onboarding",
     }),
     false,

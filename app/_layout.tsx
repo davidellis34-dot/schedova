@@ -1,6 +1,5 @@
 import {
   Stack,
-  useGlobalSearchParams,
   useRouter,
   useSegments,
 } from "expo-router";
@@ -71,14 +70,6 @@ import {
 } from "../lib/pushRegistrationState";
 
 const IOS_AUTH_STACK_SWITCH_DELAY_MS = 520;
-
-function routeParam(value: string | string[] | undefined) {
-  if (Array.isArray(value)) {
-    return value[0] || "";
-  }
-
-  return typeof value === "string" ? value : "";
-}
 
 function AuthTransitionScreen({ message }: { message: string }) {
   const { colors } = useAppTheme();
@@ -423,14 +414,8 @@ async function waitForAuthNavigationWindow() {
 function AuthNavigationCoordinator() {
   const router = useRouter();
   const segments = useSegments();
-  const params = useGlobalSearchParams<{
-    returnTo?: string | string[];
-    setupFlow?: string | string[];
-  }>();
   const routeKey = segments.join("/");
   const currentPathname = segments[0] ? `/${segments[0]}` : "/";
-  const currentReturnTo = routeParam(params.returnTo) || null;
-  const currentSetupFlow = routeParam(params.setupFlow) || null;
   const {
     authStatus,
     authTransitionState,
@@ -603,8 +588,6 @@ function AuthNavigationCoordinator() {
               returnTo: "/onboarding",
               setupFlow: ONBOARDING_BOOK_APPOINTMENT_SETUP_FLOW,
             }),
-            returnTo: currentReturnTo,
-            setupFlow: currentSetupFlow,
             unresolvedSetupRoute: targetRoute,
           });
 
@@ -638,8 +621,6 @@ function AuthNavigationCoordinator() {
     isAccountReady,
     isHydrated,
     currentPathname,
-    currentReturnTo,
-    currentSetupFlow,
     routeKey,
     router,
     segments,
