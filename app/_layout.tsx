@@ -35,14 +35,9 @@ import {
   resolveAuthenticatedAppRoute,
 } from "../lib/authRouting";
 import {
-  canStayOnInitialSetupChildRoute,
-  ONBOARDING_BOOK_APPOINTMENT_SETUP_FLOW,
+  canStayOnAuthenticatedRoute,
   requiresInitialSetupGate,
 } from "../lib/initialSetupRouting";
-import {
-  hasSetupFlowRouteAccess,
-  revokeSetupFlowRouteAccess,
-} from "../lib/setupFlowRouteAccess";
 import {
   clearFeatureAccess,
   refreshFeatureAccess,
@@ -415,7 +410,6 @@ function AuthNavigationCoordinator() {
   const router = useRouter();
   const segments = useSegments();
   const routeKey = segments.join("/");
-  const currentPathname = segments[0] ? `/${segments[0]}` : "/";
   const {
     authStatus,
     authTransitionState,
@@ -447,12 +441,7 @@ function AuthNavigationCoordinator() {
   useEffect(() => {
     pendingTargetRef.current = null;
     setBridgeMessage(null);
-
-    const activeUserId = latestAuthenticatedUserIdRef.current ?? userId ?? null;
-    if (segments[0] !== "book-appointment" && activeUserId) {
-      revokeSetupFlowRouteAccess(activeUserId);
-    }
-  }, [routeKey, segments, userId]);
+  }, [routeKey]);
 
   useEffect(() => {
     const firstSegment = segments[0];
@@ -580,22 +569,16 @@ function AuthNavigationCoordinator() {
             return;
           }
 
-          const canStayOnChildRoute = canStayOnInitialSetupChildRoute({
-            currentPathname,
-            hasExplicitAccess: hasSetupFlowRouteAccess({
-              userId,
-              pathname: "/book-appointment",
-              returnTo: "/onboarding",
-              setupFlow: ONBOARDING_BOOK_APPOINTMENT_SETUP_FLOW,
-            }),
-            unresolvedSetupRoute: targetRoute,
-          });
-
-          if (canStayOnChildRoute) {
+          if (
+            canStayOnAuthenticatedRoute({
+              isAuthEntryRoute,
+              targetRoute,
+            })
+          ) {
             return;
           }
 
-          if (!isAuthEntryRoute && !requiresInitialSetupGate(targetRoute)) {
+          if (!requiresInitialSetupGate(targetRoute) && !isAuthEntryRoute) {
             return;
           }
 
@@ -620,7 +603,6 @@ function AuthNavigationCoordinator() {
     authTransitionState,
     isAccountReady,
     isHydrated,
-    currentPathname,
     routeKey,
     router,
     segments,

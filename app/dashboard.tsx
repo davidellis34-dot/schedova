@@ -52,6 +52,10 @@ import {
   updateDashboardCachedAppointments,
 } from "../lib/dashboardCache";
 import {
+  getDashboardBookingEntryRoute,
+  shouldShowFirstBookingActivationCard,
+} from "../lib/firstBookingActivation";
+import {
   recordAccountTransitionEvent,
   registerAccountScopedCleanup,
 } from "../lib/accountTransition";
@@ -202,10 +206,12 @@ export default function Dashboard() {
   }
 
   const quickActionCardWidth = width >= 720 ? "31.5%" : "100%";
-  const firstBookingNeedsActivation = appointments.length === 0;
-  const firstBookingEntryRoute = firstBookingNeedsActivation
-    ? "/quick-start"
-    : "/book-appointment";
+  const firstBookingNeedsActivation = shouldShowFirstBookingActivationCard(
+    appointments.length,
+  );
+  const firstBookingEntryRoute = getDashboardBookingEntryRoute(
+    appointments.length,
+  );
   const dashboardSummaryAccent =
     themeName === "dark" || themeName === "black" ? "#60A5FA" : "#2563EB";
   const dashboardStatusAccent = "#2563EB";
@@ -1725,7 +1731,7 @@ export default function Dashboard() {
   }
 
   function openBookingEntryPoint(source: "card" | "quick_action" | "empty_state") {
-    if (firstBookingNeedsActivation) {
+    if (firstBookingEntryRoute === "/quick-start") {
       if (source === "card") {
         trackAnalyticsEvent("first_booking_card_opened");
       }

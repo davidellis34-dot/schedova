@@ -91,7 +91,7 @@ const WALKTHROUGH_PAGES: WalkthroughPage[] = [
     title: "Keep client and service information organized",
     description:
       "Client profiles hold contact details, appointment history, and supported profile notes. Services keep the price and duration used while booking.",
-    note: "Add at least one service and one client before booking your first appointment.",
+    note: "The dashboard quick-start can create the first client and service for you when needed.",
     visual: "records",
   },
   {
@@ -99,7 +99,7 @@ const WALKTHROUGH_PAGES: WalkthroughPage[] = [
     description:
       "Schedova can send appointment texts and organize client replies. SMS must be configured first, and each client needs a phone number and consent.",
     supporting:
-      "Messaging can be set up during onboarding or later in Settings. It is never enabled automatically.",
+      "Messaging can be set up later from Settings or the dashboard checklist. It is never enabled automatically.",
     note: "Message sending uses SMS credits. Client replies appear in Messages, and temporary errors can be retried.",
     visual: "messages",
   },
@@ -116,7 +116,7 @@ const WALKTHROUGH_PAGES: WalkthroughPage[] = [
     title: "Let's set up your business",
     description:
       "Next, Schedova will guide you through the important setup steps. You can skip optional details and finish them later from the dashboard checklist.",
-    note: "Business information, first service, first client, first appointment, SMS settings review, then you are ready.",
+    note: "Start with business information now. Then use the dashboard to add your first appointment and any optional setup.",
     visual: "next",
   },
 ];

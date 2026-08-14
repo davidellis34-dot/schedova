@@ -36,6 +36,7 @@ const {
   markOnboardingSkipped,
   resetOnboardingState,
 } = require("../lib/onboarding.ts");
+const { ONBOARDING_FINAL_STEP } = require("../lib/onboardingFlow.ts");
 
 async function resetTestState(userId) {
   global.window.localStorage.clear();
@@ -52,8 +53,25 @@ test("empty form plus Skip for now marks onboarding skipped and enters the app",
   assert.equal(state.completed, true);
   assert.equal(state.skipped, true);
   assert.equal(state.started, true);
-  assert.equal(state.draft.step, 5);
+  assert.equal(state.draft.step, ONBOARDING_FINAL_STEP);
   assert.equal(await hasCompletedOnboarding(userId), true);
+
+  await resetTestState(userId);
+});
+
+test("brand-new account completes onboarding without an appointment", async () => {
+  const userId = "complete-without-appointment";
+
+  await resetTestState(userId);
+  await markOnboardingComplete(userId);
+
+  const state = await getOnboardingState(userId);
+  assert.equal(state.completed, true);
+  assert.equal(state.skipped, false);
+  assert.equal(state.draft.step, ONBOARDING_FINAL_STEP);
+  assert.equal(state.draft.serviceId, null);
+  assert.equal(state.draft.clientId, null);
+  assert.equal(state.draft.appointmentId, null);
 
   await resetTestState(userId);
 });
@@ -94,7 +112,7 @@ test("later normal completion can replace a skipped onboarding state", async () 
   const state = await getOnboardingState(userId);
   assert.equal(state.completed, true);
   assert.equal(state.skipped, false);
-  assert.equal(state.draft.step, 5);
+  assert.equal(state.draft.step, ONBOARDING_FINAL_STEP);
 
   await resetTestState(userId);
 });

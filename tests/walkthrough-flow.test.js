@@ -10,19 +10,9 @@ const {
   WALKTHROUGH_SCREEN_COUNT,
 } = require("../lib/walkthroughFlow.ts");
 const {
-  canStayOnInitialSetupChildRoute,
-  ONBOARDING_BOOK_APPOINTMENT_SETUP_FLOW,
+  canStayOnAuthenticatedRoute,
   requiresInitialSetupGate,
 } = require("../lib/initialSetupRouting.ts");
-const {
-  allowSetupFlowRouteAccess,
-  hasSetupFlowRouteAccess,
-  resetSetupFlowRouteAccessForTests,
-} = require("../lib/setupFlowRouteAccess.ts");
-
-test.beforeEach(() => {
-  resetSetupFlowRouteAccessForTests();
-});
 
 test("walkthrough resumes only at a valid screen", () => {
   assert.equal(resolveWalkthroughResumeStep(0), 0);
@@ -68,58 +58,21 @@ test("deep links remain behind required first-run setup", () => {
   assert.equal(requiresInitialSetupGate("/dashboard"), false);
 });
 
-test("incomplete onboarding can keep the onboarding booking flow open", () => {
-  allowSetupFlowRouteAccess({
-    userId: "user-123",
-    pathname: "/book-appointment",
-    returnTo: "/onboarding",
-    setupFlow: ONBOARDING_BOOK_APPOINTMENT_SETUP_FLOW,
-  });
-
+test("quick-start can open the normal booking flow after onboarding is complete", () => {
   assert.equal(
-    canStayOnInitialSetupChildRoute({
-      currentPathname: "/book-appointment",
-      hasExplicitAccess: hasSetupFlowRouteAccess({
-        userId: "user-123",
-        pathname: "/book-appointment",
-        returnTo: "/onboarding",
-        setupFlow: ONBOARDING_BOOK_APPOINTMENT_SETUP_FLOW,
-      }),
-      unresolvedSetupRoute: "/onboarding",
+    canStayOnAuthenticatedRoute({
+      isAuthEntryRoute: false,
+      targetRoute: "/dashboard",
     }),
     true,
   );
 });
 
-test("onboarding booking access survives until search params hydrate", () => {
-  allowSetupFlowRouteAccess({
-    userId: "user-123",
-    pathname: "/book-appointment",
-    returnTo: "/onboarding",
-    setupFlow: ONBOARDING_BOOK_APPOINTMENT_SETUP_FLOW,
-  });
-
+test("unrelated booking deep links stay blocked until setup is finished", () => {
   assert.equal(
-    canStayOnInitialSetupChildRoute({
-      currentPathname: "/book-appointment",
-      hasExplicitAccess: hasSetupFlowRouteAccess({
-        userId: "user-123",
-        pathname: "/book-appointment",
-        returnTo: "/onboarding",
-        setupFlow: ONBOARDING_BOOK_APPOINTMENT_SETUP_FLOW,
-      }),
-      unresolvedSetupRoute: "/onboarding",
-    }),
-    true,
-  );
-});
-
-test("an unrelated booking deep link still cannot bypass required setup", () => {
-  assert.equal(
-    canStayOnInitialSetupChildRoute({
-      currentPathname: "/book-appointment",
-      hasExplicitAccess: false,
-      unresolvedSetupRoute: "/onboarding",
+    canStayOnAuthenticatedRoute({
+      isAuthEntryRoute: false,
+      targetRoute: "/onboarding",
     }),
     false,
   );

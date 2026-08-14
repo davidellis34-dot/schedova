@@ -6,19 +6,9 @@ export function requiresInitialSetupGate(route: AuthenticatedAppRoute) {
   return route !== "/dashboard";
 }
 
-export const ONBOARDING_BOOK_APPOINTMENT_SETUP_FLOW =
-  "onboarding-booking" as const;
-
-export function canStayOnInitialSetupChildRoute(input: {
-  currentPathname: string;
-  hasExplicitAccess: boolean;
-  unresolvedSetupRoute: AuthenticatedAppRoute;
+export function canStayOnAuthenticatedRoute(input: {
+  isAuthEntryRoute: boolean;
+  targetRoute: AuthenticatedAppRoute;
 }) {
-  if (input.unresolvedSetupRoute !== "/onboarding") {
-    return false;
-  }
-
-  return (
-    input.currentPathname === "/book-appointment" && input.hasExplicitAccess
-  );
+  return !input.isAuthEntryRoute && !requiresInitialSetupGate(input.targetRoute);
 }
