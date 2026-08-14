@@ -1847,12 +1847,16 @@ export default function Dashboard() {
         }
       />
 
-      <ContextTip
-        tipId="dashboard_getting_started"
-        userId={userId}
-        visible={clients.length === 0 && appointments.length === 0}
-        message="Use Quick Actions to book appointments, add clients, or add services. Tap your SMS balance for Message Packs, and use the setup checklist for anything left to finish."
-      />
+        <ContextTip
+          tipId="dashboard_getting_started"
+          userId={userId}
+          visible={clients.length === 0 && appointments.length === 0}
+          message={
+            firstBookingNeedsActivation
+              ? "Use the first appointment card to get your schedule started. Quick Actions can still add clients or services separately, and the setup checklist covers anything left to finish."
+              : "Use Quick Actions to book appointments, add clients, or add services. Tap your SMS balance for Message Packs, and use the setup checklist for anything left to finish."
+          }
+        />
 
       {userEmail ? (
         <Text
@@ -2017,53 +2021,52 @@ export default function Dashboard() {
       {firstBookingNeedsActivation ? (
         <AppCard
           style={{
-            marginBottom: 26,
-            borderColor: dashboardAccentBorder,
-            backgroundColor: dashboardAccentSoft,
+            marginBottom: 22,
+            borderColor: dashboardCardBorder,
             ...dashboardCardShadow,
           }}
         >
           <View
             style={{
-              width: 48,
-              height: 48,
-              borderRadius: 24,
-              alignItems: "center",
-              justifyContent: "center",
-              backgroundColor: colors.background,
-              borderWidth: 1,
-              borderColor: dashboardAccentBorder,
-              marginBottom: 16,
+              flexDirection: "row",
+              alignItems: "flex-start",
+              gap: 12,
             }}
           >
-            <Ionicons name="calendar-outline" size={24} color={colors.primary} />
+            <Ionicons
+              name="calendar-outline"
+              size={18}
+              color={colors.primary}
+              style={{ marginTop: 2 }}
+            />
+            <View style={{ flex: 1 }}>
+              <Text
+                style={{
+                  color: colors.text,
+                  fontSize: getFontSize(19),
+                  fontWeight: "900",
+                  marginBottom: 6,
+                }}
+              >
+                Book your first appointment
+              </Text>
+              <Text
+                style={{
+                  color: colors.mutedText,
+                  fontSize: getFontSize(14),
+                  lineHeight: 20,
+                  marginBottom: 14,
+                }}
+              >
+                Add a client, service, date, and time. We&apos;ll handle the
+                setup.
+              </Text>
+              <AppButton
+                title="Book first appointment"
+                onPress={() => openBookingEntryPoint("card")}
+              />
+            </View>
           </View>
-          <Text
-            style={{
-              color: colors.text,
-              fontSize: getFontSize(24),
-              fontWeight: "900",
-              marginBottom: 8,
-            }}
-          >
-            Add your next appointment
-          </Text>
-          <Text
-            style={{
-              color: colors.mutedText,
-              fontSize: getFontSize(15),
-              lineHeight: 22,
-              marginBottom: 18,
-            }}
-          >
-            Start with the client, service, date, and time. Schedova will reuse
-            matching records or create what is missing, then open the regular
-            booking screen to finish with your usual checks.
-          </Text>
-          <AppButton
-            title="Add your next appointment"
-            onPress={() => openBookingEntryPoint("card")}
-          />
         </AppCard>
       ) : null}
 
@@ -2076,12 +2079,14 @@ export default function Dashboard() {
           marginBottom: 26,
         }}
       >
-        <QuickAction
-          title="Book Appointment"
-          subtitle="Add to schedule"
-          icon="calendar-outline"
-          onPress={() => openBookingEntryPoint("quick_action")}
-        />
+        {!firstBookingNeedsActivation ? (
+          <QuickAction
+            title="Book Appointment"
+            subtitle="Add to schedule"
+            icon="calendar-outline"
+            onPress={() => openBookingEntryPoint("quick_action")}
+          />
+        ) : null}
         <QuickAction
           title="Add Client"
           subtitle="Save client info"
