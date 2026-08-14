@@ -28,6 +28,11 @@ import {
   getCalendarPreferences,
   type DoubleBookingPreference,
 } from "../../lib/calendarPreferences";
+import { getSuggestedBookingDateTime } from "../../lib/bookingDefaultTime";
+import {
+  checkBookingAvailability,
+  type AvailabilityRuleRecord,
+} from "../../lib/bookingAvailability";
 import { normalizePhoneForSmsWithUserDefault } from "../../lib/countrySettings";
 import {
   canUseFeature,
@@ -67,7 +72,6 @@ import {
   getTotalDuration,
   getTotalPrice,
   normalizeId,
-  todayIso,
   toDisplayTime,
   toSqlTime,
 } from "./bookingUtils";
@@ -115,13 +119,6 @@ type SaveTimingState = {
   saveStartedAt: number;
   postSupabaseStartedAt: number | null;
   deferredTasks: (() => void)[];
-};
-
-type AvailabilityRuleRecord = {
-  day_of_week?: number | null;
-  is_available?: boolean | null;
-  start_time?: string | null;
-  end_time?: string | null;
 };
 
 function normalizeEntryType(value?: string): EntryType {
@@ -391,38 +388,6 @@ function getOverlapServiceName(appointment: any, services: Service[]) {
   return names.join(", ") || "appointment";
 }
 
-function getBookingAvailabilityWindow(dateText: string, rules: any[] = []) {
-  const dayNumber = parseDateOnly(dateText).getDay();
-  const rule = rules.find(
-    (item) => Number(item?.day_of_week) === Number(dayNumber),
-  );
-
-  if (!rule) {
-    return {
-      isAvailable: true,
-      startMinutes: 8 * 60,
-      endMinutes: 18 * 60,
-    };
-  }
-
-  const startMinutes = timeToMinutes(String(rule.start_time || "08:00"));
-  const endMinutes = timeToMinutes(String(rule.end_time || "18:00"));
-  const safeStart = Number.isFinite(startMinutes) ? startMinutes : 8 * 60;
-  const safeEnd =
-    Number.isFinite(endMinutes) && endMinutes > safeStart
-      ? endMinutes
-      : 18 * 60;
-
-  return {
-    isAvailable:
-      rule.is_available === undefined || rule.is_available === null
-        ? true
-        : Boolean(rule.is_available),
-    startMinutes: safeStart,
-    endMinutes: safeEnd,
-  };
-}
-
 function formatOverlapLine(overlap: AppointmentOverlap, includeDate = false) {
   const datePrefix = includeDate ? `${overlap.date}: ` : "";
   return `${datePrefix}${overlap.clientName} - ${overlap.serviceName}, ${overlap.startTime}-${overlap.endTime}`;
@@ -590,12 +555,16 @@ export function useBookAppointmentForm({
   const blockId = routeParam(params.blockId);
   const routeMode = routeParam(params.mode);
 
-  const appointmentDateParam =
+  const rawAppointmentDateParam =
     routeParam(params.appointmentDate) || routeParam(params.date);
-  const appointmentTimeParam = toDisplayTime(
-    routeParam(params.appointmentTime) || routeParam(params.time),
-    "09:00",
-  );
+  const appointmentDateParam = isValidDateOnly(rawAppointmentDateParam)
+    ? cleanDateOnly(rawAppointmentDateParam)
+    : "";
+  const rawAppointmentTimeParam =
+    routeParam(params.appointmentTime) || routeParam(params.time);
+  const appointmentTimeParam = rawAppointmentTimeParam
+    ? toDisplayTime(rawAppointmentTimeParam, "")
+    : "";
   const endTimeParam = toDisplayTime(routeParam(params.endTime), "");
   const titleParam = routeParam(params.title);
   const notesParam =
@@ -662,15 +631,23 @@ export function useBookAppointmentForm({
   const title = titleField.value;
   const setTitle = titleField.onChangeText;
 
-  const [appointmentDate, setAppointmentDate] = useState(
-    cleanDateOnly(appointmentDateParam || todayIso()),
+  const initialSuggestedBookingDateTimeRef = useRef(
+    getSuggestedBookingDateTime(),
   );
 
-  const [startTime, setStartTime] = useState(appointmentTimeParam || "09:00");
+  const [appointmentDate, setAppointmentDate] = useState(
+    appointmentDateParam || initialSuggestedBookingDateTimeRef.current.date,
+  );
+
+  const [startTime, setStartTime] = useState(
+    appointmentTimeParam || initialSuggestedBookingDateTimeRef.current.time,
+  );
   const [endTime, setEndTime] = useState("09:30");
   const [allDay, setAllDay] = useState(false);
   const [repeatType, setRepeatType] = useState<RepeatType>("none");
-  const [repeatUntil, setRepeatUntil] = useState(todayIso());
+  const [repeatUntil, setRepeatUntil] = useState(
+    appointmentDateParam || initialSuggestedBookingDateTimeRef.current.date,
+  );
 
   const [showQuickClient, setShowQuickClient] = useState(false);
   const newClientNameField = useTrackedTextInputValue("");
@@ -716,6 +693,13 @@ export function useBookAppointmentForm({
   const calculatedAppointmentEndTime = useMemo(
     () => calculateEndTime(startTime, effectiveAppointmentDurationMinutes),
     [startTime, effectiveAppointmentDurationMinutes],
+  );
+  const suggestedBookingDateTime = useMemo(
+    () =>
+      getSuggestedBookingDateTime({
+        intervalMinutes: calendarIntervalMinutes,
+      }),
+    [calendarIntervalMinutes],
   );
 
   const displayEndTime =
@@ -1041,7 +1025,8 @@ export function useBookAppointmentForm({
       return;
     }
 
-    const defaultStartTime = appointmentTimeParam || "09:00";
+    const defaultDate = appointmentDateParam || suggestedBookingDateTime.date;
+    const defaultStartTime = appointmentTimeParam || suggestedBookingDateTime.time;
     const defaultEndTime =
       endTimeParam ||
       addMinutesToTime(defaultStartTime, calendarIntervalMinutes);
@@ -1051,7 +1036,7 @@ export function useBookAppointmentForm({
     const matchedServiceIds = new Set(serviceIdsParam);
 
     setEntryType("appointment");
-    setAppointmentDate(cleanDateOnly(appointmentDateParam || todayIso()));
+    setAppointmentDate(defaultDate);
     setStartTime(defaultStartTime);
     setAppointmentDurationMinutesState(
       durationWithFallback(routeDuration, calendarIntervalMinutes),
@@ -1083,7 +1068,7 @@ export function useBookAppointmentForm({
     setTitle(titleParam);
     setAllDay(false);
     setRepeatType("none");
-    setRepeatUntil(cleanDateOnly(appointmentDateParam || todayIso()));
+    setRepeatUntil(defaultDate);
     setEditLoaded(true);
   }, [
     loading,
@@ -1099,6 +1084,7 @@ export function useBookAppointmentForm({
     serviceIdsParam,
     clients,
     calendarIntervalMinutes,
+    suggestedBookingDateTime,
     loadAppointmentForEdit,
     loadBlockForEdit,
     serviceIdParam,
@@ -2102,12 +2088,14 @@ export function useBookAppointmentForm({
     );
 
     for (const date of recurringDates) {
-      const availabilityWindow = getBookingAvailabilityWindow(
-        date,
-        availabilityRules,
-      );
+      const availabilityCheck = checkBookingAvailability({
+        dateText: date,
+        startTime: newStartTime,
+        endTime: newEndTime,
+        rules: availabilityRules,
+      });
 
-      if (!availabilityWindow.isAvailable) {
+      if (!availabilityCheck.allowed && availabilityCheck.reason === "closed_day") {
         Alert.alert(
           "Closed business hours",
           `The appointment on ${date} falls on a closed day.`,
@@ -2116,8 +2104,8 @@ export function useBookAppointmentForm({
       }
 
       if (
-        newStartMinutes < availabilityWindow.startMinutes ||
-        newEndMinutes > availabilityWindow.endMinutes
+        !availabilityCheck.allowed &&
+        availabilityCheck.reason === "outside_hours"
       ) {
         Alert.alert(
           "Closed business hours",

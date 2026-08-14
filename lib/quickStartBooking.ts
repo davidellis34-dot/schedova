@@ -4,6 +4,7 @@ import {
   getCalendarPreferences,
   type CalendarIntervalMinutes,
 } from "./calendarPreferences";
+import { getSuggestedBookingDateTime } from "./bookingDefaultTime";
 import { canUseFeature } from "./featureAccess";
 import {
   FREE_TIER_LIMITS,
@@ -81,51 +82,6 @@ export class QuickStartBookingError extends Error {
   }
 }
 
-function getDefaultBookingDateTime(input: {
-  intervalMinutes: number;
-  startHour: number;
-  endHour: number;
-}) {
-  const safeInterval =
-    Number.isFinite(input.intervalMinutes) && input.intervalMinutes > 0
-      ? Math.max(5, Math.min(60, Math.round(input.intervalMinutes)))
-      : 30;
-  const startHour = Number.isFinite(input.startHour)
-    ? Math.max(0, Math.min(23, Math.floor(input.startHour)))
-    : 9;
-  const endHour = Number.isFinite(input.endHour)
-    ? Math.max(startHour + 1, Math.min(24, Math.floor(input.endHour)))
-    : 18;
-  const next = new Date();
-
-  next.setMinutes(next.getMinutes() + 30, 0, 0);
-  next.setMinutes(
-    Math.ceil(next.getMinutes() / safeInterval) * safeInterval,
-    0,
-    0,
-  );
-
-  if (next.getHours() < startHour) {
-    next.setHours(startHour, 0, 0, 0);
-  } else if (
-    next.getHours() >= endHour ||
-    (next.getHours() === endHour - 1 && next.getMinutes() > 0)
-  ) {
-    next.setDate(next.getDate() + 1);
-    next.setHours(startHour, 0, 0, 0);
-  }
-
-  return {
-    date: `${next.getFullYear()}-${String(next.getMonth() + 1).padStart(
-      2,
-      "0",
-    )}-${String(next.getDate()).padStart(2, "0")}`,
-    time: `${String(next.getHours()).padStart(2, "0")}:${String(
-      next.getMinutes(),
-    ).padStart(2, "0")}`,
-  };
-}
-
 export async function loadQuickStartBooking(
   userId: string,
 ): Promise<QuickStartLoadResult> {
@@ -157,10 +113,8 @@ export async function loadQuickStartBooking(
   const services = ((serviceResult.data || []) as QuickStartService[])
     .filter((service) => service?.id)
     .sort((a, b) => String(a.name || "").localeCompare(String(b.name || "")));
-  const defaults = getDefaultBookingDateTime({
+  const defaults = getSuggestedBookingDateTime({
     intervalMinutes: preferences.intervalMinutes,
-    startHour: preferences.startHour,
-    endHour: preferences.endHour,
   });
 
   return {
