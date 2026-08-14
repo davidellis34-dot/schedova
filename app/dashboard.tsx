@@ -55,6 +55,7 @@ import {
   getDashboardBookingEntryRoute,
   shouldShowFirstBookingActivationCard,
 } from "../lib/firstBookingActivation";
+import { getDashboardAppointmentActionRows } from "../lib/dashboardAppointmentActions";
 import {
   recordAccountTransitionEvent,
   registerAccountScopedCleanup,
@@ -1498,6 +1499,52 @@ export default function Dashboard() {
       appointmentServices.map((service: any) => service.name).filter(Boolean),
     );
     const openEdit = () => openAppointmentEdit(appointment);
+    const appointmentActionsById = {
+      edit: {
+        id: "edit",
+        title: "Edit",
+        variant: "primary" as const,
+        onPress: () => openAppointmentEdit(appointment),
+        style: { flex: 1 },
+        textStyle: { fontSize: getFontSize(13) },
+      },
+      status: {
+        id: "status",
+        title: "Status",
+        variant: "secondary" as const,
+        onPress: () => {
+          setSelectedStatusAppointment(appointment);
+          setStatusModalOpen(true);
+        },
+        style: {
+          flex: 1,
+          backgroundColor: dashboardStatusAccent,
+          borderColor: dashboardStatusAccent,
+        },
+        textStyle: { color: "#FFFFFF", fontSize: getFontSize(13) },
+      },
+      edit_client: {
+        id: "edit_client",
+        title: "Edit Client",
+        variant: "secondary" as const,
+        onPress: () => openEditClientForAppointment(appointment),
+        style: { flex: 1 },
+        textStyle: { fontSize: getFontSize(13) },
+      },
+      delete: {
+        id: "delete",
+        title: "Delete",
+        variant: "destructive" as const,
+        onPress: () => {
+          void deleteAppointment(appointment.id);
+        },
+        style: { flex: 1 },
+        textStyle: { fontSize: getFontSize(13) },
+      },
+    };
+    const appointmentActionRows = getDashboardAppointmentActionRows(width).map(
+      (row) => row.map((actionId) => appointmentActionsById[actionId]),
+    );
     const cardDetails = (
       <>
         <View
@@ -1637,48 +1684,27 @@ export default function Dashboard() {
       >
         {cardDetails}
 
-        <View style={{ flexDirection: "row", gap: 8, marginTop: 14 }}>
-          <AppButton
-            title="Edit"
-            variant="primary"
-            fullWidth={false}
-            onPress={() => openAppointmentEdit(appointment)}
-            style={{ flex: 1 }}
-            textStyle={{ fontSize: getFontSize(13) }}
-          />
-          <AppButton
-            title="Edit Client"
-            variant="secondary"
-            fullWidth={false}
-            onPress={() => openEditClientForAppointment(appointment)}
-            style={{ flex: 1 }}
-            textStyle={{ fontSize: getFontSize(13) }}
-          />
-          <AppButton
-            title="Status"
-            variant="secondary"
-            fullWidth={false}
-            onPress={() => {
-              setSelectedStatusAppointment(appointment);
-              setStatusModalOpen(true);
-            }}
-            style={{
-              flex: 1,
-              backgroundColor: dashboardStatusAccent,
-              borderColor: dashboardStatusAccent,
-            }}
-            textStyle={{ color: "#FFFFFF", fontSize: getFontSize(13) }}
-          />
-          <AppButton
-            title="Delete"
-            variant="destructive"
-            fullWidth={false}
-            onPress={() => {
-              void deleteAppointment(appointment.id);
-            }}
-            style={{ flex: 1 }}
-            textStyle={{ fontSize: getFontSize(13) }}
-          />
+        <View style={{ gap: 8, marginTop: 14 }}>
+          {appointmentActionRows.map((row, rowIndex) => (
+            <View
+              key={`appointment-actions-${rowIndex}`}
+              style={{ flexDirection: "row", gap: 8 }}
+            >
+              {row.map((action) => (
+                <AppButton
+                  key={action.id}
+                  title={action.title}
+                  variant={action.variant}
+                  fullWidth={false}
+                  onPress={action.onPress}
+                  style={action.style}
+                  textStyle={action.textStyle}
+                  titleNumberOfLines={1}
+                  titleEllipsizeMode="tail"
+                />
+              ))}
+            </View>
+          ))}
         </View>
       </AppCard>
     );
