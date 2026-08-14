@@ -718,7 +718,19 @@ export default function RootLayout() {
                   name="calendar-view"
                   options={{ headerShown: false }}
                 />
+                <Stack.Screen
+                  name="client-duplicates"
+                  options={{ headerShown: false }}
+                />
+                <Stack.Screen
+                  name="client-import"
+                  options={{ headerShown: false }}
+                />
                 <Stack.Screen name="clients" options={{ headerShown: false }} />
+                <Stack.Screen
+                  name="manage-clients"
+                  options={{ headerShown: false }}
+                />
                 <Stack.Screen name="messages" options={{ headerShown: false }} />
                 <Stack.Screen
                   name="smart-reminders"
