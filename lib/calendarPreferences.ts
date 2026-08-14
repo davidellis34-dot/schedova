@@ -38,6 +38,10 @@ export function normalizeDoubleBookingPreference(
 }
 
 function normalizeHour(value: unknown, fallback: number) {
+  if (value === null || value === undefined) return fallback;
+
+  if (typeof value === "string" && !value.trim()) return fallback;
+
   const parsed = Number(value);
 
   if (!Number.isFinite(parsed)) return fallback;

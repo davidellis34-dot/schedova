@@ -5,25 +5,40 @@ const {
   buildSkippedOnboardingBusinessPayload,
   getOnboardingBusinessValidationError,
   normalizePersistedOnboardingStep,
+  ONBOARDING_FINAL_STEP,
   ONBOARDING_FLOW_VERSION,
+  ONBOARDING_STEP_COUNT,
   resolveOnboardingResumeStep,
   SKIPPED_ONBOARDING_BUSINESS_NAME,
   shouldCreateOnboardingRecord,
 } = require("../lib/onboardingFlow.ts");
 
 test("onboarding resumes at the stored valid step", () => {
-  assert.equal(resolveOnboardingResumeStep(3), 3);
-  assert.equal(resolveOnboardingResumeStep(8), 5);
+  assert.equal(resolveOnboardingResumeStep(1), ONBOARDING_FINAL_STEP);
+  assert.equal(resolveOnboardingResumeStep(8), ONBOARDING_FINAL_STEP);
   assert.equal(resolveOnboardingResumeStep(-2), 0);
   assert.equal(resolveOnboardingResumeStep("3"), 0);
 });
 
-test("unfinished version 1 onboarding resumes at the equivalent six-step setup stage", () => {
+test("previously partially completed onboarding accounts recover to the finish step", () => {
   assert.equal(normalizePersistedOnboardingStep(0, undefined), 0);
-  assert.equal(normalizePersistedOnboardingStep(2, undefined), 1);
-  assert.equal(normalizePersistedOnboardingStep(4, undefined), 3);
-  assert.equal(normalizePersistedOnboardingStep(5, undefined), 5);
-  assert.equal(normalizePersistedOnboardingStep(4, ONBOARDING_FLOW_VERSION), 4);
+  assert.equal(
+    normalizePersistedOnboardingStep(2, undefined),
+    ONBOARDING_FINAL_STEP,
+  );
+  assert.equal(
+    normalizePersistedOnboardingStep(4, undefined),
+    ONBOARDING_FINAL_STEP,
+  );
+  assert.equal(
+    normalizePersistedOnboardingStep(5, undefined),
+    ONBOARDING_FINAL_STEP,
+  );
+  assert.equal(
+    normalizePersistedOnboardingStep(4, ONBOARDING_FLOW_VERSION),
+    ONBOARDING_FINAL_STEP,
+  );
+  assert.equal(ONBOARDING_STEP_COUNT, 2);
 });
 
 test("saved setup records update on retry instead of creating duplicates", () => {

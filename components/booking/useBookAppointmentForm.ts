@@ -28,6 +28,11 @@ import {
   getCalendarPreferences,
   type DoubleBookingPreference,
 } from "../../lib/calendarPreferences";
+import { getSuggestedBookingDateTime } from "../../lib/bookingDefaultTime";
+import {
+  checkBookingAvailability,
+  type AvailabilityRuleRecord,
+} from "../../lib/bookingAvailability";
 import { normalizePhoneForSmsWithUserDefault } from "../../lib/countrySettings";
 import {
   canUseFeature,
@@ -67,7 +72,6 @@ import {
   getTotalDuration,
   getTotalPrice,
   normalizeId,
-  todayIso,
   toDisplayTime,
   toSqlTime,
 } from "./bookingUtils";
@@ -115,13 +119,6 @@ type SaveTimingState = {
   saveStartedAt: number;
   postSupabaseStartedAt: number | null;
   deferredTasks: (() => void)[];
-};
-
-type AvailabilityRuleRecord = {
-  day_of_week?: number | null;
-  is_available?: boolean | null;
-  start_time?: string | null;
-  end_time?: string | null;
 };
 
 function normalizeEntryType(value?: string): EntryType {
@@ -391,38 +388,6 @@ function getOverlapServiceName(appointment: any, services: Service[]) {
   return names.join(", ") || "appointment";
 }
 
-function getBookingAvailabilityWindow(dateText: string, rules: any[] = []) {
-  const dayNumber = parseDateOnly(dateText).getDay();
-  const rule = rules.find(
-    (item) => Number(item?.day_of_week) === Number(dayNumber),
-  );
-
-  if (!rule) {
-    return {
-      isAvailable: true,
-      startMinutes: 8 * 60,
-      endMinutes: 18 * 60,
-    };
-  }
-
-  const startMinutes = timeToMinutes(String(rule.start_time || "08:00"));
-  const endMinutes = timeToMinutes(String(rule.end_time || "18:00"));
-  const safeStart = Number.isFinite(startMinutes) ? startMinutes : 8 * 60;
-  const safeEnd =
-    Number.isFinite(endMinutes) && endMinutes > safeStart
-      ? endMinutes
-      : 18 * 60;
-
-  return {
-    isAvailable:
-      rule.is_available === undefined || rule.is_available === null
-        ? true
-        : Boolean(rule.is_available),
-    startMinutes: safeStart,
-    endMinutes: safeEnd,
-  };
-}
-
 function formatOverlapLine(overlap: AppointmentOverlap, includeDate = false) {
   const datePrefix = includeDate ? `${overlap.date}: ` : "";
   return `${datePrefix}${overlap.clientName} - ${overlap.serviceName}, ${overlap.startTime}-${overlap.endTime}`;
@@ -554,6 +519,22 @@ function sanitizePostSaveDestination(value: string) {
   if (value === "/messages" || value === "/onboarding") return value;
   return "/dashboard";
 }
+
+type PostSaveDestination =
+  | "/dashboard"
+  | "/messages"
+  | "/onboarding"
+  | {
+      pathname: "/quick-start";
+      params: {
+        stage: "success";
+        clientId?: string;
+        serviceId?: string;
+        appointmentDate?: string;
+        appointmentTime?: string;
+      };
+    };
+
 type UseBookAppointmentFormOptions = {
   requestProAccess?: (message?: string) => Promise<boolean>;
 };
@@ -574,12 +555,16 @@ export function useBookAppointmentForm({
   const blockId = routeParam(params.blockId);
   const routeMode = routeParam(params.mode);
 
-  const appointmentDateParam =
+  const rawAppointmentDateParam =
     routeParam(params.appointmentDate) || routeParam(params.date);
-  const appointmentTimeParam = toDisplayTime(
-    routeParam(params.appointmentTime) || routeParam(params.time),
-    "09:00",
-  );
+  const appointmentDateParam = isValidDateOnly(rawAppointmentDateParam)
+    ? cleanDateOnly(rawAppointmentDateParam)
+    : "";
+  const rawAppointmentTimeParam =
+    routeParam(params.appointmentTime) || routeParam(params.time);
+  const appointmentTimeParam = rawAppointmentTimeParam
+    ? toDisplayTime(rawAppointmentTimeParam, "")
+    : "";
   const endTimeParam = toDisplayTime(routeParam(params.endTime), "");
   const titleParam = routeParam(params.title);
   const notesParam =
@@ -590,9 +575,11 @@ export function useBookAppointmentForm({
   const replyIdParam = normalizeId(routeParam(params.replyId));
   const replyClientIdParam = normalizeId(routeParam(params.replyClientId));
   const replyAppointmentIdParam = normalizeId(routeParam(params.replyAppointmentId));
+  const activationFlowParam = routeParam(params.activationFlow);
   const postSaveDestination = sanitizePostSaveDestination(
     routeParam(params.returnTo),
   );
+  const isFirstBookingActivation = activationFlowParam === "first-booking";
 
   const isRescheduleMode = routeMode === "reschedule";
   const isEditMode =
@@ -644,15 +631,23 @@ export function useBookAppointmentForm({
   const title = titleField.value;
   const setTitle = titleField.onChangeText;
 
-  const [appointmentDate, setAppointmentDate] = useState(
-    cleanDateOnly(appointmentDateParam || todayIso()),
+  const initialSuggestedBookingDateTimeRef = useRef(
+    getSuggestedBookingDateTime(),
   );
 
-  const [startTime, setStartTime] = useState(appointmentTimeParam || "09:00");
+  const [appointmentDate, setAppointmentDate] = useState(
+    appointmentDateParam || initialSuggestedBookingDateTimeRef.current.date,
+  );
+
+  const [startTime, setStartTime] = useState(
+    appointmentTimeParam || initialSuggestedBookingDateTimeRef.current.time,
+  );
   const [endTime, setEndTime] = useState("09:30");
   const [allDay, setAllDay] = useState(false);
   const [repeatType, setRepeatType] = useState<RepeatType>("none");
-  const [repeatUntil, setRepeatUntil] = useState(todayIso());
+  const [repeatUntil, setRepeatUntil] = useState(
+    appointmentDateParam || initialSuggestedBookingDateTimeRef.current.date,
+  );
 
   const [showQuickClient, setShowQuickClient] = useState(false);
   const newClientNameField = useTrackedTextInputValue("");
@@ -698,6 +693,13 @@ export function useBookAppointmentForm({
   const calculatedAppointmentEndTime = useMemo(
     () => calculateEndTime(startTime, effectiveAppointmentDurationMinutes),
     [startTime, effectiveAppointmentDurationMinutes],
+  );
+  const suggestedBookingDateTime = useMemo(
+    () =>
+      getSuggestedBookingDateTime({
+        intervalMinutes: calendarIntervalMinutes,
+      }),
+    [calendarIntervalMinutes],
   );
 
   const displayEndTime =
@@ -1023,7 +1025,8 @@ export function useBookAppointmentForm({
       return;
     }
 
-    const defaultStartTime = appointmentTimeParam || "09:00";
+    const defaultDate = appointmentDateParam || suggestedBookingDateTime.date;
+    const defaultStartTime = appointmentTimeParam || suggestedBookingDateTime.time;
     const defaultEndTime =
       endTimeParam ||
       addMinutesToTime(defaultStartTime, calendarIntervalMinutes);
@@ -1033,7 +1036,7 @@ export function useBookAppointmentForm({
     const matchedServiceIds = new Set(serviceIdsParam);
 
     setEntryType("appointment");
-    setAppointmentDate(cleanDateOnly(appointmentDateParam || todayIso()));
+    setAppointmentDate(defaultDate);
     setStartTime(defaultStartTime);
     setAppointmentDurationMinutesState(
       durationWithFallback(routeDuration, calendarIntervalMinutes),
@@ -1065,7 +1068,7 @@ export function useBookAppointmentForm({
     setTitle(titleParam);
     setAllDay(false);
     setRepeatType("none");
-    setRepeatUntil(cleanDateOnly(appointmentDateParam || todayIso()));
+    setRepeatUntil(defaultDate);
     setEditLoaded(true);
   }, [
     loading,
@@ -1081,6 +1084,7 @@ export function useBookAppointmentForm({
     serviceIdsParam,
     clients,
     calendarIntervalMinutes,
+    suggestedBookingDateTime,
     loadAppointmentForEdit,
     loadBlockForEdit,
     serviceIdParam,
@@ -1263,10 +1267,48 @@ export function useBookAppointmentForm({
     }
   }
 
-  function navigateAfterSave() {
+  function getPostSaveDestination(input: {
+    appointmentDate: string;
+    appointmentTime: string;
+  }): PostSaveDestination {
+    if (!isFirstBookingActivation || entryType !== "appointment" || isEditMode) {
+      return postSaveDestination;
+    }
+
+    const params: {
+      stage: "success";
+      clientId?: string;
+      serviceId?: string;
+      appointmentDate?: string;
+      appointmentTime?: string;
+    } = {
+      stage: "success",
+      appointmentDate: input.appointmentDate,
+      appointmentTime: input.appointmentTime.slice(0, 5),
+    };
+    const selectedClientId = normalizeId(selectedClient);
+    const primaryServiceId = normalizeId(selectedServices[0]?.id);
+
+    if (selectedClientId) {
+      params.clientId = selectedClientId;
+    }
+    if (primaryServiceId) {
+      params.serviceId = primaryServiceId;
+    }
+
+    return {
+      pathname: "/quick-start",
+      params,
+    };
+  }
+
+  function navigateAfterSave(destination: PostSaveDestination) {
     console.log(
       "navigation/refresh after save:",
-      getSaveDebugContext({ destination: postSaveDestination }),
+      getSaveDebugContext({
+        destination:
+          typeof destination === "string" ? destination : destination.pathname,
+      }),
     );
 
     try {
@@ -1274,17 +1316,20 @@ export function useBookAppointmentForm({
         dismissTo?: (href: string) => void;
       };
 
-      if (typeof navigation.dismissTo === "function") {
-        navigation.dismissTo(postSaveDestination);
+      if (
+        typeof destination === "string" &&
+        typeof navigation.dismissTo === "function"
+      ) {
+        navigation.dismissTo(destination);
         return;
       }
 
-      router.replace(postSaveDestination as any);
+      router.replace(destination as any);
     } catch (error) {
       console.log("BOOKING NAVIGATION FALLBACK:", error);
 
       try {
-        router.replace(postSaveDestination as any);
+        router.replace(destination as any);
       } catch (fallbackError) {
         console.log("BOOKING NAVIGATION FALLBACK FAILED:", fallbackError);
         Alert.alert(
@@ -1439,6 +1484,10 @@ export function useBookAppointmentForm({
     };
 
     try {
+      if (entryType === "appointment" && isFirstBookingActivation && !isEditMode) {
+        trackAnalyticsEvent("first_booking_save_started");
+      }
+
       await settleActiveTextInput();
 
       const currentUserId = await resolveCurrentUserIdForSave(flowName);
@@ -1456,6 +1505,10 @@ export function useBookAppointmentForm({
       }
 
       const safeDate = cleanDateOnly(appointmentDate);
+      const postSaveRoute = getPostSaveDestination({
+        appointmentDate: safeDate,
+        appointmentTime: startTime,
+      });
 
       const saved =
         entryType === "appointment"
@@ -1474,6 +1527,10 @@ export function useBookAppointmentForm({
       }
 
       logAppointmentSaveCheckpoint("appointment save success");
+      if (entryType === "appointment" && isFirstBookingActivation && !isEditMode) {
+        trackAnalyticsEvent("first_appointment_created");
+        trackAnalyticsEvent("first_booking_save_completed");
+      }
       emitSaveNotice(
         entryType === "appointment"
           ? isEditMode
@@ -1488,7 +1545,7 @@ export function useBookAppointmentForm({
           mode: isEditMode ? "edit" : "create",
         },
       });
-      navigateAfterSave();
+      navigateAfterSave(postSaveRoute);
       timing.deferredTasks.forEach((task) => task());
       return true;
     } catch (error) {
@@ -2031,12 +2088,14 @@ export function useBookAppointmentForm({
     );
 
     for (const date of recurringDates) {
-      const availabilityWindow = getBookingAvailabilityWindow(
-        date,
-        availabilityRules,
-      );
+      const availabilityCheck = checkBookingAvailability({
+        dateText: date,
+        startTime: newStartTime,
+        endTime: newEndTime,
+        rules: availabilityRules,
+      });
 
-      if (!availabilityWindow.isAvailable) {
+      if (!availabilityCheck.allowed && availabilityCheck.reason === "closed_day") {
         Alert.alert(
           "Closed business hours",
           `The appointment on ${date} falls on a closed day.`,
@@ -2045,8 +2104,8 @@ export function useBookAppointmentForm({
       }
 
       if (
-        newStartMinutes < availabilityWindow.startMinutes ||
-        newEndMinutes > availabilityWindow.endMinutes
+        !availabilityCheck.allowed &&
+        availabilityCheck.reason === "outside_hours"
       ) {
         Alert.alert(
           "Closed business hours",

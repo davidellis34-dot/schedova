@@ -5,3 +5,10 @@ import type { AuthenticatedAppRoute } from "./authRouting";
 export function requiresInitialSetupGate(route: AuthenticatedAppRoute) {
   return route !== "/dashboard";
 }
+
+export function canStayOnAuthenticatedRoute(input: {
+  isAuthEntryRoute: boolean;
+  targetRoute: AuthenticatedAppRoute;
+}) {
+  return !input.isAuthEntryRoute && !requiresInitialSetupGate(input.targetRoute);
+}

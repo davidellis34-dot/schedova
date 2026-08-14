@@ -24,6 +24,8 @@ type AppButtonProps = Omit<PressableProps, "style" | "children"> & {
   rightAccessory?: ReactNode;
   style?: StyleProp<ViewStyle>;
   textStyle?: StyleProp<TextStyle>;
+  titleNumberOfLines?: number;
+  titleEllipsizeMode?: "head" | "middle" | "tail" | "clip";
 };
 
 export function AppButton({
@@ -37,6 +39,8 @@ export function AppButton({
   rightAccessory,
   style,
   textStyle,
+  titleNumberOfLines,
+  titleEllipsizeMode,
   ...pressableProps
 }: AppButtonProps) {
   const { colors: appColors } = useAppTheme();
@@ -102,6 +106,8 @@ export function AppButton({
       {loading ? <ActivityIndicator color={labelColor} /> : leftAccessory}
       {children || title ? (
         <Text
+          numberOfLines={titleNumberOfLines}
+          ellipsizeMode={titleEllipsizeMode}
           style={[
             {
               color: labelColor,

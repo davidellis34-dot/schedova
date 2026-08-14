@@ -53,7 +53,7 @@ test("walkthrough-complete user without onboarding completion goes to onboarding
   assert.equal(route, "/onboarding");
 });
 
-test("completed onboarding always wins", async () => {
+test("completed onboarding routes to dashboard", async () => {
   const route = resolveAuthenticatedAppBaseRoute({
     onboardingCompleted: true,
     onboardingStarted: true,

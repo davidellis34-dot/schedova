@@ -1,4 +1,8 @@
-import { Stack, useRouter, useSegments } from "expo-router";
+import {
+  Stack,
+  useRouter,
+  useSegments,
+} from "expo-router";
 import { useEffect, useRef, useState, type ReactNode } from "react";
 import {
   ActivityIndicator,
@@ -30,7 +34,10 @@ import {
   getAuthRouteKey,
   resolveAuthenticatedAppRoute,
 } from "../lib/authRouting";
-import { requiresInitialSetupGate } from "../lib/initialSetupRouting";
+import {
+  canStayOnAuthenticatedRoute,
+  requiresInitialSetupGate,
+} from "../lib/initialSetupRouting";
 import {
   clearFeatureAccess,
   refreshFeatureAccess,
@@ -562,7 +569,16 @@ function AuthNavigationCoordinator() {
             return;
           }
 
-          if (!isAuthEntryRoute && !requiresInitialSetupGate(targetRoute)) {
+          if (
+            canStayOnAuthenticatedRoute({
+              isAuthEntryRoute,
+              targetRoute,
+            })
+          ) {
+            return;
+          }
+
+          if (!requiresInitialSetupGate(targetRoute) && !isAuthEntryRoute) {
             return;
           }
 

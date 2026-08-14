@@ -37,6 +37,7 @@ import {
 import { sendAppointmentSmsNonBlocking } from "../lib/appointmentSms";
 import { shouldRunAppointmentSmsMutation } from "../lib/appointmentSmsMutationGate";
 import { useAuthSession } from "../lib/authSession";
+import { getBookingAvailabilityWindow as getAvailabilityWindowForDate } from "../lib/bookingAvailability";
 import { getCalendarPreferences } from "../lib/calendarPreferences";
 import {
   clearCalendarFinderCache,
@@ -212,42 +213,6 @@ function isValidAppointmentForDisplay(appointment: any) {
   if (!appointment?.appointment_time) return false;
 
   return true;
-}
-
-function getAvailabilityWindowForDate(dateText: string, rules: any[] = []) {
-  const dayNumber = parseDateOnly(dateText).getDay();
-  const rule = rules.find(
-    (item) => Number(item?.day_of_week) === Number(dayNumber),
-  );
-
-  if (!rule) {
-    return {
-      isAvailable: true,
-      startMinutes: DEFAULT_BUSINESS_START_MINUTES,
-      endMinutes: DEFAULT_BUSINESS_END_MINUTES,
-      hasRule: false,
-    };
-  }
-
-  const startMinutes = toMinutes(String(rule.start_time || "08:00").slice(0, 5));
-  const endMinutes = toMinutes(String(rule.end_time || "18:00").slice(0, 5));
-  const safeStart = Number.isFinite(startMinutes)
-    ? startMinutes
-    : DEFAULT_BUSINESS_START_MINUTES;
-  const safeEnd =
-    Number.isFinite(endMinutes) && endMinutes > safeStart
-      ? endMinutes
-      : DEFAULT_BUSINESS_END_MINUTES;
-
-  return {
-    isAvailable:
-      rule.is_available === undefined || rule.is_available === null
-        ? true
-        : Boolean(rule.is_available),
-    startMinutes: safeStart,
-    endMinutes: safeEnd,
-    hasRule: true,
-  };
 }
 
 function normalizeTimeText(value: any) {

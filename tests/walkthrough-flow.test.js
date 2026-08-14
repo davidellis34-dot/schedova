@@ -10,6 +10,7 @@ const {
   WALKTHROUGH_SCREEN_COUNT,
 } = require("../lib/walkthroughFlow.ts");
 const {
+  canStayOnAuthenticatedRoute,
   requiresInitialSetupGate,
 } = require("../lib/initialSetupRouting.ts");
 
@@ -55,4 +56,24 @@ test("deep links remain behind required first-run setup", () => {
     true,
   );
   assert.equal(requiresInitialSetupGate("/dashboard"), false);
+});
+
+test("quick-start can open the normal booking flow after onboarding is complete", () => {
+  assert.equal(
+    canStayOnAuthenticatedRoute({
+      isAuthEntryRoute: false,
+      targetRoute: "/dashboard",
+    }),
+    true,
+  );
+});
+
+test("unrelated booking deep links stay blocked until setup is finished", () => {
+  assert.equal(
+    canStayOnAuthenticatedRoute({
+      isAuthEntryRoute: false,
+      targetRoute: "/onboarding",
+    }),
+    false,
+  );
 });

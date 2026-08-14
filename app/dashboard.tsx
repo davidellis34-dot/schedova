@@ -52,6 +52,11 @@ import {
   updateDashboardCachedAppointments,
 } from "../lib/dashboardCache";
 import {
+  getDashboardBookingEntryRoute,
+  shouldShowFirstBookingActivationCard,
+} from "../lib/firstBookingActivation";
+import { getDashboardAppointmentActionRows } from "../lib/dashboardAppointmentActions";
+import {
   recordAccountTransitionEvent,
   registerAccountScopedCleanup,
 } from "../lib/accountTransition";
@@ -88,6 +93,7 @@ import {
 import { subscribeToSmsBalanceEvents } from "../lib/smsBalanceEvents";
 import { supabase } from "../lib/supabase";
 import { useAppTheme } from "../lib/useAppTheme";
+import { trackAnalyticsEvent } from "../lib/analytics";
 
 function normalizeDashboardAppointmentRows(rows: unknown) {
   return Array.isArray(rows)
@@ -177,6 +183,7 @@ export default function Dashboard() {
   const [secondaryData, setSecondaryData] =
     useState<DashboardSecondaryData>(EMPTY_DASHBOARD_SECONDARY_DATA);
   const longPressHandledAppointmentId = useRef<string | null>(null);
+  const firstBookingCardTrackedUserIdRef = useRef<string | null>(null);
   const dashboardLoadIdRef = useRef(0);
   const badgeRefreshIdRef = useRef(0);
   const userEmail = user?.email || "";
@@ -200,6 +207,12 @@ export default function Dashboard() {
   }
 
   const quickActionCardWidth = width >= 720 ? "31.5%" : "100%";
+  const firstBookingNeedsActivation = shouldShowFirstBookingActivationCard(
+    appointments.length,
+  );
+  const firstBookingEntryRoute = getDashboardBookingEntryRoute(
+    appointments.length,
+  );
   const dashboardSummaryAccent =
     themeName === "dark" || themeName === "black" ? "#60A5FA" : "#2563EB";
   const dashboardStatusAccent = "#2563EB";
@@ -250,6 +263,14 @@ export default function Dashboard() {
     badgeRefreshIdRef.current += 1;
     setSecondaryData((current) => ({ ...current, clientRepliesCount: 0 }));
   }, [userId]);
+
+  useEffect(() => {
+    if (!isAccountReady || !userId || !firstBookingNeedsActivation) return;
+    if (firstBookingCardTrackedUserIdRef.current === userId) return;
+
+    firstBookingCardTrackedUserIdRef.current = userId;
+    trackAnalyticsEvent("first_booking_card_viewed");
+  }, [firstBookingNeedsActivation, isAccountReady, userId]);
 
   function getClientDisplayName(appointment: any) {
     if (!appointment) {
@@ -1219,15 +1240,26 @@ export default function Dashboard() {
     subtitle,
     icon,
     route,
+    onPress,
   }: {
     title: string;
     subtitle: string;
     icon: keyof typeof Ionicons.glyphMap;
-    route: string;
+    route?: string;
+    onPress?: () => void;
   }) {
     return (
       <AppCard
-        onPress={() => router.push(route as any)}
+        onPress={() => {
+          if (onPress) {
+            onPress();
+            return;
+          }
+
+          if (route) {
+            router.push(route as any);
+          }
+        }}
         style={{
           width: quickActionCardWidth,
           minHeight: 100,
@@ -1467,6 +1499,52 @@ export default function Dashboard() {
       appointmentServices.map((service: any) => service.name).filter(Boolean),
     );
     const openEdit = () => openAppointmentEdit(appointment);
+    const appointmentActionsById = {
+      edit: {
+        id: "edit",
+        title: "Edit",
+        variant: "primary" as const,
+        onPress: () => openAppointmentEdit(appointment),
+        style: { flex: 1 },
+        textStyle: { fontSize: getFontSize(13) },
+      },
+      status: {
+        id: "status",
+        title: "Status",
+        variant: "secondary" as const,
+        onPress: () => {
+          setSelectedStatusAppointment(appointment);
+          setStatusModalOpen(true);
+        },
+        style: {
+          flex: 1,
+          backgroundColor: dashboardStatusAccent,
+          borderColor: dashboardStatusAccent,
+        },
+        textStyle: { color: "#FFFFFF", fontSize: getFontSize(13) },
+      },
+      edit_client: {
+        id: "edit_client",
+        title: "Edit Client",
+        variant: "secondary" as const,
+        onPress: () => openEditClientForAppointment(appointment),
+        style: { flex: 1 },
+        textStyle: { fontSize: getFontSize(13) },
+      },
+      delete: {
+        id: "delete",
+        title: "Delete",
+        variant: "destructive" as const,
+        onPress: () => {
+          void deleteAppointment(appointment.id);
+        },
+        style: { flex: 1 },
+        textStyle: { fontSize: getFontSize(13) },
+      },
+    };
+    const appointmentActionRows = getDashboardAppointmentActionRows(width).map(
+      (row) => row.map((actionId) => appointmentActionsById[actionId]),
+    );
     const cardDetails = (
       <>
         <View
@@ -1606,48 +1684,27 @@ export default function Dashboard() {
       >
         {cardDetails}
 
-        <View style={{ flexDirection: "row", gap: 8, marginTop: 14 }}>
-          <AppButton
-            title="Edit"
-            variant="primary"
-            fullWidth={false}
-            onPress={() => openAppointmentEdit(appointment)}
-            style={{ flex: 1 }}
-            textStyle={{ fontSize: getFontSize(13) }}
-          />
-          <AppButton
-            title="Edit Client"
-            variant="secondary"
-            fullWidth={false}
-            onPress={() => openEditClientForAppointment(appointment)}
-            style={{ flex: 1 }}
-            textStyle={{ fontSize: getFontSize(13) }}
-          />
-          <AppButton
-            title="Status"
-            variant="secondary"
-            fullWidth={false}
-            onPress={() => {
-              setSelectedStatusAppointment(appointment);
-              setStatusModalOpen(true);
-            }}
-            style={{
-              flex: 1,
-              backgroundColor: dashboardStatusAccent,
-              borderColor: dashboardStatusAccent,
-            }}
-            textStyle={{ color: "#FFFFFF", fontSize: getFontSize(13) }}
-          />
-          <AppButton
-            title="Delete"
-            variant="destructive"
-            fullWidth={false}
-            onPress={() => {
-              void deleteAppointment(appointment.id);
-            }}
-            style={{ flex: 1 }}
-            textStyle={{ fontSize: getFontSize(13) }}
-          />
+        <View style={{ gap: 8, marginTop: 14 }}>
+          {appointmentActionRows.map((row, rowIndex) => (
+            <View
+              key={`appointment-actions-${rowIndex}`}
+              style={{ flexDirection: "row", gap: 8 }}
+            >
+              {row.map((action) => (
+                <AppButton
+                  key={action.id}
+                  title={action.title}
+                  variant={action.variant}
+                  fullWidth={false}
+                  onPress={action.onPress}
+                  style={action.style}
+                  textStyle={action.textStyle}
+                  titleNumberOfLines={1}
+                  titleEllipsizeMode="tail"
+                />
+              ))}
+            </View>
+          ))}
         </View>
       </AppCard>
     );
@@ -1672,7 +1729,7 @@ export default function Dashboard() {
     {
       complete: appointments.some((appointment) => appointment?.status !== "canceled"),
       label: "First appointment booked",
-      route: "/book-appointment",
+      route: firstBookingEntryRoute,
     },
     {
       complete: hasSmsSettings === true,
@@ -1697,6 +1754,19 @@ export default function Dashboard() {
     }
 
     router.push("/smart-reminders" as any);
+  }
+
+  function openBookingEntryPoint(source: "card" | "quick_action" | "empty_state") {
+    if (firstBookingEntryRoute === "/quick-start") {
+      if (source === "card") {
+        trackAnalyticsEvent("first_booking_card_opened");
+      }
+
+      router.push("/quick-start" as any);
+      return;
+    }
+
+    router.push("/book-appointment" as any);
   }
 
   return (
@@ -1803,12 +1873,16 @@ export default function Dashboard() {
         }
       />
 
-      <ContextTip
-        tipId="dashboard_getting_started"
-        userId={userId}
-        visible={clients.length === 0 && appointments.length === 0}
-        message="Use Quick Actions to book appointments, add clients, or add services. Tap your SMS balance for Message Packs, and use the setup checklist for anything left to finish."
-      />
+        <ContextTip
+          tipId="dashboard_getting_started"
+          userId={userId}
+          visible={clients.length === 0 && appointments.length === 0}
+          message={
+            firstBookingNeedsActivation
+              ? "Use the first appointment card to get your schedule started. Quick Actions can still add clients or services separately, and the setup checklist covers anything left to finish."
+              : "Use Quick Actions to book appointments, add clients, or add services. Tap your SMS balance for Message Packs, and use the setup checklist for anything left to finish."
+          }
+        />
 
       {userEmail ? (
         <Text
@@ -1970,6 +2044,58 @@ export default function Dashboard() {
         />
       </View>
 
+      {firstBookingNeedsActivation ? (
+        <AppCard
+          style={{
+            marginBottom: 22,
+            borderColor: dashboardCardBorder,
+            ...dashboardCardShadow,
+          }}
+        >
+          <View
+            style={{
+              flexDirection: "row",
+              alignItems: "flex-start",
+              gap: 12,
+            }}
+          >
+            <Ionicons
+              name="calendar-outline"
+              size={18}
+              color={colors.primary}
+              style={{ marginTop: 2 }}
+            />
+            <View style={{ flex: 1 }}>
+              <Text
+                style={{
+                  color: colors.text,
+                  fontSize: getFontSize(19),
+                  fontWeight: "900",
+                  marginBottom: 6,
+                }}
+              >
+                Book your first appointment
+              </Text>
+              <Text
+                style={{
+                  color: colors.mutedText,
+                  fontSize: getFontSize(14),
+                  lineHeight: 20,
+                  marginBottom: 14,
+                }}
+              >
+                Add a client, service, date, and time. We&apos;ll handle the
+                setup.
+              </Text>
+              <AppButton
+                title="Book first appointment"
+                onPress={() => openBookingEntryPoint("card")}
+              />
+            </View>
+          </View>
+        </AppCard>
+      ) : null}
+
       <SectionTitle>Quick actions</SectionTitle>
       <View
         style={{
@@ -1979,12 +2105,14 @@ export default function Dashboard() {
           marginBottom: 26,
         }}
       >
-        <QuickAction
-          title="Book Appointment"
-          subtitle="Add to schedule"
-          icon="calendar-outline"
-          route="/book-appointment"
-        />
+        {!firstBookingNeedsActivation ? (
+          <QuickAction
+            title="Book Appointment"
+            subtitle="Add to schedule"
+            icon="calendar-outline"
+            onPress={() => openBookingEntryPoint("quick_action")}
+          />
+        ) : null}
         <QuickAction
           title="Add Client"
           subtitle="Save client info"
@@ -2138,7 +2266,7 @@ export default function Dashboard() {
           title="No appointments today"
           message="Book an appointment or check your calendar for what is next."
           actionLabel="Book Appointment"
-          onAction={() => router.push("/book-appointment" as any)}
+          onAction={() => openBookingEntryPoint("empty_state")}
           style={{ marginBottom: 26 }}
         />
       ) : (
@@ -2155,7 +2283,7 @@ export default function Dashboard() {
           title="No appointments yet"
           message="Book your first appointment to start building your schedule."
           actionLabel="Book Appointment"
-          onAction={() => router.push("/book-appointment" as any)}
+          onAction={() => openBookingEntryPoint("empty_state")}
           style={{ marginBottom: 18 }}
         />
       ) : (

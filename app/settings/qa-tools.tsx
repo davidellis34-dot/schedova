@@ -14,6 +14,7 @@ import { copyTextToClipboard } from "../../lib/clipboard";
 import { isSchedovaQaToolsEnabled } from "../../lib/debugMode";
 import { ENABLE_PRO } from "../../lib/proFeatureFlag";
 import { getOnboardingState, resetOnboardingState } from "../../lib/onboarding";
+import { ONBOARDING_STEP_COUNT } from "../../lib/onboardingFlow";
 import { resetContextTips } from "../../lib/contextTips";
 import { getRevenueCatDebugSnapshot } from "../../lib/revenuecat/revenueCatService";
 import { useSubscription } from "../../lib/revenuecat/SubscriptionProvider";
@@ -59,13 +60,13 @@ export default function QaToolsScreen() {
         ? "Complete"
         : `In progress: screen ${walkthrough.step + 1} of ${WALKTHROUGH_SCREEN_COUNT}`,
     );
-    setOnboardingStatus(
-      onboarding.completed
-        ? "Complete"
-        : onboarding.started
-          ? `In progress: step ${onboarding.draft.step + 1} of 6`
-          : "Not started",
-    );
+      setOnboardingStatus(
+        onboarding.completed
+          ? "Complete"
+          : onboarding.started
+            ? `In progress: step ${onboarding.draft.step + 1} of ${ONBOARDING_STEP_COUNT}`
+            : "Not started",
+      );
   }, [userId]);
 
   useEffect(() => {
