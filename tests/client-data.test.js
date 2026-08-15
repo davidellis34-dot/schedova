@@ -9,6 +9,7 @@ const {
   escapeCsvCell,
   getMergedClientConsent,
   inferClientCsvMapping,
+  mapClientCsvRow,
   normalizeClientImportValues,
   parseClientCsv,
   resolveImportedClientMergeValues,
@@ -70,6 +71,20 @@ test("header mapping recognizes common client CSV variations", () => {
   assert.equal(mapping[6], "rebooking_weeks");
 });
 
+test("Google Contacts-style headers map first and last name without manual extra fields", () => {
+  const mapping = inferClientCsvMapping([
+    "First Name",
+    "Family Name",
+    "Phone 1 - Value",
+    "E-mail 1 - Value",
+  ]);
+
+  assert.equal(mapping[0], "name");
+  assert.equal(mapping[1], "last_name");
+  assert.equal(mapping[2], "phone");
+  assert.equal(mapping[3], "email");
+});
+
 test("phone and email normalization reuse existing rules for import rows", async () => {
   const values = await normalizeClientImportValues(
     {
@@ -91,6 +106,37 @@ test("phone and email normalization reuse existing rules for import rows", async
   assert.equal(values.notes, "First visit");
   assert.equal(values.rebookingWeeks, 8);
   assert.equal(values.tag, "VIP");
+});
+
+test("split first and last name mappings combine safely during import", async () => {
+  const mappedValues = mapClientCsvRow(
+    ["Jamie", "Smith", "555-111-2222"],
+    {
+      0: "name",
+      1: "last_name",
+      2: "phone",
+    },
+  );
+  const values = await normalizeClientImportValues(
+    mappedValues,
+    async (value) => `+1${String(value).replace(/\D/g, "")}`,
+  );
+
+  assert.equal(values.name, "Jamie Smith");
+  assert.equal(values.phone, "+15551112222");
+
+  const fullNameValues = await normalizeClientImportValues(
+    mapClientCsvRow(
+      ["Jamie Smith", "Smith"],
+      {
+        0: "name",
+        1: "last_name",
+      },
+    ),
+    async (value) => String(value).trim(),
+  );
+
+  assert.equal(fullNameValues.name, "Jamie Smith");
 });
 
 test("duplicate classification distinguishes strong, review, and possible matches", () => {

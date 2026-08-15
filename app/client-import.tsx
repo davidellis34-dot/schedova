@@ -15,10 +15,11 @@ import {
 import {
   buildClientImportPreview,
   inferClientCsvMapping,
+  isManualClientCsvMappingField,
   parseClientCsv,
   shouldShowManualClientCsvMapping,
-  type ClientCsvColumn,
   type ClientCsvMapping,
+  type ClientCsvMappingValue,
   type ClientDataRecord,
   type ClientImportDecisionAction,
   type ClientImportPreview,
@@ -32,18 +33,16 @@ import {
 } from "../lib/clientDataActions";
 import { useAuthSession } from "../lib/authSession";
 import { normalizePhoneForSmsWithUserDefault } from "../lib/countrySettings";
+import { clearDashboardPrimaryCache } from "../lib/dashboardCache";
 import { useFeatureAccess } from "../lib/featureAccess";
 import { useAppTheme } from "../lib/useAppTheme";
 
-const COLUMN_OPTIONS: { label: string; value: ClientCsvColumn | "" }[] = [
+const COLUMN_OPTIONS: { label: string; value: ClientCsvMappingValue | "" }[] = [
   { label: "Ignore column", value: "" },
-  { label: "Name", value: "name" },
+  { label: "First Name", value: "name" },
+  { label: "Last Name", value: "last_name" },
   { label: "Phone", value: "phone" },
   { label: "Email", value: "email" },
-  { label: "Notes", value: "notes" },
-  { label: "Birthday", value: "birthday" },
-  { label: "Tag", value: "tag" },
-  { label: "Rebooking Weeks", value: "rebooking_weeks" },
 ];
 
 function labelForAction(action: ClientImportDecisionAction) {
@@ -221,8 +220,9 @@ export default function ClientImportScreen() {
       parsed?.headers.map((header, index) => ({
         header,
         index,
-        value: mapping[index] || "",
-      })) || [],
+        value: (mapping[index] || "") as ClientCsvMappingValue | "",
+      }))
+        .filter((column) => isManualClientCsvMappingField(column.value)) || [],
     [mapping, parsed],
   );
 
@@ -267,7 +267,7 @@ export default function ClientImportScreen() {
     setDecisions({});
   }
 
-  function updateColumnMapping(index: number, value: ClientCsvColumn | "") {
+  function updateColumnMapping(index: number, value: ClientCsvMappingValue | "") {
     setMapping((current) => {
       const next = { ...current };
 
@@ -312,6 +312,7 @@ export default function ClientImportScreen() {
     setWorking(true);
     try {
       const result = await importClientRows(preview.rows);
+      clearDashboardPrimaryCache(userId);
       setImportSummary({
         fileName: selectedFileName,
         invalidRows: preview.summary.invalidRows,
@@ -454,7 +455,8 @@ export default function ClientImportScreen() {
                 Column mapping
               </Text>
               <Text style={{ color: colors.mutedText, lineHeight: 20, marginBottom: 16 }}>
-                Map each incoming CSV column to the Schedova field it should fill.
+                Map name, phone, and email columns here. Other recognized client
+                fields stay auto-detected.
               </Text>
 
               <View style={{ gap: 14 }}>
@@ -475,7 +477,10 @@ export default function ClientImportScreen() {
                       <Picker
                         selectedValue={column.value}
                         onValueChange={(value) =>
-                          updateColumnMapping(column.index, value as ClientCsvColumn | "")
+                          updateColumnMapping(
+                            column.index,
+                            value as ClientCsvMappingValue | "",
+                          )
                         }
                         style={{ color: colors.text }}
                       >

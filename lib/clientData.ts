@@ -11,6 +11,13 @@ export const CLIENT_CSV_COLUMNS = [
   "rebooking_weeks",
 ] as const;
 
+export const CLIENT_CSV_MANUAL_MAPPING_COLUMNS = [
+  "name",
+  "last_name",
+  "phone",
+  "email",
+] as const;
+
 export const CLIENT_DUPLICATE_KIND_ORDER = {
   strong: 0,
   review: 1,
@@ -19,7 +26,14 @@ export const CLIENT_DUPLICATE_KIND_ORDER = {
 
 export type ClientCsvColumn = (typeof CLIENT_CSV_COLUMNS)[number];
 
-export type ClientCsvMapping = Record<number, ClientCsvColumn | "">;
+export type ClientCsvManualMappingColumn =
+  (typeof CLIENT_CSV_MANUAL_MAPPING_COLUMNS)[number];
+
+export type ClientCsvMappingValue =
+  | ClientCsvColumn
+  | ClientCsvManualMappingColumn;
+
+export type ClientCsvMapping = Record<number, ClientCsvMappingValue | "">;
 
 export type ParsedClientCsv = {
   delimiter: string;
@@ -147,7 +161,7 @@ const CLIENT_IMPORT_TEMPLATE_ROW: Record<ClientCsvColumn, string> = {
   tag: "",
 };
 
-const HEADER_ALIASES = new Map<string, ClientCsvColumn>([
+const HEADER_ALIASES = new Map<string, ClientCsvMappingValue>([
   ["birthday", "birthday"],
   ["birthdate", "birthday"],
   ["client email", "email"],
@@ -160,20 +174,27 @@ const HEADER_ALIASES = new Map<string, ClientCsvColumn>([
   ["customer name", "name"],
   ["dob", "birthday"],
   ["e mail", "email"],
+  ["e mail 1 value", "email"],
+  ["e mail address", "email"],
   ["email", "email"],
   ["email address", "email"],
+  ["family name", "last_name"],
+  ["first name", "name"],
   ["full name", "name"],
+  ["given name", "name"],
   ["mobile", "phone"],
   ["mobile number", "phone"],
   ["name", "name"],
   ["note", "notes"],
   ["notes", "notes"],
   ["phone", "phone"],
+  ["phone 1 value", "phone"],
   ["phone number", "phone"],
   ["rebooking interval weeks", "rebooking_weeks"],
   ["rebooking weeks", "rebooking_weeks"],
   ["rebooking_weeks", "rebooking_weeks"],
   ["return weeks", "rebooking_weeks"],
+  ["surname", "last_name"],
   ["tag", "tag"],
   ["weeks between visits", "rebooking_weeks"],
 ]);
@@ -372,7 +393,7 @@ export function parseClientCsv(text: string): ParsedClientCsv {
 
 export function inferClientCsvMapping(headers: string[]): ClientCsvMapping {
   const nextMapping: ClientCsvMapping = {};
-  const usedFields = new Set<ClientCsvColumn>();
+  const usedFields = new Set<ClientCsvMappingValue>();
 
   headers.forEach((header, index) => {
     const inferred = HEADER_ALIASES.get(normalizeHeaderKey(header)) || "";
@@ -393,11 +414,16 @@ export function shouldShowManualClientCsvMapping(input: {
   mapping: ClientCsvMapping;
   rows: string[][];
 }) {
-  const mappedIdentifierFields = new Set<ClientCsvColumn>();
+  const mappedIdentifierFields = new Set<ClientCsvManualMappingColumn>();
   const hasData = input.rows.some((row) => row.some((value) => cleanString(value)));
 
   Object.values(input.mapping).forEach((field) => {
-    if (field === "name" || field === "phone" || field === "email") {
+    if (
+      field === "name" ||
+      field === "last_name" ||
+      field === "phone" ||
+      field === "email"
+    ) {
       mappedIdentifierFields.add(field);
     }
   });
@@ -405,17 +431,56 @@ export function shouldShowManualClientCsvMapping(input: {
   return hasData && mappedIdentifierFields.size === 0 && input.headers.some((header) => cleanString(header));
 }
 
+export function isManualClientCsvMappingField(
+  field: ClientCsvMappingValue | "",
+) {
+  return (
+    field === "" ||
+    field === "name" ||
+    field === "last_name" ||
+    field === "phone" ||
+    field === "email"
+  );
+}
+
 export function mapClientCsvRow(
   row: string[],
   mapping: ClientCsvMapping,
 ): Partial<Record<ClientCsvColumn, string>> {
-  return row.reduce<Partial<Record<ClientCsvColumn, string>>>((result, value, index) => {
+  const result: Partial<Record<ClientCsvColumn, string>> = {};
+  let lastName = "";
+
+  row.forEach((value, index) => {
     const field = mapping[index];
-    if (field) {
-      result[field] = value;
+    if (!field) return;
+
+    if (field === "last_name") {
+      lastName = value;
+      return;
     }
+
+    result[field] = value;
+  });
+
+  const normalizedName = cleanString(result.name).replace(/\s+/g, " ");
+  const normalizedLastName = cleanString(lastName).replace(/\s+/g, " ");
+
+  if (!normalizedLastName) {
     return result;
-  }, {});
+  }
+
+  if (!normalizedName) {
+    result.name = normalizedLastName;
+    return result;
+  }
+
+  if (normalizeName(normalizedName).endsWith(normalizeName(normalizedLastName))) {
+    result.name = normalizedName;
+    return result;
+  }
+
+  result.name = `${normalizedName} ${normalizedLastName}`.trim();
+  return result;
 }
 
 export async function normalizeClientImportValues(

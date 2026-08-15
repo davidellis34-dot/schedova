@@ -94,6 +94,7 @@ import { subscribeToSmsBalanceEvents } from "../lib/smsBalanceEvents";
 import { supabase } from "../lib/supabase";
 import { useAppTheme } from "../lib/useAppTheme";
 import { trackAnalyticsEvent, useTrackAnalyticsScreen } from "../lib/analytics";
+import { countActiveClients } from "../lib/freePlanLimits";
 
 function normalizeDashboardAppointmentRows(rows: unknown) {
   return Array.isArray(rows)
@@ -489,7 +490,12 @@ export default function Dashboard() {
           .eq("user_id", userId)
           .order("appointment_date", { ascending: true })
           .order("appointment_time", { ascending: true }),
-        supabase.from("clients").select("*").eq("user_id", userId),
+        supabase
+          .from("clients")
+          .select("*")
+          .eq("user_id", userId)
+          .is("archived_at", null)
+          .order("name"),
         supabase.from("services").select("*").eq("user_id", userId),
       ]);
 
@@ -2033,7 +2039,7 @@ export default function Dashboard() {
         />
         <DashboardMetric
           label="Clients"
-          value={clients.length}
+          value={countActiveClients(clients)}
           helper="Saved"
           route="/clients"
         />
@@ -2195,9 +2201,6 @@ export default function Dashboard() {
                     }}
                   >
                     ${monthExpectedRevenue.toFixed(2)}
-                  </Text>
-                  <Text style={{ color: colors.mutedText, marginTop: 2 }}>
-                    this month
                   </Text>
                 </>
               ) : (

@@ -20,6 +20,7 @@ import {
   type ClientMergeChoice,
   type ClientMergeField,
 } from "../lib/clientData";
+import { clearDashboardPrimaryCache } from "../lib/dashboardCache";
 import { fetchActiveClients, mergeClientRecords } from "../lib/clientDataActions";
 import { useAuthSession } from "../lib/authSession";
 import { useAppTheme } from "../lib/useAppTheme";
@@ -189,6 +190,7 @@ export default function ClientDuplicatesScreen() {
         values: mergeDraft.values,
       });
 
+      clearDashboardPrimaryCache(userId);
       const nextClients = userId ? await fetchActiveClients(userId) : [];
       setClients(nextClients);
       setSelectedPairId("");
