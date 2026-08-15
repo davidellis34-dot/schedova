@@ -23,6 +23,7 @@ import {
   canUseFeature,
   useFeatureAccess,
 } from "../lib/featureAccess";
+import { useTrackAnalyticsScreen } from "../lib/analytics";
 import { useAuthSession } from "../lib/authSession";
 import { sendConsentRequests } from "../lib/communicationRecipients";
 import {
@@ -95,6 +96,7 @@ export default function ClientsScreen() {
   const { colors, themeName } = useAppTheme();
   const { isHydrated, userId } = useAuthSession();
   useFeatureAccess();
+  useTrackAnalyticsScreen("clients_viewed");
   const [clients, setClients] = useState<any[]>([]);
   const [loadingClients, setLoadingClients] = useState(true);
   useScreenLoadingTiming(loadingClients);

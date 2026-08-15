@@ -93,7 +93,7 @@ import {
 import { subscribeToSmsBalanceEvents } from "../lib/smsBalanceEvents";
 import { supabase } from "../lib/supabase";
 import { useAppTheme } from "../lib/useAppTheme";
-import { trackAnalyticsEvent } from "../lib/analytics";
+import { trackAnalyticsEvent, useTrackAnalyticsScreen } from "../lib/analytics";
 
 function normalizeDashboardAppointmentRows(rows: unknown) {
   return Array.isArray(rows)
@@ -155,6 +155,7 @@ const DASHBOARD_CLIENT_REPLIES_CHANNEL_PREFIX = "dashboard-client-replies-";
 export default function Dashboard() {
   const router = useRouter();
   useManualScreenInteractiveTiming("dashboard");
+  useTrackAnalyticsScreen("dashboard_viewed");
   const { colors, themeName } = useAppTheme();
   const { width } = useWindowDimensions();
   const { authStatus, isAccountReady, isHydrated, user, userId } = useAuthSession();

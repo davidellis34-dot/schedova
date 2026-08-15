@@ -8,7 +8,9 @@
     "orientation": "default",
     "icon": "./assets/images/app-icon.png",
     "userInterfaceStyle": "light",
-    "assetBundlePatterns": ["**/*"],
+    "assetBundlePatterns": [
+      "**/*"
+    ],
     "ios": {
       "supportsTablet": true,
       "usesAppleSignIn": true,
@@ -52,7 +54,9 @@
           "backgroundColor": "#0F172A"
         }
       ],
-      "@react-native-community/datetimepicker"
+      "@react-native-community/datetimepicker",
+      "expo-localization",
+      "posthog-react-native/expo"
     ],
     "extra": {
       "router": {},
