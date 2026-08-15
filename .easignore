@@ -1,0 +1,53 @@
+# EAS Build archive rules
+
+# dependencies
+node_modules/
+
+# Expo
+.expo/
+dist/
+web-build/
+expo-env.d.ts
+
+# Native build outputs and credentials
+.kotlin/
+*.orig.*
+*.jks
+*.p8
+apple-auth-key.p8
+*.p12
+*.key
+*.mobileprovision
+
+# Metro
+.metro-health-check*
+
+# debug
+npm-debug.*
+yarn-debug.*
+yarn-error.*
+*.log
+
+# macOS
+.DS_Store
+*.pem
+
+# local env files
+.env*.local
+
+# typescript
+*.tsbuildinfo
+
+app-example
+
+# local Supabase CLI state
+supabase/.temp/
+
+# generated native folders
+/ios
+/android/*
+!/android/app/
+/android/app/*
+
+# EAS must upload the Firebase Android config referenced by app.json
+!/android/app/google-services.json
