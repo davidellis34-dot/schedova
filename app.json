@@ -55,8 +55,7 @@
         }
       ],
       "@react-native-community/datetimepicker",
-      "expo-localization",
-      "posthog-react-native/expo"
+      "expo-localization"
     ],
     "extra": {
       "router": {},
