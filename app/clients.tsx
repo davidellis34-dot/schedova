@@ -19,6 +19,7 @@ import {
   ScreenHeader,
 } from "../components/ui";
 import { normalizeClientTag } from "../lib/clientTags";
+import { clearDashboardPrimaryCache } from "../lib/dashboardCache";
 import {
   canUseFeature,
   useFeatureAccess,
@@ -212,6 +213,10 @@ export default function ClientsScreen() {
     }
 
     router.push("/add-client" as any);
+  }
+
+  function openManageClients() {
+    router.push("/manage-clients" as any);
   }
 
   function toggleSelectionMode() {
@@ -569,6 +574,9 @@ export default function ClientsScreen() {
               setClients((current) =>
                 current.filter((client) => !removedIdSet.has(String(client.id))),
               );
+              if (removedIds.length > 0) {
+                clearDashboardPrimaryCache(userId);
+              }
               setSelectedClientIds([]);
               setSelectionMode(false);
               showRemoveClientsSummary({
@@ -619,6 +627,12 @@ export default function ClientsScreen() {
         onPress={() => {
           void openAddClient();
         }}
+        style={{ marginBottom: 14 }}
+      />
+      <AppButton
+        title="Manage Clients"
+        variant="secondary"
+        onPress={openManageClients}
         style={{ marginBottom: 14 }}
       />
 
