@@ -1,0 +1,29 @@
+{
+  "project_info": {
+    "project_number": "605157637888",
+    "project_id": "schedova-9e7bb",
+    "storage_bucket": "schedova-9e7bb.firebasestorage.app"
+  },
+  "client": [
+    {
+      "client_info": {
+        "mobilesdk_app_id": "1:605157637888:android:ab7c8d8b7846b2bbcc7de5",
+        "android_client_info": {
+          "package_name": "com.davidellis34.schedova"
+        }
+      },
+      "oauth_client": [],
+      "api_key": [
+        {
+          "current_key": "AIzaSyAwHSwd1FvWIoux5SmBhrMgWMZEyeTocyU"
+        }
+      ],
+      "services": {
+        "appinvite_service": {
+          "other_platform_oauth_client": []
+        }
+      }
+    }
+  ],
+  "configuration_version": "1"
+}
