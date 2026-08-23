@@ -90,6 +90,7 @@ import {
   recordScreenBackgroundRefreshComplete,
   useManualScreenInteractiveTiming,
 } from "../lib/screenPerformance";
+import { buildDashboardSetupChecklist } from "../lib/dashboardSetupChecklist";
 import { subscribeToSmsBalanceEvents } from "../lib/smsBalanceEvents";
 import { supabase } from "../lib/supabase";
 import { useAppTheme } from "../lib/useAppTheme";
@@ -127,7 +128,7 @@ const EMPTY_SMS_BALANCE: MessageCreditBalance = {
 type DashboardSecondaryData = {
   hasBusiness: boolean | null;
   hasBusinessHours: boolean | null;
-  hasSmsSettings: boolean | null;
+  hasReviewedSmsSettings: boolean | null;
   clientRepliesCount: number;
   latestRepliesByAppointmentId: Record<string, AppointmentReplySummary>;
   readyToRebookCount: number;
@@ -143,7 +144,7 @@ type DashboardDisplayPreferences = {
 const EMPTY_DASHBOARD_SECONDARY_DATA: DashboardSecondaryData = {
   hasBusiness: null,
   hasBusinessHours: null,
-  hasSmsSettings: null,
+  hasReviewedSmsSettings: null,
   clientRepliesCount: 0,
   latestRepliesByAppointmentId: {},
   readyToRebookCount: 0,
@@ -192,7 +193,7 @@ export default function Dashboard() {
   const {
     hasBusiness,
     hasBusinessHours,
-    hasSmsSettings,
+    hasReviewedSmsSettings,
     clientRepliesCount,
     latestRepliesByAppointmentId,
     readyToRebookCount,
@@ -317,40 +318,35 @@ export default function Dashboard() {
     return base;
   }
 
-  const loadBusinessStatus = useCallback(async () => {
-    if (!isHydrated) return null;
-
-    if (!userId) {
-      return null;
-    }
-
-    const { data, error } = await supabase
-      .from("businesses")
-      .select("*")
-      .eq("user_id", userId)
-      .limit(1);
-
-    if (error) {
-      console.log("CHECK BUSINESS ERROR:", error.message);
-      return false;
-    }
-
-    return (data || []).length > 0;
-  }, [isHydrated, userId]);
-
-  const loadSetupConfiguration = useCallback(async () => {
+  const loadChecklistState = useCallback(async () => {
     if (!isHydrated || !userId) {
-      return { hasBusinessHours: null, hasSmsSettings: null };
+      return {
+        hasBusiness: null,
+        hasBusinessHours: null,
+        hasReviewedSmsSettings: null,
+      };
     }
 
-    const [smsResult, hoursResult] = await Promise.all([
-      supabase.from("sms_settings").select("id").eq("user_id", userId).limit(1),
+    const [businessResult, hoursResult] = await Promise.all([
+      supabase
+        .from("businesses")
+        .select("id, sms_settings_reviewed_at")
+        .eq("user_id", userId)
+        .limit(1)
+        .maybeSingle(),
       supabase.from("availability_rules").select("id").eq("user_id", userId).limit(1),
     ]);
 
+    if (businessResult.error) {
+      console.log("CHECK BUSINESS ERROR:", businessResult.error.message);
+    }
+
     return {
+      hasBusiness: businessResult.error ? false : Boolean(businessResult.data?.id),
       hasBusinessHours: hoursResult.error ? null : (hoursResult.data || []).length > 0,
-      hasSmsSettings: smsResult.error ? null : (smsResult.data || []).length > 0,
+      hasReviewedSmsSettings: businessResult.error
+        ? null
+        : Boolean(businessResult.data?.sms_settings_reviewed_at),
     };
   }, [isHydrated, userId]);
 
@@ -655,6 +651,8 @@ export default function Dashboard() {
 
         const cached = getDashboardPrimaryCache(userId);
         let primaryAppointments = cached?.appointments || [];
+        const checklistStatePromise = loadChecklistState();
+        const primaryRefreshPromise = loadDashboardPrimaryData();
 
         if (cached) {
           applyDashboardPrimaryData(cached);
@@ -663,13 +661,29 @@ export default function Dashboard() {
           });
         }
 
-        if (!isDashboardPrimaryCacheFresh(cached)) {
-          const loadedPrimaryData = await loadDashboardPrimaryData();
+        if (!cached || !isDashboardPrimaryCacheFresh(cached)) {
+          const loadedPrimaryData = await primaryRefreshPromise;
           primaryAppointments =
             loadedPrimaryData?.appointments || primaryAppointments;
           requestAnimationFrame(() => {
             if (active) recordPrimaryScreenInteractive("dashboard");
           });
+        } else {
+          void primaryRefreshPromise.then((loadedPrimaryData) => {
+            if (!active || !loadedPrimaryData) return;
+            primaryAppointments = loadedPrimaryData.appointments;
+          });
+        }
+
+        const nextChecklistState = await checklistStatePromise;
+
+        if (active) {
+          setSecondaryData((current) => ({
+            ...current,
+            hasBusiness: nextChecklistState.hasBusiness,
+            hasBusinessHours: nextChecklistState.hasBusinessHours,
+            hasReviewedSmsSettings: nextChecklistState.hasReviewedSmsSettings,
+          }));
         }
 
         if (!active) return;
@@ -680,16 +694,12 @@ export default function Dashboard() {
           if (!active) return;
 
           void Promise.all([
-            loadBusinessStatus(),
-            loadSetupConfiguration(),
             loadLatestAppointmentReplies(primaryAppointments),
             loadSmsBalance(),
             loadDisplayPreferences(),
             loadReadyToRebookCount(),
           ]).then(
             ([
-              nextHasBusiness,
-              nextSetupConfiguration,
               nextLatestRepliesByAppointmentId,
               nextSmsBalance,
               nextDisplayPreferences,
@@ -701,10 +711,7 @@ export default function Dashboard() {
               // enrichment needs one render rather than one per request.
               setDisplayPreferences(nextDisplayPreferences);
               setSecondaryData((current) => ({
-                hasBusiness: nextHasBusiness,
-                hasBusinessHours: nextSetupConfiguration.hasBusinessHours,
-                hasSmsSettings: nextSetupConfiguration.hasSmsSettings,
-                clientRepliesCount: current.clientRepliesCount,
+                ...current,
                 latestRepliesByAppointmentId: nextLatestRepliesByAppointmentId,
                 readyToRebookCount: nextReadyToRebookCount,
                 smsBalance: nextSmsBalance.balance,
@@ -724,8 +731,7 @@ export default function Dashboard() {
       };
     }, [
       applyDashboardPrimaryData,
-      loadBusinessStatus,
-      loadSetupConfiguration,
+      loadChecklistState,
       loadDashboardPrimaryData,
       loadDisplayPreferences,
       loadLatestAppointmentReplies,
@@ -1717,38 +1723,15 @@ export default function Dashboard() {
     );
   }
 
-  const setupChecklist = [
-    {
-      complete: hasBusiness === true,
-      label: "Business profile completed",
-      route: "/business-setup",
-    },
-    {
-      complete: services.length > 0,
-      label: "First service added",
-      route: "/add-service",
-    },
-    {
-      complete: clients.length > 0,
-      label: "First client added",
-      route: "/clients",
-    },
-    {
-      complete: appointments.some((appointment) => appointment?.status !== "canceled"),
-      label: "First appointment booked",
-      route: firstBookingEntryRoute,
-    },
-    {
-      complete: hasSmsSettings === true,
-      label: "SMS settings reviewed",
-      route: "/settings/sms",
-    },
-    {
-      complete: hasBusinessHours === true,
-      label: "Business hours configured",
-      route: "/availability-settings",
-    },
-  ];
+  const setupChecklist = buildDashboardSetupChecklist({
+    hasBusiness,
+    hasBusinessHours,
+    hasReviewedSmsSettings,
+    clients,
+    appointments,
+    services,
+    firstBookingEntryRoute,
+  });
   const incompleteSetupItems = setupChecklist.filter((item) => !item.complete);
   const completedSetupCount = setupChecklist.length - incompleteSetupItems.length;
 

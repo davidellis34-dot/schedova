@@ -4,6 +4,7 @@ const assert = require("node:assert/strict");
 const {
   filterSafeAnalyticsProperties,
   getAppointmentMilestoneEvents,
+  normalizeSafeAnalyticsProperties,
   normalizeBusinessCategory,
   sanitizeAnalyticsText,
   sanitizeAnalyticsCaptureEvent,
@@ -45,6 +46,9 @@ test("filterSafeAnalyticsProperties keeps only internal and approved analytics f
       distinct_id: "user-123",
       platform: "ios",
       app_version: "1.2.6",
+      flow: "standard_booking",
+      reason_code: "free_limit",
+      is_first: true,
       client_name: "Should be removed",
       phone: "Should also be removed",
       $lib: "posthog-react-native",
@@ -54,7 +58,29 @@ test("filterSafeAnalyticsProperties keeps only internal and approved analytics f
       distinct_id: "user-123",
       platform: "ios",
       app_version: "1.2.6",
+      flow: "standard_booking",
+      reason_code: "free_limit",
+      is_first: true,
       $lib: "posthog-react-native",
+    },
+  );
+});
+
+test("normalizeSafeAnalyticsProperties keeps only allowlisted safe values", () => {
+  assert.deepEqual(
+    normalizeSafeAnalyticsProperties({
+      screen_name: "  Book Appointment  ",
+      flow: "First Booking Activation",
+      reason_code: "Availability Conflict",
+      is_first: true,
+      client_name: "Private Client",
+      appointment_time: "09:00",
+    }),
+    {
+      screen_name: "book_appointment",
+      flow: "first_booking_activation",
+      reason_code: "availability_conflict",
+      is_first: true,
     },
   );
 });
@@ -66,6 +92,8 @@ test("sanitizeAnalyticsCaptureEvent strips unsafe event and person properties", 
       properties: {
         token: "api-key",
         platform: "ios",
+        flow: "standard_booking",
+        reason_code: "free_limit",
         appointment_time: "09:00",
       },
       $set: {
@@ -78,6 +106,8 @@ test("sanitizeAnalyticsCaptureEvent strips unsafe event and person properties", 
       properties: {
         token: "api-key",
         platform: "ios",
+        flow: "standard_booking",
+        reason_code: "free_limit",
       },
       $set: {
         business_category: "hair",

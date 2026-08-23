@@ -6,10 +6,20 @@ export const SAFE_ANALYTICS_PROPERTY_KEYS = [
   "acquisition_source",
   "acquisition_campaign",
   "business_category",
+  "source",
+  "screen_name",
+  "flow",
+  "result",
+  "reason_code",
+  "entry_type",
+  "is_first",
 ] as const;
 
 export type SafeAnalyticsPropertyKey =
   (typeof SAFE_ANALYTICS_PROPERTY_KEYS)[number];
+export type SafeAnalyticsProperties = Partial<
+  Record<SafeAnalyticsPropertyKey, JsonType>
+>;
 
 const SAFE_ANALYTICS_PROPERTY_KEY_SET = new Set<string>(
   SAFE_ANALYTICS_PROPERTY_KEYS,
@@ -102,6 +112,55 @@ export function normalizeBusinessCategory(value: unknown): string | null {
   }
 
   return null;
+}
+
+function normalizeSafeAnalyticsString(
+  key: SafeAnalyticsPropertyKey,
+  value: unknown,
+) {
+  if (typeof value !== "string") return null;
+
+  const trimmed = value.trim();
+  if (!trimmed) return null;
+
+  if (key === "app_version" || key === "platform") {
+    return trimmed.slice(0, 32);
+  }
+
+  return sanitizeAnalyticsText(trimmed);
+}
+
+export function normalizeSafeAnalyticsProperties(
+  properties:
+    | Partial<Record<SafeAnalyticsPropertyKey, unknown>>
+    | null
+    | undefined,
+): SafeAnalyticsProperties | undefined {
+  if (!properties) return undefined;
+
+  const next: SafeAnalyticsProperties = {};
+
+  for (const [rawKey, rawValue] of Object.entries(properties)) {
+    if (!SAFE_ANALYTICS_PROPERTY_KEY_SET.has(rawKey)) {
+      continue;
+    }
+
+    const key = rawKey as SafeAnalyticsPropertyKey;
+
+    if (key === "is_first") {
+      if (typeof rawValue === "boolean") {
+        next[key] = rawValue;
+      }
+      continue;
+    }
+
+    const normalizedValue = normalizeSafeAnalyticsString(key, rawValue);
+    if (normalizedValue) {
+      next[key] = normalizedValue;
+    }
+  }
+
+  return Object.keys(next).length > 0 ? next : undefined;
 }
 
 export function getAppointmentMilestoneEvents(

@@ -71,6 +71,24 @@ export default function SmsSettingsScreen() {
   const [settings, setSettings] = useState<SmsSettings>(DEFAULT_SMS_SETTINGS);
   const smsAvailable = canUseFeature("smsAutomation");
 
+  const markSettingsReviewed = useCallback(async () => {
+    if (authStatus !== "authenticated" || !userId) {
+      return;
+    }
+
+    try {
+      await supabase
+        .from("businesses")
+        .update({
+          sms_settings_reviewed_at: new Date().toISOString(),
+        })
+        .eq("user_id", userId)
+        .is("sms_settings_reviewed_at", null);
+    } catch (error) {
+      console.log("[SMS settings] review persistence failed", error);
+    }
+  }, [authStatus, userId]);
+
   const loadSettings = useCallback(async () => {
     setLoading(true);
 
@@ -128,10 +146,12 @@ export default function SmsSettingsScreen() {
       } else {
         setSettings(DEFAULT_SMS_SETTINGS);
       }
+
+      await markSettingsReviewed();
     } finally {
       setLoading(false);
     }
-  }, [authStatus, smsAvailable, userId]);
+  }, [authStatus, markSettingsReviewed, smsAvailable, userId]);
 
   useFocusEffect(
     useCallback(() => {

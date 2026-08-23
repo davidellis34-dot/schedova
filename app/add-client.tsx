@@ -39,6 +39,7 @@ import { supabase } from "../lib/supabase";
 import { useTrackedTextInputValue } from "../lib/textInputDraft";
 import { useAppTheme } from "../lib/useAppTheme";
 import { useAuthSession } from "../lib/authSession";
+import { trackAnalyticsEvent } from "../lib/analytics";
 
 const EMAIL_PATTERN = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
 
@@ -142,6 +143,28 @@ export default function AddClientScreen() {
     const saveStartedAt = getSavePerformanceNow();
     let postSupabaseStartedAt: number | null = null;
     const validationStartedAt = getSavePerformanceNow();
+    const trackClientCreateFailure = (
+      reasonCode: string,
+      isFirstClient?: boolean,
+    ) => {
+      trackAnalyticsEvent("client_create_failed", {
+        screen_name: "add_client",
+        flow: "standard_create",
+        entry_type: "client",
+        result: "failed",
+        reason_code: reasonCode,
+        ...(typeof isFirstClient === "boolean"
+          ? { is_first: isFirstClient }
+          : {}),
+      });
+    };
+
+    trackAnalyticsEvent("client_create_started", {
+      screen_name: "add_client",
+      flow: "standard_create",
+      entry_type: "client",
+      result: "started",
+    });
     setSaving(true);
     setErrorMessage("");
 
@@ -159,6 +182,7 @@ export default function AddClientScreen() {
       const now = new Date().toISOString();
 
       if (!displayName) {
+        trackClientCreateFailure("missing_required_field");
         const message = "Enter a name, phone number, or email.";
         setErrorMessage(message);
         Alert.alert("Missing Contact", message);
@@ -166,6 +190,7 @@ export default function AddClientScreen() {
       }
 
       if (!isValidOptionalEmail(trimmedEmail)) {
+        trackClientCreateFailure("invalid_field");
         const message = "Enter a valid email address or leave email blank.";
         setErrorMessage(message);
         Alert.alert("Invalid Email", message);
@@ -193,6 +218,7 @@ export default function AddClientScreen() {
         );
 
         if (userError || !user) {
+          trackClientCreateFailure("not_authenticated");
           const message = "You must be logged in.";
           setErrorMessage(message);
           Alert.alert("Error", message);
@@ -203,41 +229,47 @@ export default function AddClientScreen() {
       }
 
       if (!currentUserId) {
+        trackClientCreateFailure("not_authenticated");
         const message = "You must be logged in.";
         setErrorMessage(message);
         Alert.alert("Error", message);
         return;
       }
 
+      const freeLimitStartedAt = getSavePerformanceNow();
+      const { data: existingClients, error: clientsError } = await supabase
+        .from("clients")
+        .select("id")
+        .eq("user_id", currentUserId)
+        .is("archived_at", null);
+      logSaveTiming(
+        flowName,
+        "pre-save queries",
+        getSavePerformanceNow() - freeLimitStartedAt,
+        {
+          operation: "free-tier client count",
+        },
+      );
+
+      if (clientsError) {
+        trackClientCreateFailure("database_error");
+        setErrorMessage(clientsError.message);
+        Alert.alert("Error", clientsError.message);
+        return;
+      }
+
+      const activeClientCount = (existingClients || []).length;
+      const isFirstClient = activeClientCount === 0;
+
       if (!canUseFeature("moreClients")) {
-        const freeLimitStartedAt = getSavePerformanceNow();
-        const { data: existingClients, error: clientsError } = await supabase
-          .from("clients")
-          .select("id")
-          .eq("user_id", currentUserId)
-          .is("archived_at", null);
-        logSaveTiming(
-          flowName,
-          "pre-save queries",
-          getSavePerformanceNow() - freeLimitStartedAt,
-          {
-            operation: "free-tier client count",
-          },
-        );
-
-        if (clientsError) {
-          setErrorMessage(clientsError.message);
-          Alert.alert("Error", clientsError.message);
-          return;
-        }
-
         const clientAccess = getClientCreationAccess({
-          activeClientCount: (existingClients || []).length,
+          activeClientCount,
           isUnlimited: false,
           limit: FREE_TIER_LIMITS.clients,
         });
 
         if (!clientAccess.canCreate) {
+          trackClientCreateFailure("free_limit", isFirstClient);
           showFreePlanUpgradePrompt();
           return;
         }
@@ -279,6 +311,7 @@ export default function AddClientScreen() {
       );
 
       if (error) {
+        trackClientCreateFailure("database_error", isFirstClient);
         setErrorMessage(error.message);
         Alert.alert("Error", error.message);
         return;
@@ -286,6 +319,17 @@ export default function AddClientScreen() {
 
       postSupabaseStartedAt = getSavePerformanceNow();
       const clientId = String(insertedClient?.id || "");
+
+      trackAnalyticsEvent("client_created", {
+        screen_name: "add_client",
+        flow: "standard_create",
+        entry_type: "client",
+        result: "success",
+        is_first: isFirstClient,
+      });
+      if (isFirstClient) {
+        trackAnalyticsEvent("first_client_created");
+      }
 
       scheduleSaveCompletionTiming(flowName, saveStartedAt, {
         postSupabaseStartedAt,
@@ -321,6 +365,7 @@ export default function AddClientScreen() {
       }
     } catch (error) {
       console.log("Add client failed", error);
+      trackClientCreateFailure("unknown_error");
       const message = "Client could not be saved. Please try again.";
       setErrorMessage(message);
       Alert.alert("Error", message);

@@ -148,6 +148,29 @@ export default function AddServiceScreen() {
     const validationStartedAt = getSavePerformanceNow();
     let postSupabaseStartedAt: number | null = null;
     const isFirstService = !editingServiceId && services.length === 0;
+    const trackServiceCreateFailure = (reasonCode: string) => {
+      if (editingServiceId) return;
+
+      trackAnalyticsEvent("service_create_failed", {
+        screen_name: "add_service",
+        flow: "standard_create",
+        entry_type: "service",
+        result: "failed",
+        reason_code: reasonCode,
+        is_first: isFirstService,
+      });
+    };
+
+    if (!editingServiceId) {
+      trackAnalyticsEvent("service_create_started", {
+        screen_name: "add_service",
+        flow: "standard_create",
+        entry_type: "service",
+        result: "started",
+        is_first: isFirstService,
+      });
+    }
+
     setSaving(true);
     setErrorMessage("");
     setSuccessMessage("");
@@ -169,6 +192,7 @@ export default function AddServiceScreen() {
       }
 
       if (!currentUserId) {
+        trackServiceCreateFailure("not_authenticated");
         const message = "Please log in first.";
         setErrorMessage(message);
         Alert.alert("Login Required", message);
@@ -181,6 +205,7 @@ export default function AddServiceScreen() {
       const liveRebookingIntervalValue = rebookingIntervalValueField.getValue();
 
       if (!trimmedName || !livePrice || !liveDuration) {
+        trackServiceCreateFailure("missing_required_field");
         const message = "Please fill out all fields.";
         setErrorMessage(message);
         Alert.alert("Missing Info", message);
@@ -194,6 +219,7 @@ export default function AddServiceScreen() {
         : null;
 
       if (!Number.isFinite(priceNumber) || priceNumber < 0) {
+        trackServiceCreateFailure("invalid_field");
         const message = "Price must be zero or higher.";
         setErrorMessage(message);
         Alert.alert("Invalid Price", message);
@@ -201,6 +227,7 @@ export default function AddServiceScreen() {
       }
 
       if (!Number.isFinite(durationNumber) || durationNumber <= 0) {
+        trackServiceCreateFailure("invalid_field");
         const message = "Duration must be greater than zero.";
         setErrorMessage(message);
         Alert.alert("Invalid Duration", message);
@@ -211,6 +238,7 @@ export default function AddServiceScreen() {
         intervalValue !== null &&
         (!Number.isInteger(intervalValue) || intervalValue <= 0)
       ) {
+        trackServiceCreateFailure("invalid_field");
         const message = "Rebooking interval must be a whole number greater than zero.";
         setErrorMessage(message);
         Alert.alert("Invalid Rebooking Interval", message);
@@ -228,6 +256,7 @@ export default function AddServiceScreen() {
         !canUseFeature("moreServices") &&
         services.length >= FREE_TIER_LIMITS.services
       ) {
+        trackServiceCreateFailure("free_limit");
         showProUpgradePrompt(PRO_UPSELL_COPY.moreServices);
         return;
       }
@@ -289,6 +318,7 @@ export default function AddServiceScreen() {
       }
 
       if (error) {
+        trackServiceCreateFailure("database_error");
         setErrorMessage(error.message);
         Alert.alert("Error", error.message);
         return;
@@ -336,6 +366,15 @@ export default function AddServiceScreen() {
       if (isFirstService) {
         trackAnalyticsEvent("first_service_created");
       }
+      if (!editingServiceId) {
+        trackAnalyticsEvent("service_created", {
+          screen_name: "add_service",
+          flow: "standard_create",
+          entry_type: "service",
+          result: "success",
+          is_first: isFirstService,
+        });
+      }
       logSaveTiming(
         flowName,
         "local state refresh",
@@ -362,6 +401,7 @@ export default function AddServiceScreen() {
       });
     } catch (error) {
       console.log("Service save failed", error);
+      trackServiceCreateFailure("unknown_error");
       const message = "Service could not be saved. Please try again.";
       setErrorMessage(message);
       Alert.alert("Error", message);
