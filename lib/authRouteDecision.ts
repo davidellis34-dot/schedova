@@ -3,6 +3,27 @@ export type AuthenticatedAppBaseRoute =
   | "/onboarding"
   | "/walkthrough";
 
+export function shouldUseExistingBusinessProfileFallback(input: {
+  onboardingCompleted: boolean;
+  onboardingStarted: boolean;
+  walkthroughCompleted: boolean;
+  walkthroughStarted: boolean;
+}) {
+  if (input.onboardingCompleted) {
+    return false;
+  }
+
+  if (input.onboardingStarted) {
+    return false;
+  }
+
+  if (input.walkthroughCompleted || input.walkthroughStarted) {
+    return false;
+  }
+
+  return true;
+}
+
 export function resolveAuthenticatedAppBaseRoute(input: {
   onboardingCompleted: boolean;
   onboardingStarted: boolean;
@@ -11,7 +32,7 @@ export function resolveAuthenticatedAppBaseRoute(input: {
   hasExistingBusinessProfile: boolean;
 }): AuthenticatedAppBaseRoute {
   const canUseExistingBusinessFallback =
-    !input.onboardingStarted && !input.walkthroughStarted;
+    shouldUseExistingBusinessProfileFallback(input);
   const hasCompletedSetup =
     input.onboardingCompleted ||
     (canUseExistingBusinessFallback && input.hasExistingBusinessProfile);

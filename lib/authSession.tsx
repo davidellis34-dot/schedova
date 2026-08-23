@@ -19,6 +19,7 @@ import {
   recordAccountTransitionEvent,
 } from "./accountTransition";
 import { recordAuthDiagnosticEvent } from "./authDiagnostics";
+import { promoteAuthenticatedAccountToReady } from "./authSessionReadiness";
 import { clearCalendarFinderCache } from "./calendarFinderCache";
 import { clearDashboardPrimaryCache } from "./dashboardCache";
 import { clearFeatureAccess } from "./featureAccess";
@@ -190,6 +191,11 @@ export function AuthSessionProvider({ children }: { children: ReactNode }) {
         { source },
         transition.runId,
       );
+      recordAccountTransitionEvent(
+        "authenticated_session_hydrated",
+        { source },
+        transition.runId,
+      );
       // A newly authenticated account needs its own cleanup lifecycle later.
       lastClearedAccountUserIdRef.current = null;
       setRevenueCatIdentityTarget(nextUserId);
@@ -215,89 +221,129 @@ export function AuthSessionProvider({ children }: { children: ReactNode }) {
         transition.runId,
       );
 
-      // Both the Supabase user and account-scoped business profile must settle
-      // before the authenticated navigator can mount for this account.
+      const canApplyBootstrapResult = () =>
+        verificationRunId === sessionVerificationRunIdRef.current &&
+        latestSessionUserIdRef.current === nextUserId &&
+        isCurrentAccountTransition(transition.runId);
+      const canApplyBackgroundRevalidationResult = () =>
+        verificationRunId === sessionVerificationRunIdRef.current &&
+        latestSessionUserIdRef.current === nextUserId;
+
       void (async () => {
         try {
-          if (previousUserId && previousUserId !== nextUserId) {
-            await clearAccountScopedWorkOnce(
-              previousUserId,
-              `${source}:account-changed`,
-              transition.runId,
-            );
+          const readySource = await promoteAuthenticatedAccountToReady({
+            previousUserId,
+            nextUserId,
+            canApplyResult: canApplyBootstrapResult,
+            canApplyBackgroundResult: canApplyBackgroundRevalidationResult,
+            clearPreviousAccountWork:
+              previousUserId && previousUserId !== nextUserId
+                ? () =>
+                    clearAccountScopedWorkOnce(
+                      previousUserId,
+                      `${source}:account-changed`,
+                      transition.runId,
+                    )
+                : undefined,
+            markAccountReady: (readinessSource) => {
+              accountReadyUserIdRef.current = nextUserId;
+              setAccountReadyUserId(nextUserId);
+              recordAccountTransitionEvent(
+                "account_ready_for_navigation",
+                { source: readinessSource },
+                transition.runId,
+              );
+              recordAccountTransitionEvent(
+                "user_bootstrap_finished",
+                { source: readinessSource },
+                transition.runId,
+              );
+              completeAccountTransition(
+                transition.runId,
+                readinessSource === "local-session"
+                  ? `${source}:session-ready`
+                  : `${source}:cleanup-ready`,
+              );
+            },
+            revalidateBusinessProfile: async () => {
+              const { data: profileRows, error: profileError } = await supabase
+                .from("businesses")
+                .select("id")
+                .eq("user_id", nextUserId)
+                .limit(1);
 
-            if (
-              verificationRunId !== sessionVerificationRunIdRef.current ||
-              latestSessionUserIdRef.current !== nextUserId ||
-              !isCurrentAccountTransition(transition.runId)
-            ) {
-              recordAccountTransitionEvent("previous-async-result-ignored", {
-                source: `${source}:account-cleanup`,
-                userId: nextUserId,
-              });
-              return;
-            }
-          }
+              if (profileError) {
+                throw profileError;
+              }
 
-          const { data: profileRows, error: profileError } = await supabase
-            .from("businesses")
-            .select("id")
-            .eq("user_id", nextUserId)
-            .limit(1);
+              return Array.isArray(profileRows) && profileRows.length > 0;
+            },
+            onBackgroundBusinessProfileRevalidationStarted: () => {
+              recordAccountTransitionEvent(
+                "background_business_profile_revalidation_started",
+                { source },
+                transition.runId,
+              );
+            },
+            onBackgroundBusinessProfileRevalidationFinished: (
+              hasBusinessProfile,
+            ) => {
+              recordAccountTransitionEvent(
+                "background_business_profile_revalidation_finished",
+                {
+                  hasBusinessProfile,
+                  source,
+                },
+                transition.runId,
+              );
+            },
+            onBackgroundBusinessProfileRevalidationWarning: (error) => {
+              recordAccountTransitionEvent(
+                "background_business_profile_revalidation_warning",
+                {
+                  error: error instanceof Error ? error.message : String(error),
+                  source,
+                },
+                transition.runId,
+              );
+            },
+          });
 
-          if (
-            verificationRunId !== sessionVerificationRunIdRef.current ||
-            latestSessionUserIdRef.current !== nextUserId ||
-            !isCurrentAccountTransition(transition.runId)
-          ) {
+          if (readySource === "stale") {
             recordAccountTransitionEvent("previous-async-result-ignored", {
-              source: `${source}:business-profile`,
+              source:
+                previousUserId && previousUserId !== nextUserId
+                  ? `${source}:account-cleanup`
+                  : `${source}:account-ready`,
               userId: nextUserId,
             });
             return;
           }
-
-          recordAccountTransitionEvent("new-profile-loaded", {
-            hasBusinessProfile: Array.isArray(profileRows) && profileRows.length > 0,
-            profileError: profileError?.message || null,
-            userId: nextUserId,
-          });
-          recordAccountTransitionEvent("new_user_data_loaded", {
-            hasBusinessProfile: Array.isArray(profileRows) && profileRows.length > 0,
-            profileError: profileError?.message || null,
-            userId: nextUserId,
-          });
-          accountReadyUserIdRef.current = nextUserId;
-          setAccountReadyUserId(nextUserId);
-          recordAccountTransitionEvent(
-            "user_bootstrap_finished",
-            {},
-            transition.runId,
-          );
-          completeAccountTransition(transition.runId, `${source}:profile-ready`);
         } catch (error) {
-          if (
-            verificationRunId === sessionVerificationRunIdRef.current &&
-            latestSessionUserIdRef.current === nextUserId &&
-            isCurrentAccountTransition(transition.runId)
-          ) {
-            recordAccountTransitionEvent("new-profile-load-warning", {
+          if (canApplyBootstrapResult()) {
+            recordAccountTransitionEvent("account_ready_warning", {
               error: error instanceof Error ? error.message : String(error),
+              source,
               userId: nextUserId,
             });
             accountReadyUserIdRef.current = nextUserId;
             setAccountReadyUserId(nextUserId);
             recordAccountTransitionEvent(
-              "user_bootstrap_finished",
-              { outcome: "profile-warning" },
+              "account_ready_for_navigation",
+              { source: "warning" },
               transition.runId,
             );
-            completeAccountTransition(transition.runId, `${source}:profile-error`);
+            recordAccountTransitionEvent(
+              "user_bootstrap_finished",
+              { outcome: "warning" },
+              transition.runId,
+            );
+            completeAccountTransition(transition.runId, `${source}:ready-warning`);
             return;
           }
 
           recordAccountTransitionEvent("previous-async-result-ignored", {
-            source: `${source}:profile-error`,
+            source: `${source}:ready-warning`,
             userId: nextUserId,
           });
         }
