@@ -237,9 +237,9 @@ export default function AddClientScreen() {
       }
 
       const freeLimitStartedAt = getSavePerformanceNow();
-      const { data: existingClients, error: clientsError } = await supabase
+      const { count: activeClientCountRaw, error: clientsError } = await supabase
         .from("clients")
-        .select("id")
+        .select("id", { count: "exact", head: true })
         .eq("user_id", currentUserId)
         .is("archived_at", null);
       logSaveTiming(
@@ -258,7 +258,8 @@ export default function AddClientScreen() {
         return;
       }
 
-      const activeClientCount = (existingClients || []).length;
+      const activeClientCount =
+        typeof activeClientCountRaw === "number" ? activeClientCountRaw : 0;
       const isFirstClient = activeClientCount === 0;
 
       if (!canUseFeature("moreClients")) {

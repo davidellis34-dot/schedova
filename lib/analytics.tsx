@@ -16,7 +16,7 @@ import {
 } from "posthog-react-native";
 import { useAuthSession } from "./authSession";
 import {
-  getAppointmentMilestoneEvents,
+  getAppointmentCreateAnalyticsEvents,
   normalizeBusinessCategory,
   normalizeSafeAnalyticsProperties,
   sanitizeAnalyticsCaptureEvent,
@@ -445,13 +445,19 @@ export function trackAnalyticsEvent(
 }
 
 export function trackAppointmentCreated(
-  existingAppointmentCount: number,
+  existingAppointmentCount: number | null,
   createdAppointmentCount = 1,
+  properties?: Partial<Record<SafeAnalyticsPropertyKey, unknown>>,
 ) {
-  for (const event of getAppointmentMilestoneEvents(
+  for (const event of getAppointmentCreateAnalyticsEvents(
     existingAppointmentCount,
     createdAppointmentCount,
   )) {
+    if (event === "appointment_created") {
+      trackAnalyticsEvent(event, properties);
+      continue;
+    }
+
     trackAnalyticsEvent(event);
   }
 }

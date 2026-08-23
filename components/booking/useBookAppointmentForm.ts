@@ -2889,21 +2889,26 @@ export function useBookAppointmentForm({
 
     const createdAppointments = (insertedAppointments ||
       []) as SavedAppointmentForSideEffects[];
+    const trackedCreatedAppointmentCount =
+      createdAppointments.length || uniqueAppointments.length;
     const isFirstAppointment = existingAppointmentCount === 0;
-    if (existingAppointmentCount !== null && createdAppointments.length > 0) {
+    if (trackedCreatedAppointmentCount > 0) {
       trackAppointmentCreated(
         existingAppointmentCount,
-        createdAppointments.length,
+        trackedCreatedAppointmentCount,
+        {
+          screen_name: "book_appointment",
+          flow: bookingAnalyticsFlow,
+          ...(bookingAnalyticsSource ? { source: bookingAnalyticsSource } : {}),
+          entry_type: "appointment",
+          result: "success",
+          ...(existingAppointmentCount !== null
+            ? { is_first: isFirstAppointment }
+            : {}),
+        },
       );
     }
-    if (uniqueAppointments.length > 0) {
-      trackBookingAnalyticsEvent("appointment_created", {
-        entry_type: "appointment",
-        result: "success",
-        ...(existingAppointmentCount !== null
-          ? { is_first: isFirstAppointment }
-          : {}),
-      });
+    if (trackedCreatedAppointmentCount > 0) {
       trackBookingAnalyticsEvent("booking_save_completed", {
         entry_type: "appointment",
         result: "success",

@@ -80,6 +80,22 @@ const BUSINESS_CATEGORY_MATCHERS: Array<{
     pattern: /(cat|dog|groom|pet)/i,
   },
 ];
+export const SAFE_ANALYTICS_REASON_CODES = [
+  "availability_conflict",
+  "blocked_time_conflict",
+  "closed_day",
+  "database_error",
+  "free_limit",
+  "invalid_date",
+  "invalid_field",
+  "invalid_repeat_range",
+  "invalid_time",
+  "missing_required_field",
+  "not_authenticated",
+  "outside_business_hours",
+  "unknown_error",
+  "user_cancelled",
+] as const;
 
 export function sanitizeAnalyticsText(
   value: unknown,
@@ -114,6 +130,17 @@ export function normalizeBusinessCategory(value: unknown): string | null {
   return null;
 }
 
+export function normalizeSafeAnalyticsReasonCode(value: unknown) {
+  const normalizedValue = sanitizeAnalyticsText(value);
+  if (!normalizedValue) return null;
+
+  return (SAFE_ANALYTICS_REASON_CODES as readonly string[]).includes(
+    normalizedValue,
+  )
+    ? normalizedValue
+    : "unknown_error";
+}
+
 function normalizeSafeAnalyticsString(
   key: SafeAnalyticsPropertyKey,
   value: unknown,
@@ -125,6 +152,10 @@ function normalizeSafeAnalyticsString(
 
   if (key === "app_version" || key === "platform") {
     return trimmed.slice(0, 32);
+  }
+
+  if (key === "reason_code") {
+    return normalizeSafeAnalyticsReasonCode(trimmed);
   }
 
   return sanitizeAnalyticsText(trimmed);
@@ -187,6 +218,35 @@ export function getAppointmentMilestoneEvents(
   }
 
   return events;
+}
+
+export function getAppointmentCreateAnalyticsEvents(
+  existingAppointmentCount: number | null,
+  createdAppointmentCount = 1,
+) {
+  const safeCreatedCount = Math.max(0, Math.floor(createdAppointmentCount));
+
+  if (safeCreatedCount === 0) {
+    return [] as Array<
+      "appointment_created" | "first_appointment_created" | "second_appointment_created"
+    >;
+  }
+
+  if (existingAppointmentCount === null) {
+    return ["appointment_created"] as Array<
+      "appointment_created" | "first_appointment_created" | "second_appointment_created"
+    >;
+  }
+
+  return [
+    "appointment_created",
+    ...getAppointmentMilestoneEvents(
+      existingAppointmentCount,
+      createdAppointmentCount,
+    ),
+  ] as Array<
+    "appointment_created" | "first_appointment_created" | "second_appointment_created"
+  >;
 }
 
 export function filterSafeAnalyticsProperties(

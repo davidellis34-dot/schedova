@@ -90,7 +90,10 @@ import {
   recordScreenBackgroundRefreshComplete,
   useManualScreenInteractiveTiming,
 } from "../lib/screenPerformance";
-import { buildDashboardSetupChecklist } from "../lib/dashboardSetupChecklist";
+import {
+  buildDashboardSetupChecklist,
+  getDashboardChecklistState,
+} from "../lib/dashboardSetupChecklist";
 import { subscribeToSmsBalanceEvents } from "../lib/smsBalanceEvents";
 import { supabase } from "../lib/supabase";
 import { useAppTheme } from "../lib/useAppTheme";
@@ -341,13 +344,12 @@ export default function Dashboard() {
       console.log("CHECK BUSINESS ERROR:", businessResult.error.message);
     }
 
-    return {
-      hasBusiness: businessResult.error ? false : Boolean(businessResult.data?.id),
-      hasBusinessHours: hoursResult.error ? null : (hoursResult.data || []).length > 0,
-      hasReviewedSmsSettings: businessResult.error
-        ? null
-        : Boolean(businessResult.data?.sms_settings_reviewed_at),
-    };
+    return getDashboardChecklistState({
+      business: businessResult.data || null,
+      businessQueryFailed: Boolean(businessResult.error),
+      availabilityQueryFailed: Boolean(hoursResult.error),
+      availabilityRuleCount: (hoursResult.data || []).length,
+    });
   }, [isHydrated, userId]);
 
   const loadReadyToRebookCount = useCallback(async () => {

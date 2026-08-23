@@ -4,11 +4,33 @@ type DashboardSetupAppointment = {
   status?: string | null;
 };
 
+type DashboardChecklistBusiness = {
+  id?: string | null;
+  sms_settings_reviewed_at?: string | null;
+};
+
 type DashboardSetupItem = {
   complete: boolean;
   label: string;
   route: string;
 };
+
+export function getDashboardChecklistState(input: {
+  availabilityQueryFailed?: boolean;
+  availabilityRuleCount?: number;
+  business: DashboardChecklistBusiness | null;
+  businessQueryFailed?: boolean;
+}) {
+  return {
+    hasBusiness: input.businessQueryFailed ? false : Boolean(input.business?.id),
+    hasBusinessHours: input.availabilityQueryFailed
+      ? null
+      : Number(input.availabilityRuleCount || 0) > 0,
+    hasReviewedSmsSettings: input.businessQueryFailed
+      ? null
+      : Boolean(input.business?.sms_settings_reviewed_at),
+  };
+}
 
 export function hasCompletedFirstAppointment(
   appointments: DashboardSetupAppointment[],

@@ -3,7 +3,9 @@ const assert = require("node:assert/strict");
 
 const {
   filterSafeAnalyticsProperties,
+  getAppointmentCreateAnalyticsEvents,
   getAppointmentMilestoneEvents,
+  normalizeSafeAnalyticsReasonCode,
   normalizeSafeAnalyticsProperties,
   normalizeBusinessCategory,
   sanitizeAnalyticsText,
@@ -37,6 +39,33 @@ test("getAppointmentMilestoneEvents tracks first and second creation milestones 
     "second_appointment_created",
   ]);
   assert.deepEqual(getAppointmentMilestoneEvents(2, 1), []);
+});
+
+test("successful appointment creation emits the generic appointment_created event", () => {
+  assert.deepEqual(getAppointmentCreateAnalyticsEvents(0, 1), [
+    "appointment_created",
+    "first_appointment_created",
+  ]);
+});
+
+test("successful appointment creation still emits the generic event when the count lookup is unavailable", () => {
+  assert.deepEqual(getAppointmentCreateAnalyticsEvents(null, 1), [
+    "appointment_created",
+  ]);
+});
+
+test("failed appointment creation does not emit success events", () => {
+  assert.deepEqual(getAppointmentCreateAnalyticsEvents(0, 0), []);
+});
+
+test("later appointments do not incorrectly emit the first appointment milestone", () => {
+  assert.deepEqual(getAppointmentCreateAnalyticsEvents(1, 1), [
+    "appointment_created",
+    "second_appointment_created",
+  ]);
+  assert.deepEqual(getAppointmentCreateAnalyticsEvents(2, 1), [
+    "appointment_created",
+  ]);
 });
 
 test("filterSafeAnalyticsProperties keeps only internal and approved analytics fields", () => {
@@ -82,6 +111,17 @@ test("normalizeSafeAnalyticsProperties keeps only allowlisted safe values", () =
       reason_code: "availability_conflict",
       is_first: true,
     },
+  );
+});
+
+test("unknown reason codes are reduced to safe analytics values", () => {
+  assert.equal(
+    normalizeSafeAnalyticsReasonCode("permission denied for row 123"),
+    "unknown_error",
+  );
+  assert.equal(
+    normalizeSafeAnalyticsReasonCode("availability_conflict"),
+    "availability_conflict",
   );
 });
 

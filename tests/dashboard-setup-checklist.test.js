@@ -3,6 +3,7 @@ const assert = require("node:assert/strict");
 
 const {
   buildDashboardSetupChecklist,
+  getDashboardChecklistState,
   hasCompletedFirstAppointment,
 } = require("../lib/dashboardSetupChecklist.ts");
 
@@ -65,5 +66,22 @@ test("canceled appointments alone do not complete the first appointment setup st
       { status: "canceled" },
     ]),
     true,
+  );
+});
+
+test("dashboard recognizes persisted SMS review state from the business record", () => {
+  assert.deepEqual(
+    getDashboardChecklistState({
+      business: {
+        id: "business-1",
+        sms_settings_reviewed_at: "2026-08-23T11:30:00.000Z",
+      },
+      availabilityRuleCount: 0,
+    }),
+    {
+      hasBusiness: true,
+      hasBusinessHours: false,
+      hasReviewedSmsSettings: true,
+    },
   );
 });

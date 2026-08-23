@@ -16,6 +16,7 @@ import {
   logSaveTiming,
   measureSaveStep,
 } from "../../lib/savePerformance";
+import { persistSmsSettingsReview } from "../../lib/smsSettingsReview";
 import { supabase } from "../../lib/supabase";
 import { useScreenLoadingTiming } from "../../lib/screenPerformance";
 import { useAppTheme } from "../../lib/useAppTheme";
@@ -71,36 +72,29 @@ export default function SmsSettingsScreen() {
   const [settings, setSettings] = useState<SmsSettings>(DEFAULT_SMS_SETTINGS);
   const smsAvailable = canUseFeature("smsAutomation");
 
-  const markSettingsReviewed = useCallback(async () => {
-    if (authStatus !== "authenticated" || !userId) {
-      return;
-    }
-
-    try {
-      await supabase
-        .from("businesses")
-        .update({
-          sms_settings_reviewed_at: new Date().toISOString(),
-        })
-        .eq("user_id", userId)
-        .is("sms_settings_reviewed_at", null);
-    } catch (error) {
-      console.log("[SMS settings] review persistence failed", error);
-    }
-  }, [authStatus, userId]);
-
   const loadSettings = useCallback(async () => {
     setLoading(true);
 
     try {
       setIsPaid(smsAvailable);
 
-      if (!smsAvailable) {
+      if (authStatus !== "authenticated" || !userId) {
         setSettings(DEFAULT_SMS_SETTINGS);
+        setStatusMessage("");
         return;
       }
 
-      if (authStatus !== "authenticated" || !userId) {
+      await persistSmsSettingsReview({
+        authStatus,
+        userId,
+        onError: (error) => {
+          logSmsSettingsSupabaseError("review persistence failed", error, {
+            userId,
+          });
+        },
+      });
+
+      if (!smsAvailable) {
         setSettings(DEFAULT_SMS_SETTINGS);
         setStatusMessage("");
         return;
@@ -146,12 +140,10 @@ export default function SmsSettingsScreen() {
       } else {
         setSettings(DEFAULT_SMS_SETTINGS);
       }
-
-      await markSettingsReviewed();
     } finally {
       setLoading(false);
     }
-  }, [authStatus, markSettingsReviewed, smsAvailable, userId]);
+  }, [authStatus, smsAvailable, userId]);
 
   useFocusEffect(
     useCallback(() => {
