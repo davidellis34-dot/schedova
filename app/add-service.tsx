@@ -28,6 +28,7 @@ import {
   logSaveTiming,
   measureSaveStep,
 } from "../lib/savePerformance";
+import { clearDashboardPrimaryCache } from "../lib/dashboardCache";
 import { settleActiveTextInput } from "../lib/settleTextInputs";
 import { supabase } from "../lib/supabase";
 import { useTrackedTextInputValue } from "../lib/textInputDraft";
@@ -325,6 +326,7 @@ export default function AddServiceScreen() {
       }
 
       postSupabaseStartedAt = getSavePerformanceNow();
+      clearDashboardPrimaryCache(currentUserId);
       setSuccessMessage("Service saved.");
 
       const localStateRefreshStartedAt = getSavePerformanceNow();
@@ -487,6 +489,7 @@ export default function AddServiceScreen() {
             return;
           }
 
+          clearDashboardPrimaryCache(currentUserId);
           setSuccessMessage("Service deleted.");
           setServices((current) =>
             current.filter((currentService) => currentService.id !== service.id),
