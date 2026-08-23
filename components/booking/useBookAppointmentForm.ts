@@ -579,6 +579,7 @@ export function useBookAppointmentForm({
   const replyClientIdParam = normalizeId(routeParam(params.replyClientId));
   const replyAppointmentIdParam = normalizeId(routeParam(params.replyAppointmentId));
   const activationFlowParam = routeParam(params.activationFlow);
+  const analyticsSourceParam = routeParam(params.source);
   const postSaveDestination = sanitizePostSaveDestination(
     routeParam(params.returnTo),
   );
@@ -589,6 +590,16 @@ export function useBookAppointmentForm({
     routeMode === "edit" ||
     isRescheduleMode ||
     routeParam(params.editMode) === "true";
+  const bookingAnalyticsFlow = isFirstBookingActivation
+    ? "first_booking_activation"
+    : "standard_booking";
+  const bookingAnalyticsSource =
+    analyticsSourceParam ||
+    (isFirstBookingActivation
+      ? "quick_start"
+      : replyIdParam || replyClientIdParam || postSaveDestination === "/messages"
+        ? "messages"
+        : null);
 
   const [use24Hour, setUse24Hour] = useState(false);
   const [calendarIntervalMinutes, setCalendarIntervalMinutes] = useState(30);
@@ -611,7 +622,7 @@ export function useBookAppointmentForm({
     blockId ? "blocked_time" : "appointment",
   );
 
-  const [selectedClient, setSelectedClient] = useState("");
+  const [selectedClient, setSelectedClientState] = useState("");
   const [existingAppointmentClientId, setExistingAppointmentClientId] =
     useState("");
   const [existingAppointmentClientName, setExistingAppointmentClientName] =
@@ -638,11 +649,11 @@ export function useBookAppointmentForm({
     getSuggestedBookingDateTime(),
   );
 
-  const [appointmentDate, setAppointmentDate] = useState(
+  const [appointmentDate, setAppointmentDateState] = useState(
     appointmentDateParam || initialSuggestedBookingDateTimeRef.current.date,
   );
 
-  const [startTime, setStartTime] = useState(
+  const [startTime, setStartTimeState] = useState(
     appointmentTimeParam || initialSuggestedBookingDateTimeRef.current.time,
   );
   const [endTime, setEndTime] = useState("09:30");
@@ -707,6 +718,107 @@ export function useBookAppointmentForm({
 
   const displayEndTime =
     entryType === "appointment" ? calculatedAppointmentEndTime : endTime;
+
+  function trackBookingAnalyticsEvent(
+    event: Parameters<typeof trackAnalyticsEvent>[0],
+    properties: Partial<
+      Record<
+        | "source"
+        | "screen_name"
+        | "flow"
+        | "result"
+        | "reason_code"
+        | "entry_type"
+        | "is_first",
+        unknown
+      >
+    > = {},
+  ) {
+    trackAnalyticsEvent(event, {
+      screen_name: "book_appointment",
+      flow: bookingAnalyticsFlow,
+      ...(bookingAnalyticsSource ? { source: bookingAnalyticsSource } : {}),
+      ...properties,
+    });
+  }
+
+  function trackAppointmentCreateFailure(
+    reasonCode: string,
+    options?: { cancelled?: boolean; isFirst?: boolean },
+  ) {
+    if (entryType !== "appointment" || isEditMode) return;
+
+    const failureProperties = {
+      entry_type: "appointment",
+      reason_code: reasonCode,
+      result: options?.cancelled ? "cancelled" : "failed",
+      ...(typeof options?.isFirst === "boolean"
+        ? { is_first: options.isFirst }
+        : {}),
+    } as const;
+
+    trackBookingAnalyticsEvent("booking_save_failed", failureProperties);
+    trackBookingAnalyticsEvent(
+      options?.cancelled
+        ? "appointment_create_cancelled"
+        : "appointment_create_failed",
+      failureProperties,
+    );
+  }
+
+  function setSelectedClient(nextClientId: string) {
+    const normalizedNextClientId = normalizeId(nextClientId);
+
+    if (
+      entryType === "appointment" &&
+      !isEditMode &&
+      normalizedNextClientId &&
+      normalizedNextClientId !== normalizeId(selectedClient)
+    ) {
+      trackBookingAnalyticsEvent("booking_client_selected", {
+        entry_type: "appointment",
+        result: "selected",
+      });
+    }
+
+    setSelectedClientState(normalizedNextClientId);
+  }
+
+  function setAppointmentDate(nextDate: string) {
+    const normalizedNextDate = cleanDateOnly(nextDate);
+
+    if (
+      entryType === "appointment" &&
+      !isEditMode &&
+      normalizedNextDate &&
+      normalizedNextDate !== cleanDateOnly(appointmentDate)
+    ) {
+      trackBookingAnalyticsEvent("booking_date_selected", {
+        entry_type: "appointment",
+        result: "selected",
+      });
+    }
+
+    setAppointmentDateState(normalizedNextDate);
+  }
+
+  function setStartTime(nextTime: string) {
+    const normalizedNextTime = toDisplayTime(nextTime, "");
+
+    if (
+      entryType === "appointment" &&
+      !isEditMode &&
+      normalizedNextTime &&
+      normalizedNextTime !== toDisplayTime(startTime, "")
+    ) {
+      trackBookingAnalyticsEvent("booking_time_selected", {
+        entry_type: "appointment",
+        result: "selected",
+      });
+    }
+
+    setStartTimeState(normalizedNextTime);
+  }
 
   const clientDropdownData = useMemo(
     () => [
@@ -926,7 +1038,7 @@ export function useBookAppointmentForm({
       String(data.end_time).startsWith("23:45");
 
     setEntryType(normalizeEntryType(data.block_type));
-    setSelectedClient("");
+    setSelectedClientState("");
     setExistingAppointmentClientId("");
     setExistingAppointmentClientName("");
     setSavedAppointmentSmsEnabled(null);
@@ -934,8 +1046,8 @@ export function useBookAppointmentForm({
     setSelectedServices([]);
     setAppointmentNotes("");
     setFinalPrice("");
-    setAppointmentDate(cleanDateOnly(data.block_date));
-    setStartTime(cleanStart);
+    setAppointmentDateState(cleanDateOnly(data.block_date));
+    setStartTimeState(cleanStart);
     setEndTime(cleanEnd);
     setTitle(data.title || "");
     setAllDay(isAllDayBlock);
@@ -976,7 +1088,7 @@ export function useBookAppointmentForm({
       );
 
       setEntryType("appointment");
-      setSelectedClient(matchedClient ? normalizeId(matchedClient.id) : "");
+      setSelectedClientState(matchedClient ? normalizeId(matchedClient.id) : "");
       setExistingAppointmentClientId(clientId);
       setExistingAppointmentClientName(data.client_name || "");
       setSavedAppointmentSmsEnabled(
@@ -993,8 +1105,8 @@ export function useBookAppointmentForm({
       setAppointmentDurationMinutesState(loadedDuration);
       setDurationEdited(loadedDuration !== defaultLoadedDuration);
       setTitle("");
-      setAppointmentDate(cleanDateOnly(data.appointment_date));
-      setStartTime(loadedStartTime);
+      setAppointmentDateState(cleanDateOnly(data.appointment_date));
+      setStartTimeState(loadedStartTime);
       setAllDay(false);
       setRepeatType("none");
       setRepeatUntil(cleanDateOnly(data.appointment_date));
@@ -1039,8 +1151,8 @@ export function useBookAppointmentForm({
     const matchedServiceIds = new Set(serviceIdsParam);
 
     setEntryType("appointment");
-    setAppointmentDate(defaultDate);
-    setStartTime(defaultStartTime);
+    setAppointmentDateState(defaultDate);
+    setStartTimeState(defaultStartTime);
     setAppointmentDurationMinutesState(
       durationWithFallback(routeDuration, calendarIntervalMinutes),
     );
@@ -1057,7 +1169,7 @@ export function useBookAppointmentForm({
       ? services.find((service) => normalizeId(service.id) === serviceIdParam)
       : null;
 
-    setSelectedClient(matchedClientId);
+    setSelectedClientState(matchedClientId);
     setExistingAppointmentClientId("");
     setExistingAppointmentClientName("");
     setSavedAppointmentSmsEnabled(null);
@@ -1107,6 +1219,12 @@ export function useBookAppointmentForm({
 
     setDurationEdited(false);
     setSelectedServices((current) => [...current, safeService]);
+    if (entryType === "appointment" && !isEditMode) {
+      trackBookingAnalyticsEvent("booking_service_selected", {
+        entry_type: "appointment",
+        result: "selected",
+      });
+    }
   }
 
   function removeSelectedService(indexToRemove: number) {
@@ -1128,13 +1246,34 @@ export function useBookAppointmentForm({
     const displayName = trimmedName || normalizedPhone || trimmedEmail;
     const currentUserId = sessionUserId || "";
     const isFirstClient = countActiveClients(clients) === 0;
+    const quickClientFlow = isFirstBookingActivation
+      ? "first_booking_activation"
+      : "booking_quick_create";
+    const trackQuickClientFailure = (reasonCode: string) => {
+      trackBookingAnalyticsEvent("client_create_failed", {
+        flow: quickClientFlow,
+        entry_type: "client",
+        result: "failed",
+        reason_code: reasonCode,
+        is_first: isFirstClient,
+      });
+    };
+
+    trackBookingAnalyticsEvent("client_create_started", {
+      flow: quickClientFlow,
+      entry_type: "client",
+      result: "started",
+      is_first: isFirstClient,
+    });
 
     if (!currentUserId) {
+      trackQuickClientFailure("not_authenticated");
       Alert.alert("Login Required", "Please sign in to add a client.");
       return;
     }
 
     if (!displayName) {
+      trackQuickClientFailure("missing_required_field");
       Alert.alert("Missing Info", "Enter a name, phone number, or email.");
       return;
     }
@@ -1153,6 +1292,7 @@ export function useBookAppointmentForm({
       }
 
       if (!canUseProFeature("moreClients")) {
+        trackQuickClientFailure("free_limit");
         showFreePlanUpgradePrompt();
         return;
       }
@@ -1170,6 +1310,7 @@ export function useBookAppointmentForm({
       .single();
 
     if (error || !data) {
+      trackQuickClientFailure("database_error");
       Alert.alert("Error", error?.message || "Could not add client.");
       return;
     }
@@ -1187,6 +1328,12 @@ export function useBookAppointmentForm({
     setNewClientPhone("");
     setNewClientEmail("");
     setShowQuickClient(false);
+    trackBookingAnalyticsEvent("client_created", {
+      flow: quickClientFlow,
+      entry_type: "client",
+      result: "success",
+      is_first: isFirstClient,
+    });
     if (isFirstClient) {
       trackAnalyticsEvent("first_client_created");
     }
@@ -1197,13 +1344,34 @@ export function useBookAppointmentForm({
 
     const currentUserId = sessionUserId || "";
     const isFirstService = services.length === 0;
+    const quickServiceFlow = isFirstBookingActivation
+      ? "first_booking_activation"
+      : "booking_quick_create";
+    const trackQuickServiceFailure = (reasonCode: string) => {
+      trackBookingAnalyticsEvent("service_create_failed", {
+        flow: quickServiceFlow,
+        entry_type: "service",
+        result: "failed",
+        reason_code: reasonCode,
+        is_first: isFirstService,
+      });
+    };
+
+    trackBookingAnalyticsEvent("service_create_started", {
+      flow: quickServiceFlow,
+      entry_type: "service",
+      result: "started",
+      is_first: isFirstService,
+    });
 
     if (!currentUserId) {
+      trackQuickServiceFailure("not_authenticated");
       Alert.alert("Login Required", "Please sign in to add a service.");
       return;
     }
 
     if (!newServiceNameField.getValue().trim()) {
+      trackQuickServiceFailure("missing_required_field");
       Alert.alert("Missing Info", "Enter a service name.");
       return;
     }
@@ -1218,6 +1386,7 @@ export function useBookAppointmentForm({
       }
 
       if (!canUseProFeature("moreServices")) {
+        trackQuickServiceFailure("free_limit");
         showProUpgradePrompt(PRO_UPSELL_COPY.moreServices);
         return;
       }
@@ -1227,11 +1396,13 @@ export function useBookAppointmentForm({
     const durationNumber = Number(newServiceDurationField.getValue());
 
     if (!Number.isFinite(priceNumber) || priceNumber < 0) {
+      trackQuickServiceFailure("invalid_field");
       Alert.alert("Invalid Price", "Price must be zero or higher.");
       return;
     }
 
     if (!Number.isFinite(durationNumber) || durationNumber <= 0) {
+      trackQuickServiceFailure("invalid_field");
       Alert.alert("Invalid Duration", "Duration must be greater than zero.");
       return;
     }
@@ -1248,6 +1419,7 @@ export function useBookAppointmentForm({
       .single();
 
     if (error || !data) {
+      trackQuickServiceFailure("database_error");
       Alert.alert("Error", error?.message || "Could not add service.");
       return;
     }
@@ -1265,6 +1437,12 @@ export function useBookAppointmentForm({
     setNewServicePrice("");
     setNewServiceDuration("30");
     setShowQuickService(false);
+    trackBookingAnalyticsEvent("service_created", {
+      flow: quickServiceFlow,
+      entry_type: "service",
+      result: "success",
+      is_first: isFirstService,
+    });
     if (isFirstService) {
       trackAnalyticsEvent("first_service_created");
     }
@@ -1490,6 +1668,16 @@ export function useBookAppointmentForm({
       if (entryType === "appointment" && isFirstBookingActivation && !isEditMode) {
         trackAnalyticsEvent("first_booking_save_started");
       }
+      if (entryType === "appointment" && !isEditMode) {
+        trackBookingAnalyticsEvent("booking_save_started", {
+          entry_type: "appointment",
+          result: "started",
+        });
+        trackBookingAnalyticsEvent("appointment_create_started", {
+          entry_type: "appointment",
+          result: "started",
+        });
+      }
 
       await settleActiveTextInput();
 
@@ -1497,12 +1685,14 @@ export function useBookAppointmentForm({
 
       if (!currentUserId) {
         logSaveContext("NO AUTH USER");
+        trackAppointmentCreateFailure("not_authenticated");
         Alert.alert("Login Required", "You must be logged in.");
         return false;
       }
 
       if (!isValidDateOnly(appointmentDate)) {
         logSaveContext("INVALID DATE");
+        trackAppointmentCreateFailure("invalid_date");
         Alert.alert("Date Error", "Choose a valid appointment date.");
         return false;
       }
@@ -1560,6 +1750,7 @@ export function useBookAppointmentForm({
         errorCode: getUnknownErrorCode(error),
       });
 
+      trackAppointmentCreateFailure("unknown_error");
       Alert.alert("Save Error", "Something went wrong while saving.");
       return false;
     } finally {
@@ -1666,7 +1857,9 @@ export function useBookAppointmentForm({
     currentUserId: string,
     dates: string[],
   ) {
-    if (canUseProFeature("moreAppointments")) return true;
+    if (canUseProFeature("moreAppointments")) {
+      return { allowed: true, reasonCode: null as string | null };
+    }
 
     const newAppointmentsByMonth = countDatesByMonth(dates);
 
@@ -1694,7 +1887,7 @@ export function useBookAppointmentForm({
       if (monthCount.error) {
         logSupabaseSaveError("appointments.freeLimit", monthCount.error);
         Alert.alert("Error", monthCount.error.message);
-        return false;
+        return { allowed: false, reasonCode: "database_error" };
       }
 
       const appointmentAccess = getAppointmentCreationAccess({
@@ -1707,15 +1900,17 @@ export function useBookAppointmentForm({
       if (!appointmentAccess.canCreate) {
         if (requestProAccess) {
           const unlocked = await requestProAccess(PRO_UPSELL_COPY.freeLimit);
-          if (unlocked) return true;
+          if (unlocked) {
+            return { allowed: true, reasonCode: null as string | null };
+          }
         }
 
         showFreePlanUpgradePrompt();
-        return false;
+        return { allowed: false, reasonCode: "free_limit" };
       }
     }
 
-    return true;
+    return { allowed: true, reasonCode: null as string | null };
   }
 
   async function getExistingAppointmentCountForAnalytics(
@@ -1830,15 +2025,24 @@ export function useBookAppointmentForm({
       timing?.flowName ||
       `appointment save (${isEditMode ? "edit" : "create"})`;
     const validationStartedAt = getSavePerformanceNow();
+    const trackCreateFailure = (
+      reasonCode: string,
+      failureOptions?: { cancelled?: boolean; isFirst?: boolean },
+    ) => {
+      if (isEditMode) return;
+      trackAppointmentCreateFailure(reasonCode, failureOptions);
+    };
 
     if (!currentUserId) {
       logSaveContext("MISSING USER ID");
+      trackCreateFailure("not_authenticated");
       Alert.alert("Login Required", "Please sign in again.");
       return false;
     }
 
     if (!isValidDateOnly(safeDate)) {
       logSaveContext("INVALID SAFE DATE", { safeDate });
+      trackCreateFailure("invalid_date");
       Alert.alert("Date Error", "Choose a valid appointment date.");
       return false;
     }
@@ -1847,6 +2051,7 @@ export function useBookAppointmentForm({
 
     if (cleanSelectedServices.length === 0) {
       logSaveContext("INVALID SERVICES");
+      trackCreateFailure("missing_required_field");
       Alert.alert("Missing Info", "Select a valid service.");
       return false;
     }
@@ -1855,12 +2060,14 @@ export function useBookAppointmentForm({
 
     if (!Number.isFinite(totalSafeDuration) || totalSafeDuration <= 0) {
       logSaveContext("INVALID SERVICE DURATION", { totalSafeDuration });
+      trackCreateFailure("invalid_field");
       Alert.alert("Service Error", "Select a service with a valid duration.");
       return false;
     }
 
     if (repeatType !== "none" && !isValidDateOnly(repeatUntil)) {
       logSaveContext("INVALID REPEAT DATE", { repeatUntil });
+      trackCreateFailure("invalid_date");
       Alert.alert("Date Error", "Choose a valid repeat-until date.");
       return false;
     }
@@ -1869,6 +2076,7 @@ export function useBookAppointmentForm({
       repeatType !== "none" &&
       parseDateOnly(repeatUntil) < parseDateOnly(safeDate)
     ) {
+      trackCreateFailure("invalid_repeat_range");
       Alert.alert(
         "Repeat Error",
         "Repeat until date must be after the start date.",
@@ -1891,12 +2099,14 @@ export function useBookAppointmentForm({
       !shouldPreserveArchivedClient
     ) {
       logSaveContext("INVALID CLIENT", { requestedClientId });
+      trackCreateFailure("invalid_field");
       Alert.alert("Client Error", "Select a valid client and try again.");
       return false;
     }
 
     if (!requestedClientId && !shouldPreserveArchivedClient) {
       logSaveContext("MISSING CLIENT");
+      trackCreateFailure("missing_required_field");
       Alert.alert("Client Error", "Select a client before saving.");
       return false;
     }
@@ -1914,6 +2124,7 @@ export function useBookAppointmentForm({
 
     if (!payloadClientId && !payloadClientName) {
       logSaveContext("MISSING CLIENT NAME");
+      trackCreateFailure("missing_required_field");
       Alert.alert("Client Error", "Select a client or enter a client name.");
       return false;
     }
@@ -1922,6 +2133,7 @@ export function useBookAppointmentForm({
 
     if (!cleanStartTime) {
       logSaveContext("INVALID START TIME", { startTime });
+      trackCreateFailure("invalid_time");
       Alert.alert("Invalid Time", "Choose a valid start time.");
       return false;
     }
@@ -1945,6 +2157,7 @@ export function useBookAppointmentForm({
         newStartTime,
         newEndTime,
       });
+      trackCreateFailure("invalid_time");
       Alert.alert("Invalid Time", "Choose a valid start and end time.");
       return false;
     }
@@ -1958,6 +2171,7 @@ export function useBookAppointmentForm({
         newStartTime,
         newEndTime,
       });
+      trackCreateFailure("invalid_time");
       Alert.alert("Invalid Time", "Choose a valid appointment date and time.");
       return false;
     }
@@ -1968,6 +2182,7 @@ export function useBookAppointmentForm({
         newStartTime,
         newEndTime,
       });
+      trackCreateFailure("invalid_time");
       Alert.alert("Invalid Time", "End time must be after start time.");
       return false;
     }
@@ -1979,11 +2194,13 @@ export function useBookAppointmentForm({
     );
 
     if (recurringDates.length === 0) {
+      trackCreateFailure("invalid_date");
       Alert.alert("Date Error", "Choose a valid appointment date.");
       return false;
     }
 
     if (deliveryValidation.issues.length > 0) {
+      trackCreateFailure("missing_required_field");
       Alert.alert(
         "Update client contact info",
         deliveryValidation.issues.join("\n"),
@@ -2005,7 +2222,7 @@ export function useBookAppointmentForm({
 
     if (!isEditMode) {
       const freeLimitStartedAt = getSavePerformanceNow();
-      const canCreateWithinLimit = await canCreateAppointmentsWithinFreeLimit(
+      const appointmentLimitResult = await canCreateAppointmentsWithinFreeLimit(
         currentUserId,
         recurringDates,
       );
@@ -2018,7 +2235,8 @@ export function useBookAppointmentForm({
         },
       );
 
-      if (!canCreateWithinLimit) {
+      if (!appointmentLimitResult.allowed) {
+        trackCreateFailure(appointmentLimitResult.reasonCode || "free_limit");
         return false;
       }
     }
@@ -2062,6 +2280,7 @@ export function useBookAppointmentForm({
         "availability_rules.availability",
         availabilityError,
       );
+      trackCreateFailure("database_error");
       Alert.alert("Error", "Could not check business hours.");
       return false;
     }
@@ -2088,12 +2307,14 @@ export function useBookAppointmentForm({
 
     if (existingError) {
       logSupabaseSaveError("appointments.availability", existingError);
+      trackCreateFailure("database_error");
       Alert.alert("Error", "Could not check appointment availability.");
       return false;
     }
 
     if (blockedError) {
       logSupabaseSaveError("blocked_times.availability", blockedError);
+      trackCreateFailure("database_error");
       Alert.alert("Error", "Could not check blocked times.");
       return false;
     }
@@ -2122,6 +2343,7 @@ export function useBookAppointmentForm({
       });
 
       if (!availabilityCheck.allowed && availabilityCheck.reason === "closed_day") {
+        trackCreateFailure("closed_day");
         Alert.alert(
           "Closed business hours",
           `The appointment on ${date} falls on a closed day.`,
@@ -2133,6 +2355,7 @@ export function useBookAppointmentForm({
         !availabilityCheck.allowed &&
         availabilityCheck.reason === "outside_hours"
       ) {
+        trackCreateFailure("outside_business_hours");
         Alert.alert(
           "Closed business hours",
           `The appointment on ${date} is outside your available hours.`,
@@ -2192,6 +2415,7 @@ export function useBookAppointmentForm({
 
       const blockedTimes = blockedTimesByDate.get(date) || [];
       if (blockedTimes && blockedTimes.length > 0) {
+        trackCreateFailure("blocked_time_conflict");
         Alert.alert(
           "Blocked Time",
           `The appointment on ${date} falls inside a blocked period.`,
@@ -2211,6 +2435,7 @@ export function useBookAppointmentForm({
 
     if (allAppointmentOverlaps.length > 0) {
       if (doubleBookingPreference === "block") {
+        trackCreateFailure("availability_conflict");
         Alert.alert(
           "Time Already Booked",
           repeatType === "none"
@@ -2226,6 +2451,7 @@ export function useBookAppointmentForm({
       );
 
       if (decision === "cancel") {
+        trackCreateFailure("user_cancelled", { cancelled: true });
         return false;
       }
 
@@ -2235,6 +2461,7 @@ export function useBookAppointmentForm({
         doubleBookedWith = [];
 
         if (datesToSave.length === 0) {
+          trackCreateFailure("availability_conflict");
           Alert.alert(
             "No appointments saved",
             "Every generated date overlaps an existing appointment.",
@@ -2259,6 +2486,7 @@ export function useBookAppointmentForm({
         serviceIdsLength: serviceIds.length,
         serviceSnapshotsLength: serviceSnapshots.length,
       });
+      trackCreateFailure("invalid_field");
       Alert.alert("Service Error", "Select a valid service and try again.");
       return false;
     }
@@ -2650,6 +2878,7 @@ export function useBookAppointmentForm({
 
     if (error) {
       logSupabaseSaveError("appointments.insert", error);
+      trackCreateFailure("database_error");
       Alert.alert("Error", error.message);
       return false;
     }
@@ -2660,11 +2889,33 @@ export function useBookAppointmentForm({
 
     const createdAppointments = (insertedAppointments ||
       []) as SavedAppointmentForSideEffects[];
-    if (existingAppointmentCount !== null && createdAppointments.length > 0) {
+    const trackedCreatedAppointmentCount =
+      createdAppointments.length || uniqueAppointments.length;
+    const isFirstAppointment = existingAppointmentCount === 0;
+    if (trackedCreatedAppointmentCount > 0) {
       trackAppointmentCreated(
         existingAppointmentCount,
-        createdAppointments.length,
+        trackedCreatedAppointmentCount,
+        {
+          screen_name: "book_appointment",
+          flow: bookingAnalyticsFlow,
+          ...(bookingAnalyticsSource ? { source: bookingAnalyticsSource } : {}),
+          entry_type: "appointment",
+          result: "success",
+          ...(existingAppointmentCount !== null
+            ? { is_first: isFirstAppointment }
+            : {}),
+        },
       );
+    }
+    if (trackedCreatedAppointmentCount > 0) {
+      trackBookingAnalyticsEvent("booking_save_completed", {
+        entry_type: "appointment",
+        result: "success",
+        ...(existingAppointmentCount !== null
+          ? { is_first: isFirstAppointment }
+          : {}),
+      });
     }
     const createdAppointmentIdsByKey = new Map(
       createdAppointments.map((appointment) => [

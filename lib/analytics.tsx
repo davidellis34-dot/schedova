@@ -16,11 +16,13 @@ import {
 } from "posthog-react-native";
 import { useAuthSession } from "./authSession";
 import {
-  getAppointmentMilestoneEvents,
+  getAppointmentCreateAnalyticsEvents,
   normalizeBusinessCategory,
+  normalizeSafeAnalyticsProperties,
   sanitizeAnalyticsCaptureEvent,
   sanitizeAnalyticsText,
   type SafeAnalyticsPropertyKey,
+  type SafeAnalyticsProperties,
 } from "./analyticsPrivacy";
 import { supabase } from "./supabase";
 
@@ -33,6 +35,23 @@ export const ANALYTICS_EVENTS = [
   "onboarding_started",
   "onboarding_step_completed",
   "onboarding_completed",
+  "service_create_started",
+  "service_created",
+  "service_create_failed",
+  "client_create_started",
+  "client_created",
+  "client_create_failed",
+  "appointment_create_started",
+  "appointment_created",
+  "appointment_create_failed",
+  "appointment_create_cancelled",
+  "booking_client_selected",
+  "booking_service_selected",
+  "booking_date_selected",
+  "booking_time_selected",
+  "booking_save_started",
+  "booking_save_failed",
+  "booking_save_completed",
   "first_service_created",
   "first_client_created",
   "first_appointment_created",
@@ -61,18 +80,18 @@ export const ANALYTICS_EVENTS = [
 export type AnalyticsEventName = (typeof ANALYTICS_EVENTS)[number];
 
 type AnalyticsListener = (event: AnalyticsEventName) => void;
-
-type AnalyticsPropertyValue = string | null;
-type AnalyticsEventProperties = Partial<
-  Record<SafeAnalyticsPropertyKey, AnalyticsPropertyValue>
->;
+type AnalyticsEventProperties = SafeAnalyticsProperties;
 type AcquisitionState = {
   source: string | null;
   campaign: string | null;
 };
+type AnalyticsEventPayload = {
+  event: AnalyticsEventName;
+  properties?: AnalyticsEventProperties;
+};
 
 const listeners = new Set<AnalyticsListener>();
-const pendingEvents: AnalyticsEventName[] = [];
+const pendingEvents: AnalyticsEventPayload[] = [];
 
 const ANALYTICS_ACQUISITION_STORAGE_KEY = "schedova.analytics.acquisition";
 const APP_SESSION_TIMEOUT_MS = 30 * 60 * 1000;
@@ -104,23 +123,53 @@ function setAnalyticsClient(client: PostHog | null) {
   if (!hasPostHogClient() || pendingEvents.length === 0) return;
 
   const eventsToFlush = pendingEvents.splice(0, pendingEvents.length);
-  for (const event of eventsToFlush) {
-    captureAnalyticsEvent(event);
+  for (const pendingEvent of eventsToFlush) {
+    captureAnalyticsEvent(pendingEvent.event, pendingEvent.properties);
   }
 }
 
 function updateSafeProperties(nextProperties: Partial<AnalyticsEventProperties>) {
+  const normalizedProperties = normalizeSafeAnalyticsProperties(nextProperties);
+  const clearedProperties = Object.fromEntries(
+    Object.entries(nextProperties).filter(([, value]) => value === null),
+  ) as Partial<AnalyticsEventProperties>;
+
+  if (!normalizedProperties && Object.keys(clearedProperties).length === 0) {
+    return;
+  }
+
   safeProperties = {
     ...safeProperties,
-    ...nextProperties,
+    ...clearedProperties,
+    ...normalizedProperties,
   };
 }
 
-function getSafeEventProperties(): Record<string, JsonType> {
+function getSafeEventProperties(
+  eventProperties?: Partial<Record<SafeAnalyticsPropertyKey, unknown>>,
+): Record<string, JsonType> {
   const next: Record<string, JsonType> = {};
+  const normalizedEventProperties =
+    normalizeSafeAnalyticsProperties(eventProperties);
 
   for (const [key, value] of Object.entries(safeProperties)) {
     if (typeof value === "string" && value.trim()) {
+      next[key] = value;
+      continue;
+    }
+
+    if (typeof value === "boolean") {
+      next[key] = value;
+    }
+  }
+
+  for (const [key, value] of Object.entries(normalizedEventProperties || {})) {
+    if (typeof value === "string" && value.trim()) {
+      next[key] = value;
+      continue;
+    }
+
+    if (typeof value === "boolean") {
       next[key] = value;
     }
   }
@@ -128,9 +177,12 @@ function getSafeEventProperties(): Record<string, JsonType> {
   return next;
 }
 
-function captureAnalyticsEvent(event: AnalyticsEventName) {
+function captureAnalyticsEvent(
+  event: AnalyticsEventName,
+  properties?: Partial<Record<SafeAnalyticsPropertyKey, unknown>>,
+) {
   if (!hasPostHogClient()) return;
-  void posthogClient?.capture(event, getSafeEventProperties());
+  void posthogClient?.capture(event, getSafeEventProperties(properties));
 }
 
 async function readStoredAcquisitionState(): Promise<AcquisitionState> {
@@ -365,33 +417,47 @@ export function AnalyticsProvider({ children }: { children: ReactNode }) {
   );
 }
 
-export function trackAnalyticsEvent(event: AnalyticsEventName) {
+export function trackAnalyticsEvent(
+  event: AnalyticsEventName,
+  properties?: Partial<Record<SafeAnalyticsPropertyKey, unknown>>,
+) {
   // Do not accept arbitrary metadata here. These events must never contain
   // client, appointment, message, token, or account details.
+  const normalizedProperties = normalizeSafeAnalyticsProperties(properties);
+
   if (__DEV__) {
-    console.log("[Analytics]", event);
+    console.log("[Analytics]", event, normalizedProperties || {});
   }
 
   listeners.forEach((listener) => listener(event));
 
   if (hasPostHogClient()) {
-    captureAnalyticsEvent(event);
+    captureAnalyticsEvent(event, normalizedProperties);
     return;
   }
 
   if (!ANALYTICS_DISABLED) {
-    pendingEvents.push(event);
+    pendingEvents.push({
+      event,
+      ...(normalizedProperties ? { properties: normalizedProperties } : {}),
+    });
   }
 }
 
 export function trackAppointmentCreated(
-  existingAppointmentCount: number,
+  existingAppointmentCount: number | null,
   createdAppointmentCount = 1,
+  properties?: Partial<Record<SafeAnalyticsPropertyKey, unknown>>,
 ) {
-  for (const event of getAppointmentMilestoneEvents(
+  for (const event of getAppointmentCreateAnalyticsEvents(
     existingAppointmentCount,
     createdAppointmentCount,
   )) {
+    if (event === "appointment_created") {
+      trackAnalyticsEvent(event, properties);
+      continue;
+    }
+
     trackAnalyticsEvent(event);
   }
 }

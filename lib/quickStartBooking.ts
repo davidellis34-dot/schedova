@@ -25,6 +25,7 @@ import {
   type QuickStartService,
 } from "./quickStartMatching";
 import { supabase } from "./supabase";
+import { trackAnalyticsEvent } from "./analytics";
 
 export {
   findReusableQuickStartClient,
@@ -145,9 +146,25 @@ async function resolveClient(input: {
     limit: FREE_TIER_LIMITS.clients,
   });
   if (!access.canCreate) {
+    trackAnalyticsEvent("client_create_failed", {
+      screen_name: "quick_start",
+      flow: "first_booking_activation",
+      entry_type: "client",
+      result: "failed",
+      reason_code: "free_limit",
+      is_first: countActiveClients(input.clients) === 0,
+    });
     showFreePlanUpgradePrompt();
     return null;
   }
+
+  trackAnalyticsEvent("client_create_started", {
+    screen_name: "quick_start",
+    flow: "first_booking_activation",
+    entry_type: "client",
+    result: "started",
+    is_first: countActiveClients(input.clients) === 0,
+  });
 
   const { data, error } = await supabase
     .from("clients")
@@ -161,8 +178,24 @@ async function resolveClient(input: {
     .single();
 
   if (error || !data?.id) {
+    trackAnalyticsEvent("client_create_failed", {
+      screen_name: "quick_start",
+      flow: "first_booking_activation",
+      entry_type: "client",
+      result: "failed",
+      reason_code: "database_error",
+      is_first: countActiveClients(input.clients) === 0,
+    });
     throw error || new Error("Client could not be saved.");
   }
+
+  trackAnalyticsEvent("client_created", {
+    screen_name: "quick_start",
+    flow: "first_booking_activation",
+    entry_type: "client",
+    result: "success",
+    is_first: countActiveClients(input.clients) === 0,
+  });
 
   return {
     client: { ...data, id: normalizeQuickStartId(data.id) } as QuickStartClient,
@@ -185,9 +218,25 @@ async function resolveService(input: {
     !canUseFeature("moreServices") &&
     input.services.length >= FREE_TIER_LIMITS.services
   ) {
+    trackAnalyticsEvent("service_create_failed", {
+      screen_name: "quick_start",
+      flow: "first_booking_activation",
+      entry_type: "service",
+      result: "failed",
+      reason_code: "free_limit",
+      is_first: input.services.length === 0,
+    });
     showProUpgradePrompt(PRO_UPSELL_COPY.moreServices);
     return null;
   }
+
+  trackAnalyticsEvent("service_create_started", {
+    screen_name: "quick_start",
+    flow: "first_booking_activation",
+    entry_type: "service",
+    result: "started",
+    is_first: input.services.length === 0,
+  });
 
   const { data, error } = await supabase
     .from("services")
@@ -202,8 +251,24 @@ async function resolveService(input: {
     .single();
 
   if (error || !data?.id) {
+    trackAnalyticsEvent("service_create_failed", {
+      screen_name: "quick_start",
+      flow: "first_booking_activation",
+      entry_type: "service",
+      result: "failed",
+      reason_code: "database_error",
+      is_first: input.services.length === 0,
+    });
     throw error || new Error("Service could not be saved.");
   }
+
+  trackAnalyticsEvent("service_created", {
+    screen_name: "quick_start",
+    flow: "first_booking_activation",
+    entry_type: "service",
+    result: "success",
+    is_first: input.services.length === 0,
+  });
 
   return {
     service: { ...data, id: normalizeQuickStartId(data.id) } as QuickStartService,

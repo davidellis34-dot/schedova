@@ -16,6 +16,7 @@ import {
   logSaveTiming,
   measureSaveStep,
 } from "../../lib/savePerformance";
+import { persistSmsSettingsReview } from "../../lib/smsSettingsReview";
 import { supabase } from "../../lib/supabase";
 import { useScreenLoadingTiming } from "../../lib/screenPerformance";
 import { useAppTheme } from "../../lib/useAppTheme";
@@ -77,12 +78,23 @@ export default function SmsSettingsScreen() {
     try {
       setIsPaid(smsAvailable);
 
-      if (!smsAvailable) {
+      if (authStatus !== "authenticated" || !userId) {
         setSettings(DEFAULT_SMS_SETTINGS);
+        setStatusMessage("");
         return;
       }
 
-      if (authStatus !== "authenticated" || !userId) {
+      await persistSmsSettingsReview({
+        authStatus,
+        userId,
+        onError: (error) => {
+          logSmsSettingsSupabaseError("review persistence failed", error, {
+            userId,
+          });
+        },
+      });
+
+      if (!smsAvailable) {
         setSettings(DEFAULT_SMS_SETTINGS);
         setStatusMessage("");
         return;
